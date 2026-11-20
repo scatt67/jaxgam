@@ -1,0 +1,2650 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../fitting_streamed/">
+      
+      
+        <link rel="next" href="../fitting_operator/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>The discretized fit - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#phase-2-the-discretized-fit" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              The discretized fit
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#entry-and-admission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entry and admission
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-compact-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The compact design
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#indexed-design-operators" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Indexed design operators
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Indexed design operators">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-xwx-is-accumulated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How X'WX is accumulated
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-shared-prepared-problem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The shared prepared problem
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The shared prepared problem">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#memory-planning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory planning
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-additive-gaussian-fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The additive Gaussian fit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-regular-family-and-negative-binomial-fits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The regular-family and negative-binomial fits
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The regular-family and negative-binomial fits">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-performance-iteration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The performance iteration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#theta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Theta
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-working-model-reml-proposal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The working-model REML proposal
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The working-model REML proposal">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-gaussian-working-model-controller" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Gaussian working-model controller
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sequence-of-a-discretized-fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sequence of a discretized fit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-result-reports" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the result reports
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prediction-policies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prediction policies
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#entry-and-admission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entry and admission
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-compact-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The compact design
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#indexed-design-operators" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Indexed design operators
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Indexed design operators">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-xwx-is-accumulated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How X'WX is accumulated
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-shared-prepared-problem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The shared prepared problem
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The shared prepared problem">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#memory-planning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory planning
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-additive-gaussian-fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The additive Gaussian fit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-regular-family-and-negative-binomial-fits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The regular-family and negative-binomial fits
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The regular-family and negative-binomial fits">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-performance-iteration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The performance iteration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#theta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Theta
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-working-model-reml-proposal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The working-model REML proposal
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The working-model REML proposal">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-gaussian-working-model-controller" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Gaussian working-model controller
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sequence-of-a-discretized-fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sequence of a discretized fit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-result-reports" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the result reports
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prediction-policies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prediction policies
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="phase-2-the-discretized-fit">Phase 2: the discretized fit<a class="headerlink" href="#phase-2-the-discretized-fit" title="Permanent link">&para;</a></h1>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>This page covers <code>FitControl(execution="discrete")</code>, the JaxGAM analogue of
+<code>mgcv::bam(discrete=TRUE)</code>. It describes how the compact discretized design is
+acted on without an n-by-p model matrix, how the shared prepared problem is
+built and budgeted, the additive Gaussian fit, the performance iteration for
+regular families and the negative binomial (a port of <code>bgam.fitd</code> in mgcv's
+<code>R/bam.r</code>), and the working-model REML proposal (a port of <code>Sl.fitChol</code> in
+<code>R/fast-REML.r</code>). How the compact frame and its selectors are chosen belongs
+to <a href="../setup/">setup</a> and <a href="../data_sources/">data sources</a>; the result class
+and predictor are in <a href="../results_and_prediction/">results and prediction</a>.</p>
+<h2 id="where-the-code-is">Where the code is<a class="headerlink" href="#where-the-code-is" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/api.py</code> (<code>GAM._fit_discrete</code>)</td>
+<td>Route entry: refusals, family admission, dispatch to the Gaussian or regular driver, result construction.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/discrete/gaussian.py</code></td>
+<td>Shared prepared problem (<code>_prepared_discrete</code>), fit memory plan, the additive Gaussian driver (<code>fit_discrete_gaussian</code>), fixed-sp REML score and scale iteration, <code>DiscreteFit</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/discrete/regular.py</code></td>
+<td>Regular-family and negative-binomial driver (<code>fit_discrete_regular</code>): source-scanning working rows, theta nuisance, budget and compile, final fields.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/discrete/regular_working_model.py</code></td>
+<td>Host port of <code>bgam.fitd</code>'s outer loop for non-additive families: coefficient step control, convergence test, iteration trace.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/discrete/working_model.py</code></td>
+<td>Host trial control around one <code>Sl.fitChol</code> proposal: the host pivoted-Cholesky boundary, <code>Nstep</code> halving, the frozen-statistic Gaussian controller, compile-time memory measurement.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/discrete/working_theta.py</code></td>
+<td>Host port of <code>estimate.theta</code> (mgcv <code>R/efam.r</code>) for one log theta, each objective one source scan.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/discrete/ops.py</code></td>
+<td>JIT kernels for the indexed design: forward, transpose, <code>X'WX</code>, <code>X'Wy</code>, <code>diag(X V X')</code>, and their cost and scratch models.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/discrete/working.py</code></td>
+<td>JIT per-batch working statistics: Fisher weights and pseudodata, NB <code>dDeta</code> weights, <code>estimate.theta</code> row terms.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/discrete/working_model.py</code></td>
+<td>JIT kernels of the <code>Sl.fitChol</code> proposal: reparameterization, factor inputs, REML value, gradient, Hessian, Newton step, <code>H^-1</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/penalty_ops.py</code></td>
+<td>Device-side local penalty algebra (<code>JaxPenaltyStructure</code>, stacked groups) used by the proposal kernels.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/discrete/continuous_setup.py</code></td>
+<td>Phase 1: ordinary basis setup on the compact frame (<code>build_continuous_discrete_setup</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/discrete/continuous_design.py</code></td>
+<td>Phase 1: evaluates the frozen bases on compact representatives into lookup tables (<code>build_continuous_discrete_design</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/discrete/design.py</code></td>
+<td>Phase 1: descriptor types (<code>FrozenDiscreteDesign</code>, <code>LookupBlock</code>, <code>TensorLookupBlock</code>) and the per-batch memory plan (<code>_memory_plan</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/discrete/continuous_metadata.py</code></td>
+<td>Phase 1: the row-free record of the fitted discretization and the <code>predict.bamd</code> request grouping.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/kernel_groups.py</code></td>
+<td>Pair schedule and <code>pair_reduction_plan</code> (histogram or direct rows).</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/source_lapack.py</code></td>
+<td>The pinned DPSTRF (<code>source_pivoted_cholesky</code>) used by every working-model trial.</td>
+</tr>
+</tbody>
+</table>
+<p>The Phase 1 modules import no JAX. The outer iterations of this route are host
+Python loops in <code>jaxgam/execution/</code>; only the per-batch kernels and the
+per-trial proposal kernels are JIT-compiled.</p>
+<p>A planned refactor will fold this route's controller into a shared engine; see
+<a href="../../unify_fit/design/">the unified fit design</a>.</p>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<h3 id="entry-and-admission">Entry and admission<a class="headerlink" href="#entry-and-admission" title="Permanent link">&para;</a></h3>
+<p><code>GAM._fit_discrete</code> runs every refusal before the formula is parsed: the data
+must be a <code>RowSource</code>; <code>weights=</code> and <code>offset=</code> must come from the source;
+<code>result</code> must be <code>"prediction"</code>; <code>linear_solver</code> must be <code>"cholesky"</code>; without
+<code>sp</code> the control must name <code>smoothing_strategy="working_model_reml"</code>, and
+<code>optimizer</code> must be <code>"newton"</code>. The family is then admitted by its execution
+capabilities: canonical Gaussian identity goes to <code>fit_discrete_gaussian</code>;
+families with <code>regular_performance_iteration</code> or
+<code>extended_performance_iteration</code> go to <code>fit_discrete_regular</code>. A
+<code>gaussian_compression=True</code> request is not refused; the result reports it in
+<code>execution_fallback_reason</code>. The whole fit runs inside
+<code>single_fit_fingerprints()</code>, so the source is content-hashed when the fit starts
+and ends rather than around every scan.</p>
+<h3 id="the-compact-design">The compact design<a class="headerlink" href="#the-compact-design" title="Permanent link">&para;</a></h3>
+<p>Discretization replaces each group of covariates (a multi-variable <code>s()</code>, a
+tensor margin, a <code>by</code> variable, a parametric covariate) by a small table of
+unique, possibly rounded, rows plus one integer selector per observation
+(the <code>ExactIndexTable</code> built by the data layer). The basis is constructed once,
+on the compact rows. The fit then never holds an n-by-p matrix: every term is a
+lookup block whose design rows are <code>table[selector]</code>.</p>
+<p><code>FrozenDiscreteDesign</code> (in <code>jaxgam/formula/discrete/design.py</code>) holds:</p>
+<ul>
+<li><code>LookupBlock</code>: one constrained table (<code>q</code> unique rows by <code>k</code> columns) and its
+  selector, for an ordinary smooth or parametric block.</li>
+<li><code>TensorLookupBlock</code>: one table per margin, an optional <code>centering</code> transform,
+  the retained columns <code>keep</code>, and optionally a numeric <code>by</code> multiplier table
+  or a factor <code>by</code> with <code>level_codes</code> and <code>n_levels</code>. A single margin
+  represents an ordinary smooth whose <code>by</code> variable stays a separate indexed
+  multiplier.</li>
+</ul>
+<p><code>batch_indices(row_positions)</code> gathers one host batch of selectors, one per
+distinct index table, for the next JIT dispatch. <code>evaluate_batch</code> is a CPU
+oracle that materializes the batch rows; tests use it, the fit does not.</p>
+<h3 id="indexed-design-operators">Indexed design operators<a class="headerlink" href="#indexed-design-operators" title="Permanent link">&para;</a></h3>
+<p><code>to_device_discrete_design</code> copies the compact tables, transforms, multipliers
+and level codes to the device as a <code>DeviceDiscreteDesign</code> (with
+<code>DeviceLookupBlock</code> and <code>DeviceTensorLookupBlock</code>). Selectors are never
+transferred as a whole: each batch's selectors are passed into each kernel
+call, and <code>_validate_device_batch</code> refuses a batch larger than the descriptor's
+<code>batch_rows</code>.</p>
+<p>The kernels port the linear algebra of mgcv's <code>Xbd</code>, <code>XWyd</code>, <code>XWXd</code> and
+<code>diagXVXd</code> helpers (mgcv <code>R/misc.r</code>, C in <code>src/discrete.c</code>):</p>
+<ul>
+<li><code>discrete_xbd(design, selectors, beta)</code>: for a lookup block,
+  <code>(table @ beta_block)[selector]</code>, so the product is formed on the <code>q</code>
+  compact rows and gathered; a tensor block maps its coefficients through the
+  frozen constraint transform and contracts them with each margin's selected
+  rows in turn (<code>_tensor_matvec</code>), never forming batch-by-tensor rows, with a
+  separate path for factor <code>by</code>.</li>
+<li><code>discrete_xb_transpose(design, selectors, values)</code>: scatter-adds <code>values</code> into
+  a length-<code>q</code> vector per block and multiplies by <code>table.T</code>.</li>
+<li><code>discrete_xwyd</code> is <code>discrete_xb_transpose(design, selectors, w * y)</code>.</li>
+<li><code>discrete_xwxd</code> accumulates <code>X'WX</code> block pair by block pair (next section).</li>
+<li><code>discrete_row_xwxd</code> is an alternative <code>X'WX</code> that materializes row chunks.</li>
+<li><code>discrete_diag_xvxd</code> gives <code>diag(X V X')</code> for a supplied covariance.</li>
+</ul>
+<h4 id="how-xwx-is-accumulated">How X'WX is accumulated<a class="headerlink" href="#how-xwx-is-accumulated" title="Permanent link">&para;</a></h4>
+<p><code>discrete_xwxd</code> builds a host schedule with <code>discrete_pair_schedule</code>
+(<code>jaxgam/formula/kernel_groups.py</code>) over all block pairs <code>(l, r)</code> with
+<code>r &gt;= l</code>, groups pairs by reduction kind and block shape, and runs one
+<code>lax.scan</code> per group, so the compiled graph grows with the number of distinct
+shapes rather than the number of smooth pairs. Each pair is reduced by
+<code>_pair_part</code> in one of four ways:</p>
+<ul>
+<li><code>lookup_diagonal</code> (a lookup block with itself): scatter the weights into a
+  length-<code>q</code> histogram <code>h</code>, then <code>T' diag(h) T</code>.</li>
+<li><code>lookup_histogram</code> (two lookup blocks): scatter weights into a
+  <code>q_left</code> by <code>q_right</code> histogram <code>C</code>, then <code>T_l' C T_r</code>
+  (<code>lookup_pair_histogram_crossproduct</code>).</li>
+<li><code>lookup_direct</code> (two lookup blocks, histogram not chosen): gather both
+  blocks' rows and form <code>rows_l' (w * rows_r)</code>.</li>
+<li><code>tensor</code> (either block a tensor): <code>_subblock_pair_crossproduct</code> loops over the
+  combinations of the leading margins and reduces only the final-margin pair by
+  histogram or direct rows (<code>_final_margin_crossproduct</code>), then maps the result
+  through the block's constraint transform. This is the final-margin reuse of
+  mgcv's <code>XWXijs</code>.</li>
+</ul>
+<p><code>pair_reduction_plan</code> chooses the histogram only when the policy is
+<code>"histogram_or_direct"</code>, the <code>q_left * q_right * 8</code> histogram bytes fit
+<code>max_pair_histogram_bytes</code>, and they are no larger than gathering the batch rows
+(<code>n_rows * (k_left + k_right) * 8</code>). With <code>pair_policy="direct_only"</code> every
+lookup pair uses direct rows.</p>
+<p>The row-chunk path <code>discrete_row_xwxd(..., chunk_rows=c)</code> expands <code>c</code> rows at a
+time into a dense <code>c</code> by <code>p</code> matrix (lookup tables gathered per equal-shape
+group, tensor blocks by their row product), forms only the upper panels of a
+4 by 4 panel split (<code>_ROW_XWXD_PANELS</code>) and mirrors them, so the result is
+exactly symmetric. Rows past the batch are padded with weight zero. It equals
+the pair reductions up to rounding (<code>tests/test_fitting/test_stacked_kernels.py</code>).</p>
+<p>The choice is made once per fit by <code>_row_xwxd_chunk</code> in
+<code>jaxgam/execution/discrete/gaussian.py</code>:</p>
+<ol>
+<li>Compare the flop-equivalent estimates <code>discrete_row_xwxd_cost(p, batch_rows)</code>
+   (<code>n p^2</code> matrix-product work) and <code>discrete_xwxd_cost(design, batch_rows)</code>
+   (per pair: a row touch charged <code>_ROW_TOUCH_FLOPS = 1000</code> flops, plus the
+   histogram or direct-row work). If row chunks are not cheaper, use the pair
+   kernels. Row chunks win for many smooths against few coefficients; a few
+   wide blocks, such as a random effect with many levels, keep the pair kernels.</li>
+<li>Otherwise take the largest chunk in <code>_ROW_XWXD_CHUNKS = (2048, 1024, 512,
+   256, 128, 64)</code> whose scratch <code>discrete_row_xwxd_bytes(p, c) =
+   8 * (3 * c * p + 2 * p * p)</code> fits the budget left after the fit plan
+   (<code>memory_budget_bytes - fit_peak_bytes</code>). If none fits, use the pair kernels.</li>
+</ol>
+<p>The row-chunk kernel is used only in the statistics scan of the additive
+Gaussian fit. The regular-family kernels in <code>jaxgam/fitting/discrete/working.py</code>
+always call <code>discrete_xwxd</code>.</p>
+<pre class="mermaid"><code>flowchart TD
+    Start["fit_discrete_gaussian: statistics scan"] --&gt; Plan["_row_xwxd_chunk"]
+    Plan --&gt; Cost{"discrete_row_xwxd_cost&lt;br/&gt;below discrete_xwxd_cost?"}
+    Cost --&gt;|"no"| Pair["discrete_xwxd"]
+    Cost --&gt;|"yes"| Fit{"some chunk in _ROW_XWXD_CHUNKS&lt;br/&gt;has discrete_row_xwxd_bytes&lt;br/&gt;within remaining budget?"}
+    Fit --&gt;|"no"| Pair
+    Fit --&gt;|"yes"| Rows["discrete_row_xwxd&lt;br/&gt;chunk_rows = largest fitting chunk"]
+    Pair --&gt; Sched["discrete_pair_schedule&lt;br/&gt;groups pairs by kind and shape"]
+    Sched --&gt; Kind{"pair kind"}
+    Kind --&gt;|"lookup_diagonal"| Diag["weight histogram h&lt;br/&gt;T' diag h T"]
+    Kind --&gt;|"lookup_histogram"| Hist["lookup_pair_histogram_crossproduct"]
+    Kind --&gt;|"lookup_direct"| Direct["gather rows&lt;br/&gt;rows_l' w rows_r"]
+    Kind --&gt;|"tensor"| Tensor["_subblock_pair_crossproduct"]
+    Tensor --&gt; Final["_final_margin_crossproduct&lt;br/&gt;histogram or direct"]
+    Diag --&gt; Acc["add block and its transpose&lt;br/&gt;into p x p gram"]
+    Hist --&gt; Acc
+    Direct --&gt; Acc
+    Final --&gt; Acc
+    Rows --&gt; Panels["upper panels of 4 x 4 split&lt;br/&gt;mirrored to symmetric"]
+    Panels --&gt; Acc</code></pre>
+<p>Read it top to bottom: the chunk decision is taken once per fit; inside
+<code>discrete_xwxd</code> each scheduled pair group runs one scan whose pair kind was
+fixed on the host by <code>pair_reduction_plan</code>.</p>
+<h3 id="the-shared-prepared-problem">The shared prepared problem<a class="headerlink" href="#the-shared-prepared-problem" title="Permanent link">&para;</a></h3>
+<p>Every discrete fit enters <code>_prepared_discrete(spec, source, control)</code>, a
+context manager that yields a <code>_PreparedDiscrete</code> and always calls
+<code>setup.cleanup()</code> on exit, which releases the compact selectors (including any
+memmap files under <code>selector_memmap_directory</code>). In order:</p>
+<ol>
+<li><code>_reject_unsupported_formula</code> refuses a multi-variable <code>s(..., bs="re")</code>:
+   pinned <code>bam</code> discretizes each of its variables as a separate tensor margin,
+   which the compact setup does not reproduce.</li>
+<li><code>build_continuous_discrete_setup</code> builds the compact frame
+   (<code>build_compact_setup_frame</code> in <code>jaxgam/data/continuous_frame.py</code>), checks
+   the prospective basis bytes plus retained compact tables against
+   <code>DiscretizationBudget.max_table_bytes</code>, runs <code>ModelSetup.build</code> on the
+   compact frame with <code>source_penalty_coordinates=True</code>, and freezes a
+   <code>PredictSpec</code>, the <code>PenaltyStructure</code> and the separate
+   <code>source_determinant_penalties</code>. The compact training matrix is discarded.
+   A budget failure comes back as <code>ContinuousSetupUnavailable</code> and is raised as
+   <code>MemoryError</code>.</li>
+<li><code>build_discretization_metadata</code> copies a bounded, row-free record of every
+   group (policy, whether it was rounded, grid, ranges, compact row count, and
+   representatives only up to <code>max_retained_representatives</code>).
+   <code>build_request_compression</code> adds the fitted grouping when the effective
+   prediction policy is <code>"mgcv_predict_bamd"</code>.</li>
+<li><code>build_continuous_discrete_design</code> evaluates each term's frozen basis on its
+   compact representatives into lookup tables, with no source scan. It checks
+   retained tables against <code>max_table_bytes</code>, retained selectors against
+   <code>max_selector_bytes</code>, each term's evaluation temporaries, and finally
+   <code>max(host_batch_bytes, device_action_bytes)</code> from <code>_memory_plan</code> against
+   <code>max_batch_bytes</code>. A failure is a <code>DiscreteDesignUnavailable</code>, raised as
+   <code>MemoryError</code>.</li>
+</ol>
+<h4 id="memory-planning">Memory planning<a class="headerlink" href="#memory-planning" title="Permanent link">&para;</a></h4>
+<p>The descriptor's <code>DiscreteMemoryPlan</code> bounds one action batch: host selector
+gathering, and on the device the retained tables plus the largest of the
+<code>Xbd</code>, adjoint, <code>XWXd</code> (including the largest pair reduction) and <code>diagXVXd</code>
+workspaces. Pairs are charged sequentially, not as if all coexisted.</p>
+<p>The driver then builds a <code>DiscreteFitMemoryPlan</code>. <code>_solver_plan</code> (Gaussian)
+and <code>_regular_solver_plan</code> (regular and NB) add a solver workspace: a fixed
+count of p-by-p matrices (more when <code>uncertainty="covariance"</code>), explicit
+materializations of non-dense local penalties, and a per-row workspace of
+<code>batch_rows</code> times a fixed count of float64 vectors (the NB route adds the
+<code>estimate.theta</code> row vectors and long-double accumulators). <code>fit_peak_bytes</code>
+is the retained compact setup plus descriptor host and selector bytes plus the
+descriptor device peak plus the solver workspace; <code>_check_fit_budget</code> raises
+<code>MemoryError</code> when it exceeds <code>FitControl.memory_budget_bytes</code>, before any
+device transfer. The working-model compile step later adds its measured
+workspace to the same plan. The result reports <code>fit_peak_bytes</code>, the budget,
+and <code>known_workspace_bytes</code> (the plan's <code>fit_workspace_bytes</code>, which excludes
+the retained compact setup).</p>
+<h3 id="the-additive-gaussian-fit">The additive Gaussian fit<a class="headerlink" href="#the-additive-gaussian-fit" title="Permanent link">&para;</a></h3>
+<p><code>fit_discrete_gaussian</code> (also reached as <code>fit_fixed_sp_discrete_gaussian</code>)
+makes exactly two fitting scans:</p>
+<ol>
+<li><strong>Statistics scan.</strong> For each batch it validates finite inputs and
+   nonnegative weights (padded invalid rows are refused), gathers selectors,
+   and accumulates <code>X'WX</code> (pair kernels or row chunks) and <code>X'W(y - offset)</code>;
+   for the working model also <code>sum(w (y - offset)^2)</code>. <code>CenteredMoments</code>
+   merges batch moments of unweighted <code>y</code> around the first value, because R
+   initializes the scale from <code>var(y)</code>.</li>
+<li><strong>Solve.</strong> With an explicit <code>sp</code>, the host forms <code>H = sym(X'WX) + S_lambda</code>,
+   factors it with NumPy Cholesky (a non-positive-definite <code>H</code> raises
+   <code>LinAlgError</code>: rank-deficient QR fitting is not implemented on this route)
+   and solves for beta. Without <code>sp</code>, <code>fit_gaussian_working_model_statistics</code>
+   runs the frozen-statistic working model (below), with no further row scans.</li>
+<li><strong>Residual scan.</strong> The deviance is the direct sum of <code>w (y - X beta -
+   offset)^2</code> over a second scan, which is stable for nearly exact fits where
+   <code>y'Wy - beta'X'Wy</code> would cancel.</li>
+</ol>
+<p>EDF is <code>tr(H^-1 X'WX)</code>. For fixed <code>sp</code>, <code>_pinned_fixed_scale</code> ports
+<code>bgam.fitd</code>'s damped log-scale Newton sequence (hard-coded tolerance 1e-7 and
+200 iterations, starting at <code>log(var(y) * 0.05)</code>) and <code>_reml_score</code> evaluates
+the criterion, with <code>log|S|+</code> from <code>_log_pdet</code> on setup-owned structural range
+spaces (a port of <code>Sl.setup</code> plus <code>ldetS</code>; coupled blocks use SciPy's
+<code>dpstrf</code> in <code>_pivoted_cholesky_root</code> and <code>_positive_logdet</code>). The null
+dimension in the normalization is <code>_pinned_criterion_null_dimension</code>, which
+reproduces <code>bgam.fitd</code>'s final <code>Mp</code> reset. A fixed-sp Gaussian fit always
+reports <code>converged=True</code>.</p>
+<h3 id="the-regular-family-and-negative-binomial-fits">The regular-family and negative-binomial fits<a class="headerlink" href="#the-regular-family-and-negative-binomial-fits" title="Permanent link">&para;</a></h3>
+<p><code>fit_discrete_regular</code> enters <code>regular_working_components</code>, which prepares the
+problem, budgets <code>_regular_solver_plan</code>, compiles the proposal
+(<code>compile_working_model_proposal</code>), transfers the design and builds a
+<code>RegularWorkingComponents</code> bundle:</p>
+<ul>
+<li><code>rows</code>: a <code>_DiscreteWorkingRows</code> (or <code>_DiscreteExtendedRows</code> for the NB).
+  Every call is one complete source scan. <code>initial()</code> evaluates at <code>eta =
+  linkfun(mustart)</code> from the family initializer; <code>evaluate(beta,
+  statistics=...)</code> evaluates at <code>X beta + offset</code>. Each batch runs a JIT kernel
+  from <code>jaxgam/fitting/discrete/working.py</code> and returns per-row deviance plus,
+  when requested, <code>X'WX</code>, <code>X'Wz</code> and <code>sum(w z^2)</code>. Per-row deviances are reduced
+  on the host by <code>source_sum</code>, R's left-to-right long-double <code>sum</code>, because
+  step-control decisions compare two such sums near convergence.</li>
+<li><code>propose</code>: transfers each iteration's statistics to the device once
+  (<code>CompiledWorkingModelProposal.transfer</code>) and evaluates trials on them.</li>
+<li><code>penalty</code>: <code>source_penalty_quadratic</code>, <code>b'Sb</code> in the <code>Sl.setup</code> coordinates,
+  so a very large smoothing parameter cannot cancel against null-space
+  coefficients.</li>
+<li><code>start</code>: iteration one's free parameters, <code>initial.sp</code> from the diagonal of
+  the iteration-one <code>X'WX</code> (<code>initial_log_sp_from_diagonal</code>) when smoothing is
+  selected, then <code>log(var(y) * 0.05)</code> when the scale is estimated.</li>
+<li><code>nuisance</code>: <code>_ThetaNuisance</code> for an NB with estimated theta.</li>
+</ul>
+<p>The working model is <code>bgam.fitd</code>'s, not the dense route's <code>gam.fit3</code>:</p>
+<ul>
+<li>Regular families use Fisher weights and pseudodata
+  (<code>_fisher_working_quantities</code>): <code>w = prior * mu.eta^2 / V(mu)</code>,
+  <code>z = (eta - offset) + (y - mu) / mu.eta</code>, with a zero <code>mu.eta</code> replaced by
+  0.1 before both are formed; no observed-curvature split, weight clipping or
+  row filtering, and no <code>validmu</code>/<code>valideta</code> check.</li>
+<li>The NB uses <code>bgam.fitd</code>'s <code>dDeta</code> Newton weights at the current theta
+  (<code>discrete_extended_working_batch</code>, family method <code>source_newton_working</code>).</li>
+<li>The scale is fixed at one for Poisson and Binomial; for Gamma it is a
+  working-model parameter <code>log.phi</code>.</li>
+</ul>
+<h4 id="the-performance-iteration">The performance iteration<a class="headerlink" href="#the-performance-iteration" title="Permanent link">&para;</a></h4>
+<p><code>fit_regular_working_model</code> loops <code>advance_regular_working_model</code> until
+convergence or <code>working_model_max_iterations</code>. One outer iteration:</p>
+<ol>
+<li><strong>Iteration one</strong> scans at <code>linkfun(mustart)</code>; there are no coefficients
+   yet.</li>
+<li><strong>Iteration two</strong> scans at the first proposal's coefficients with no step
+   control. A non-finite deviance raises <code>FloatingPointError("Non-finite
+   working-model deviance at iteration 2.")</code>, which is where pinned <code>bam</code>
+   also stops.</li>
+<li><strong>From iteration three</strong> the step is halved toward the previous accepted
+   coefficients (<code>coef0 / 2 + coef / 2</code>) while the penalized deviance
+   <code>dev + b'Sb</code> exceeds the accepted one or is non-finite, at most 29 times
+   (<code>_MAX_COEFFICIENT_TRIALS = 30</code>, R's <code>kk &lt; 30</code>). Each trial's relative margin
+   is kept in <code>RegularWorkingModelIteration.step_control_margins</code>.</li>
+<li>With an estimated theta (NB), <code>dev0</code> is first re-evaluated at the current
+   theta, trial scans compute deviance only, then <code>estimate.theta</code> runs at the
+   step-controlled coefficients (from iteration two), and one more scan forms
+   the statistics with the new theta. Without a nuisance, an accepted trial's
+   scan already formed the statistics, so it costs one scan.</li>
+<li><strong>Convergence test</strong>, before any proposal: from iteration three, stop when
+   <code>|pdev - pdev_old| / (0.1 + |pdev|) &lt; working_model_epsilon</code> and, if the
+   scale is estimated, the last log-scale step is below
+   <code>epsilon * (|log phi| + 1)</code>.</li>
+<li><strong>Proposal</strong>: <code>accept_working_model_proposal</code> (below), then the next
+   criterion <code>crit = (pdev / phi - log|S|+ + log|H|) / 2</code>.</li>
+</ol>
+<p>After a converged iteration the final coefficients are its step-controlled
+ones, paired with the previous proposal's factor and smoothing parameters; at
+the iteration limit they are the last proposal's coefficients, whose deviance
+needs one more deviance-only scan. In both cases the result keeps
+<code>converged</code>, and <code>fit_discrete_regular</code> emits a <code>RuntimeWarning</code> when the limit
+is reached. An explicit <code>sp</code> runs the same loop with every smoothing parameter
+fixed: <code>Sl.fitChol</code> then updates only an estimated scale.</p>
+<pre class="mermaid"><code>flowchart TD
+    Top["advance_regular_working_model&lt;br/&gt;iteration i"] --&gt; First{"i == 1?"}
+    First --&gt;|"yes"| Init["rows.initial&lt;br/&gt;scan at linkfun mustart"]
+    First --&gt;|"no"| Eval["rows.evaluate at carried coefficients"]
+    Eval --&gt; Ctl{"i &gt; 2 and pdev worse&lt;br/&gt;or non-finite?"}
+    Ctl --&gt;|"yes, under 29 halvings"| Halve["halve toward accepted coefficients"]
+    Halve --&gt; Eval
+    Ctl --&gt;|"no"| Theta{"nuisance and i &gt; 1?"}
+    Init --&gt; Theta
+    Theta --&gt;|"yes"| Est["_ThetaNuisance.update&lt;br/&gt;source_estimate_theta"]
+    Est --&gt; Stats["rows.evaluate with statistics"]
+    Theta --&gt;|"no"| Finite{"penalized deviance finite?"}
+    Stats --&gt; Finite
+    Finite --&gt;|"no"| Fail["FloatingPointError"]
+    Finite --&gt;|"yes"| Conv{"i &gt; 2 and deviance change&lt;br/&gt;and log-scale step below epsilon?"}
+    Conv --&gt;|"yes"| Done["RegularWorkingModelFit&lt;br/&gt;converged"]
+    Conv --&gt;|"no"| Prop["accept_working_model_proposal"]
+    Prop --&gt; Next["RegularWorkingModelState&lt;br/&gt;parameters, step, coefficients, crit"]
+    Next --&gt; Limit{"completed below&lt;br/&gt;working_model_max_iterations?"}
+    Limit --&gt;|"yes"| Top
+    Limit --&gt;|"no"| Max["deviance-only scan&lt;br/&gt;converged False"]</code></pre>
+<p>Each box that says "rows" is one complete source scan; everything else is
+coefficient-space work on the host or in the proposal kernels.</p>
+<h4 id="theta">Theta<a class="headerlink" href="#theta" title="Permanent link">&para;</a></h4>
+<p><code>source_estimate_theta</code> in <code>jaxgam/execution/discrete/working_theta.py</code> ports
+<code>estimate.theta</code> for one log theta with known scale: a Newton iteration on
+<code>nll = sum(dev.resids)/2 - ls</code> at fixed <code>mu</code>, with the absolute value of a
+non-positive Hessian (and a 1e-5 relative floor), a step capped at 4, halving
+while the objective rises by more than <code>eps^0.75</code> relative (at most 25 times),
+and convergence when <code>|g| &lt;= 1e-7 (|nll| + 1)</code>. A step failure warns and keeps
+the last theta. Each objective is <code>_DiscreteExtendedRows.objective</code>, one full
+scan of <code>discrete_theta_batch</code>, so <code>source_scans</code> grows faster than the
+iteration count for an estimated theta. A fixed theta
+(<code>NegativeBinomial(theta, fixed=True)</code>) skips the nuisance.</p>
+<h3 id="the-working-model-reml-proposal">The working-model REML proposal<a class="headerlink" href="#the-working-model-reml-proposal" title="Permanent link">&para;</a></h3>
+<p>The proposal is shared by every family. It ports <code>Sl.fitChol</code>'s trial, not the
+dense route's nested exact REML: the Gaussian controller passes frozen
+<code>X'X</code>, <code>X'y</code>, <code>y'y</code>; the regular controller passes each iteration's Fisher
+<code>X'WX</code>, <code>X'Wz</code>, <code>sum(w z^2)</code>.</p>
+<p><strong>Reparameterization.</strong> <code>WorkingModelCriterionMetadata.from_structure</code> builds
+<code>Sl.setup</code>-style blocks (<code>build_working_penalty_blocks</code> in
+<code>jaxgam/formula/discrete/working_penalties.py</code>): per block a coefficient transform,
+local penalties declared diagonal when they are, and for coupled
+multi-penalty blocks the projected roots used by the determinant. The
+statistics are transformed once per set by <code>working_model_statistics</code>, the
+block transform of <code>Sl.initial.repara</code>; trials reuse the transformed arrays.</p>
+<p><strong>Pivoted Cholesky at a host boundary.</strong> Each trial crosses the host once:</p>
+<ol>
+<li><code>working_model_factor_inputs</code> (JIT) forms <code>H = X'WX + S_lambda</code> in working
+   coordinates, scales it by <code>d = sqrt(diag H)</code> as <code>t(A/d)/d</code>, and forms the
+   scaled combined root products of each coupled penalty block.</li>
+<li><code>factor_working_model</code> factors each matrix on the host with
+   <code>source_pivoted_cholesky</code>, R's <code>chol(pivot=TRUE)</code> (LAPACK DPSTRF) from the
+   pinned <code>scipy-openblas32</code> wheel that matches the OpenBLAS 0.3.26 pinned R
+   links, run single-threaded (<code>jaxgam/smooths/source_lapack.py</code>). The pivot
+   order and rank decision are part of the criterion's arithmetic, so the
+   provider is pinned to reproduce R's. The factor is a host operation with no
+   derivatives.</li>
+<li><code>gaussian_working_model_proposal</code> (JIT) consumes the factors.</li>
+</ol>
+<p><code>exp(log sp)</code> is evaluated once per trial with the C library <code>exp</code>
+(<code>source_exponentials</code>), as R does; <code>source_exp</code> and <code>source_log</code> serve the
+same purpose in the controllers.</p>
+<p><strong>Criterion and derivatives</strong> (<code>_source_gaussian_state</code>): beta from the scaled
+pivoted solve (<code>_source_cholesky_solve</code>, which pads dropped coordinates);
+<code>log|H|</code> from the factor diagonal; <code>log|S|+</code> and its derivatives in closed form
+for singleton blocks and from the host factors for coupled blocks; the
+penalized residual <code>yy - sum(beta * f)</code>; and its first and second derivatives
+in log smoothing parameters from <code>_source_ift_chol</code>, a port of <code>Sl.iftChol</code>
+(the implicit-function-theorem solve <code>db/drho = -H^-1 S_j beta lambda_j</code>).
+The value is <code>(pdev / phi - log|S|+ + log|H| + (n - M_p) log(2 pi phi)) / 2</code>;
+when the scale is free, a log-phi coordinate is appended to the gradient and
+Hessian. With <code>fixed_smoothing</code> only the log-phi coordinate stays free.</p>
+<p><strong>Newton step on log smoothing parameters</strong> (<code>_sl_newton_step</code>): coordinates
+are active when <code>|g|</code> or <code>|H_ii|</code> exceeds the tolerance
+<code>|crit| * sqrt(eps)</code>; the restricted Hessian's eigenvalues are made absolute and
+floored at <code>max * sqrt(eps)</code>; the step <code>-V diag(1/|lambda|) V' g</code> is zeroed on
+inactive coordinates and scaled so its largest entry is at most 4.</p>
+<p><strong>Step control</strong> (<code>accept_working_model_proposal</code>, <code>bgam.fitd</code>'s update loop):
+the carried step <code>Nstep</code> from the previous proposal is tried from the current
+parameters; it is accepted at once when it is empty or <code>max(Nstep) == 0</code>, and
+otherwise halved while the directional derivative <code>sum(grad * Nstep)</code> exceeds
+<code>pdev * 1e-7</code>. The accepted trial's own step becomes the next iteration's
+<code>Nstep</code>. A non-finite proposal raises <code>FloatingPointError</code>.</p>
+<p><strong>EDF and covariance.</strong> <code>working_model_hessian_inverse</code> forms <code>H^-1</code> from the
+accepted factor (dropped coordinates get zero rows and columns); the block
+transforms map it back to public coordinates. EDF is <code>sum(H^-1 * X'WX')</code>, that
+is <code>tr(H^-1 X'WX)</code>, pairing the last accepted proposal's factor with the last
+iteration's <code>X'WX</code> as <code>bgam.fitd</code> does; <code>Vp = scale * H^-1</code> when
+<code>uncertainty="covariance"</code>, and a <code>PivotedQRFisherFactor</code> plus transforms is
+retained when <code>uncertainty="fisher"</code>.</p>
+<p><strong>Compile-time memory.</strong> <code>compile_working_model_proposal</code> first charges
+<code>_prospective_memory</code> (metadata, statistics, state, trace) against the budget
+left after the fit plan, then lowers and compiles the three kernels
+(<code>working_model_statistics</code>, <code>working_model_factor_inputs</code>,
+<code>gaussian_working_model_proposal</code>) and adds their measured
+<code>memory_analysis()</code> temporaries and outputs (less aliases) plus the DPSTRF
+workspace (<code>source_pivoted_cholesky_workspace_bound</code>). Either check raises
+<code>MemoryError</code> before any proposal runs. A backend whose compiled
+<code>memory_analysis()</code> is <code>None</code> is refused with <code>NotImplementedError</code>.</p>
+<h4 id="the-gaussian-working-model-controller">The Gaussian working-model controller<a class="headerlink" href="#the-gaussian-working-model-controller" title="Permanent link">&para;</a></h4>
+<p><code>fit_gaussian_working_model_statistics</code> starts from <code>initial.sp</code> on the diagonal
+of <code>X'X</code> and <code>log(var(y) * 0.05)</code>, then loops
+<code>advance_gaussian_working_model</code>: the penalized deviance at the top of an
+iteration is <code>yy - beta'X'y</code> from the frozen statistics; the convergence test
+(iteration above two, relative deviance change and log-scale step below
+<code>working_model_epsilon</code>) precedes each proposal; then one
+<code>accept_working_model_proposal</code>. The trace keeps accepted iterations only.</p>
+<h3 id="sequence-of-a-discretized-fit">Sequence of a discretized fit<a class="headerlink" href="#sequence-of-a-discretized-fit" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>sequenceDiagram
+    participant API as GAM._fit_discrete
+    participant Drv as fit_discrete_regular
+    participant Prep as _prepared_discrete
+    participant Comp as compile_working_model_proposal
+    participant Rows as _DiscreteWorkingRows
+    participant Loop as fit_regular_working_model
+    participant Res as GAMPredictionResult
+    API-&gt;&gt;Drv: spec, RowSource, family, sp, control
+    Drv-&gt;&gt;Prep: enter context
+    Prep-&gt;&gt;Prep: build_continuous_discrete_setup
+    Prep-&gt;&gt;Prep: build_discretization_metadata
+    Prep-&gt;&gt;Prep: build_continuous_discrete_design
+    Prep--&gt;&gt;Drv: _PreparedDiscrete
+    Drv-&gt;&gt;Drv: _regular_solver_plan and _check_fit_budget
+    Drv-&gt;&gt;Comp: penalties, n, remaining budget
+    Comp--&gt;&gt;Drv: CompiledWorkingModelProposal
+    Drv-&gt;&gt;Rows: to_device_discrete_design
+    Drv-&gt;&gt;Loop: rows, propose, penalty, start
+    loop each outer iteration
+        Loop-&gt;&gt;Rows: initial or evaluate, one source scan each
+        Rows--&gt;&gt;Loop: WorkingEvaluation
+        Loop-&gt;&gt;Comp: trial parameters on transferred statistics
+        Comp--&gt;&gt;Loop: GaussianWorkingModelProposal
+    end
+    Loop--&gt;&gt;Drv: RegularWorkingModelFit
+    Drv-&gt;&gt;Drv: RegularWorkingComponents.result
+    Drv-&gt;&gt;Prep: exit context, release selectors
+    Drv--&gt;&gt;API: DiscreteFit
+    API-&gt;&gt;Res: _from_discrete</code></pre>
+<p>The additive Gaussian fit follows the same preparation and budget steps but
+calls <code>fit_discrete_gaussian</code>: one statistics scan, then either a host Cholesky
+solve or <code>fit_gaussian_working_model_statistics</code> with no further scans, then
+one residual scan.</p>
+<h3 id="what-the-result-reports">What the result reports<a class="headerlink" href="#what-the-result-reports" title="Permanent link">&para;</a></h3>
+<p><code>GAMPredictionResult._from_discrete</code> builds a row-free result:</p>
+<ul>
+<li><code>execution_route="discrete"</code>, <code>discretization_strategy="mgcv_range_grid"</code>,
+  <code>smoothing_strategy</code> and <code>lambda_strategy</code> (<code>"fixed"</code> or
+  <code>"working_model_reml"</code>), <code>prediction_policy</code> and the <code>discretization</code> record.</li>
+<li><code>execution_path</code>: <code>"jax_actions_numpy_solve"</code> (fixed-sp Gaussian),
+  <code>"jax_actions_working_model_numpy_postestimation"</code> (selected Gaussian) or
+  <code>"jax_actions_performance_iteration_numpy_postestimation"</code> (regular and NB).</li>
+<li><code>n_iter</code> is the scale-iteration count for fixed-sp Gaussian and the outer
+  iteration count otherwise; <code>convergence_info</code> names the strategy and counts.</li>
+<li><code>working_model_proposal_evaluations</code>: proposal trials, including halved ones
+  (zero for fixed-sp Gaussian, nonzero for fixed-sp regular fits).</li>
+<li><code>source_scans</code> and <code>batches_scanned</code> count fit scans only, not setup.</li>
+<li><code>fit_peak_bytes</code>, <code>fit_memory_budget_bytes</code>, <code>known_workspace_bytes</code>.</li>
+<li><code>theta</code> for the NB only (its final fixed or estimated value).</li>
+<li><code>score</code> is <code>bgam.fitd</code>'s criterion with the <code>Mp</code> reset; <code>edf_total</code> is
+  <code>tr(H^-1 X'WX)</code>. The per-iteration trace is not copied to the result.</li>
+</ul>
+<h3 id="prediction-policies">Prediction policies<a class="headerlink" href="#prediction-policies" title="Permanent link">&para;</a></h3>
+<p><code>ContinuousDiscretizationControl.prediction_policy</code> is recorded on the result
+and the predictor. Both policies reuse the fitted knots, constraints and
+transforms:</p>
+<ul>
+<li><code>"continuous_frozen_basis"</code> (default): every new value is evaluated exactly
+  by the frozen basis, so predictions never depend on the request or its
+  batching.</li>
+<li><code>"mgcv_predict_bamd"</code>: pinned <code>predict.bamd</code> semantics. A bounded pre-pass
+  over the whole request (<code>jaxgam/data/continuous_request.py</code>) freezes each
+  group's rounding decision and grid with <code>discrete.mf</code>'s default <code>m</code>; batches
+  are then compressed elementwise. Results depend on the request's composition
+  but not on batch boundaries. A model without smooth terms records
+  <code>"continuous_frozen_basis"</code> and keeps the request in
+  <code>discretization.requested_prediction_policy</code> (<code>effective_prediction_policy</code>).</li>
+</ul>
+<p>Factor semantics are the same under both: a missing or unseen random-effect
+level contributes zero.</p>
+<h2 id="key-types">Key types<a class="headerlink" href="#key-types" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>classDiagram
+    class _PreparedDiscrete {
+        +setup ContinuousDiscreteSetup
+        +discretization ContinuousDiscretizationMetadata
+        +request_compression RequestCompressionSpec
+        +descriptor FrozenDiscreteDesign
+        +penalties PenaltyStructure
+        +fingerprint str
+    }
+    class ContinuousDiscreteSetup {
+        +compact CompactSetupFrame
+        +predict_spec PredictSpec
+        +penalties PenaltyStructure
+        +source_determinant_penalties PenaltyStructure
+        +retained_table_bytes int
+        +cleanup() None
+    }
+    class FrozenDiscreteDesign {
+        +blocks tuple
+        +n_rows int
+        +n_coef int
+        +control DiscreteDesignControl
+        +memory_plan DiscreteMemoryPlan
+        +batch_indices(row_positions) tuple
+        +evaluate_batch(row_positions) ndarray
+    }
+    class LookupBlock {
+        +col_start int
+        +table ndarray
+        +index ExactIndexTable
+    }
+    class TensorLookupBlock {
+        +col_start int
+        +margin_tables tuple
+        +centering ndarray
+        +keep ndarray
+        +level_codes ndarray
+        +n_levels int
+    }
+    class DeviceDiscreteDesign {
+        +blocks tuple
+        +n_coef int
+        +pair_policy str
+        +max_pair_histogram_bytes int
+        +batch_rows int
+    }
+    class DiscreteFitMemoryPlan {
+        +setup_retained_bytes int
+        +descriptor_device_peak_bytes int
+        +solver_workspace_bytes int
+        +fit_peak_bytes int
+        +budget_bytes int
+        +fit_workspace_bytes int
+    }
+    _PreparedDiscrete *-- ContinuousDiscreteSetup
+    _PreparedDiscrete *-- FrozenDiscreteDesign
+    FrozenDiscreteDesign *-- LookupBlock
+    FrozenDiscreteDesign *-- TensorLookupBlock
+    FrozenDiscreteDesign ..&gt; DeviceDiscreteDesign : to_device_discrete_design
+    _PreparedDiscrete ..&gt; DiscreteFitMemoryPlan : _solver_plan</code></pre>
+<p>The prepared problem owns host descriptors; <code>to_device_discrete_design</code> makes
+the device copy without selectors, and the fit plan combines the descriptor's
+plan with the solver workspace.</p>
+<pre class="mermaid"><code>classDiagram
+    class WorkingRows {
+        &lt;&lt;Protocol&gt;&gt;
+        +initial() WorkingEvaluation
+        +evaluate(coefficients, statistics) WorkingEvaluation
+        +response_variance() float
+    }
+    class _DiscreteWorkingRows {
+        +scans int
+        +batches int
+        +offset_nonzero bool
+    }
+    class _DiscreteExtendedRows {
+        +log_theta float
+        +set_log_theta(log_theta) None
+        +objective(coefficients, log_theta, derivatives) ThetaObjective
+    }
+    class WorkingStatistics {
+        +gram ndarray
+        +rhs ndarray
+        +response_square_sum float
+    }
+    class RegularWorkingModelState {
+        +completed int
+        +parameters ndarray
+        +step ndarray
+        +coefficients ndarray
+        +accepted_coefficients ndarray
+        +penalized_deviance float
+        +criterion float
+    }
+    class CompiledWorkingModelProposal {
+        +metadata WorkingModelCriterionMetadata
+        +memory_plan WorkingModelMemoryPlan
+        +transfer(gram, rhs, response_square_sum) tuple
+        +log_smoothing(trial) ndarray
+    }
+    class AcceptedWorkingModelProposal {
+        +parameters ndarray
+        +coefficients ndarray
+        +criterion float
+        +proposed_step ndarray
+        +factor AcceptedWorkingModelFactor
+        +evaluations int
+    }
+    class RegularWorkingModelFit {
+        +coefficients ndarray
+        +penalized_deviance float
+        +converged bool
+        +n_iter int
+        +proposal_evaluations int
+        +factor AcceptedWorkingModelFactor
+        +gram ndarray
+    }
+    WorkingRows &lt;|.. _DiscreteWorkingRows
+    _DiscreteWorkingRows &lt;|-- _DiscreteExtendedRows
+    _DiscreteWorkingRows ..&gt; WorkingStatistics : produces
+    RegularWorkingModelState ..&gt; AcceptedWorkingModelProposal : advanced by
+    CompiledWorkingModelProposal ..&gt; AcceptedWorkingModelProposal : trials
+    RegularWorkingModelFit *-- AcceptedWorkingModelFactor</code></pre>
+<p><code>WorkingRows</code> is the only way the controller reaches rows; any provider that
+implements it (tests use an explicit design) runs the identical controller.
+<code>GaussianWorkingModelFit</code> and <code>WorkingModelState</code> in
+<code>jaxgam/execution/discrete/working_model.py</code> play the roles of <code>RegularWorkingModelFit</code>
+and <code>RegularWorkingModelState</code> for the frozen Gaussian controller.</p>
+<h2 id="rules-and-invariants">Rules and invariants<a class="headerlink" href="#rules-and-invariants" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>No n-row array is retained.</strong> Rows are reached only by complete bounded
+  source scans; finished batches are deleted before the next is built.
+  <code>tests/test_execution/test_discrete.py</code>
+  (<code>test_completed_fitting_scan_releases_batch_arrays_before_residual_scan</code>) and
+  <code>tests/test_scaling_allocation_guards.py</code>
+  (<code>test_source_routes_never_build_the_training_design</code>) enforce this.</li>
+<li><strong>Selectors stay on the host.</strong> <code>to_device_discrete_design</code> transfers tables
+  only; kernels refuse batches above <code>batch_rows</code>.</li>
+<li><strong>Budget before allocation.</strong> The fit plan is checked before device transfer
+  and the working-model workspace before any proposal
+  (<code>test_fit_workspace_rejects_before_device_transfer</code>,
+  <code>tests/test_execution/test_working_model.py</code>
+  <code>test_gaussian_compiled_budget_rejects_before_proposal</code>,
+  <code>tests/test_execution/test_regular_working_model.py</code>
+  <code>test_budget_rejects_before_device_transfer</code>).</li>
+<li><strong>Source identity.</strong> A changed fingerprint during or after a scan raises
+  <code>RuntimeError</code>; row counts must match the declared <code>n_rows</code>.</li>
+<li><strong>R arithmetic is part of the port.</strong> Deviance sums use <code>source_sum</code> (long
+  double, row order); <code>exp</code> and <code>log</code> use the C library; the pivoted Cholesky
+  is the pinned DPSTRF. Step-control ties near convergence depend on these
+  (<code>tests/test_execution/test_regular_working_model.py</code>
+  <code>test_source_sum_is_left_to_right_in_long_double</code>,
+  <code>tests/test_execution/test_working_model.py</code>
+  <code>test_source_exp_and_log_are_the_c_library_functions</code>).</li>
+<li><strong>Parity with pinned <code>bam</code>.</strong> Fixed and selected fits are compared to
+  <code>bam(discrete=TRUE)</code> in <code>tests/test_execution/test_discrete.py</code>,
+  <code>tests/test_execution/test_discrete_regular.py</code>,
+  <code>tests/test_execution/test_discrete_nb.py</code> and
+  <code>tests/test_execution/test_working_model.py</code>;
+  proposals at matched states in <code>tests/test_fitting/test_working_model.py</code>
+  (<code>test_proposal_matches_pinned_sl_fitchol</code>); <code>estimate.theta</code> in
+  <code>tests/test_execution/test_working_theta.py</code>; predictions in
+  <code>tests/test_execution/test_discrete_prediction.py</code>; the indexed kernels against
+  explicit designs and pinned R layouts in <code>tests/test_fitting/test_discrete_ops.py</code>.</li>
+<li><strong>Batch invariance.</strong> Fits must not depend on <code>batch_rows</code>
+  (<code>test_fit_is_batch_invariant_and_cleans_owned_selector_files</code>,
+  <code>test_public_regular_fit_is_batch_invariant_and_pickles</code>).</li>
+<li><strong>The oracle hook is private.</strong> <code>_oracle_replay_halvings</code> replays a recorded R
+  step-control outcome at rounding-level ties for matched-state tests only;
+  <code>GAM</code> never sets it (<code>test_oracle_replay_hook_is_unreachable_from_the_public_api</code>).</li>
+<li><strong>Phase 1 stays NumPy.</strong> <code>jaxgam/formula/</code> modules used here import no JAX.</li>
+</ul>
+<h2 id="pitfalls">Pitfalls<a class="headerlink" href="#pitfalls" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>fit()</code> defaults to <code>result="full"</code>, which this route refuses; every call
+  needs <code>result="prediction"</code>, and the result has no <code>summary()</code> or <code>plot()</code>.</li>
+<li><code>working_model_reml</code> is <code>bgam.fitd</code>'s performance iteration, not the dense
+  route's nested exact REML. In <code>tests/test_execution/test_discrete_regular.py</code>
+  every comparison with pinned <code>bam</code> is STRICT except two documented flat
+  smoothing-parameter vectors.</li>
+<li>Step-control decisions near convergence can be rounding-level ties whose
+  outcome flips under a one-ulp perturbation even in R; matched-state tests
+  replay R's outcome there through <code>_oracle_replay_halvings</code>.</li>
+<li>Iteration two has no step control and there is no <code>validmu</code> check, so a first
+  proposal that leaves the family domain raises at iteration two, as pinned
+  <code>bam</code> does (<code>test_domain_exit_without_step_control_stops_like_pinned_bam</code>).</li>
+<li>The fixed-sp Gaussian scale iteration hard-codes 1e-7 and 200; the
+  <code>working_model_epsilon</code> and <code>working_model_max_iterations</code> controls do not
+  apply to it, but they do govern fixed-sp regular fits.</li>
+<li><code>source_scans</code> is not the iteration count: estimated theta adds one scan per
+  <code>estimate.theta</code> objective.</li>
+<li>Because the basis is built on the compact rows, an <code>m</code> smaller than a smooth's
+  <code>k</code> fails in basis construction with a message about unique data values.</li>
+<li>The default policy's table and batch budgets can be too small for radial
+  smooths or many-level factors at scale; the errors are <code>MemoryError</code> naming
+  the stage.</li>
+<li>The coefficients of a thin-plate smooth on a symmetric grid may differ from
+  <code>bam</code>'s by a change of coordinates
+  (<code>tests/test_execution/test_discrete_prediction.py</code>).</li>
+<li>A missing random-effect group predicts a zero contribution where pinned R gives
+  <code>NA</code> (<code>test_random_effect_missing_and_unseen_levels_contribute_zero</code>).</li>
+<li>Memory bounds cover known arrays; native compiler and allocator memory are
+  outside them.</li>
+</ul>
+<h2 id="where-to-change-things">Where to change things<a class="headerlink" href="#where-to-change-things" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Admit a new family or link</strong>: give the family the
+  <code>regular_performance_iteration</code> or <code>extended_performance_iteration</code>
+  capability (see <a href="../families_links_smooths/">families, links and smooths</a>) and
+  check <code>GAM._fit_discrete</code>'s admission; extended families also need the
+  <code>source_*</code> row methods used in <code>jaxgam/fitting/discrete/working.py</code>.</li>
+<li><strong>Change how <code>X'WX</code> is reduced</strong>: <code>_pair_part</code> and the schedule in
+  <code>jaxgam/formula/kernel_groups.py</code>; keep <code>discrete_xwxd_cost</code> and the
+  descriptor's <code>_memory_plan</code> in step with any new reduction.</li>
+<li><strong>Change the row-chunk choice</strong>: <code>_row_xwxd_chunk</code> and <code>_ROW_XWXD_CHUNKS</code> in
+  <code>jaxgam/execution/discrete/gaussian.py</code>, the cost constants in
+  <code>jaxgam/fitting/discrete/ops.py</code>.</li>
+<li><strong>Change the proposal arithmetic</strong>: <code>jaxgam/fitting/discrete/working_model.py</code>; rerun
+  the matched-state R tests in <code>tests/test_fitting/test_working_model.py</code>.</li>
+<li><strong>Change step control or convergence</strong>: <code>accept_working_model_proposal</code> and
+  <code>advance_gaussian_working_model</code> in <code>jaxgam/execution/discrete/working_model.py</code>, and
+  <code>advance_regular_working_model</code> in <code>jaxgam/execution/discrete/regular_working_model.py</code>.</li>
+<li><strong>Change memory accounting</strong>: <code>_solver_plan</code>, <code>_regular_solver_plan</code>,
+  <code>_prospective_memory</code> and <code>compile_working_model_proposal</code>.</li>
+<li><strong>Change what the result reports</strong>: <code>DiscreteFit</code> and
+  <code>GAMPredictionResult._from_discrete</code> in <code>jaxgam/results.py</code>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

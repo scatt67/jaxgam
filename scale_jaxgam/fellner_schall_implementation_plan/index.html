@@ -1,0 +1,2276 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>JaxGAM: extended Fellner–Schall implementation plan - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#jaxgam-extended-fellnerschall-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              JaxGAM: extended Fellner–Schall implementation plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-outcome-and-delivery-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Outcome and delivery boundary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Outcome and delivery boundary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#initial-support-and-expansion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Initial support and expansion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-architecture-reconciliation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required architecture reconciliation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-references-and-source-provenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. References and source provenance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. References and source provenance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-theory-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 Theory reference
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-executable-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 Executable reference
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-current-repository-integration-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Current repository integration points
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-numerical-contract-and-exact-dense-statistics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Numerical contract and exact dense statistics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Numerical contract and exact dense statistics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-coordinates-scaling-and-matrix-roles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 Coordinates, scaling, and matrix roles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-penalty-derivative-and-coupled-blocks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2 Penalty derivative and coupled blocks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-quadratic-forms-and-covariance-traces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.3 Quadratic forms and covariance traces
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-update-and-degenerate-branches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.4 Update and degenerate branches
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-dense-outer-controller" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Dense outer controller
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Dense outer controller">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-state-and-initialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 State and initialization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-accepted-and-trial-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 Accepted and trial steps
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-monotonicity-failure-and-convergence-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 Monotonicity, failure, and convergence policy
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-family-scale-and-theta-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Family, scale, and theta behavior
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Family, scale, and theta behavior">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-known-scale-regular-families" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.1 Known-scale regular families
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-gaussian-and-gamma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.2 Gaussian and Gamma
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-fixed-theta-nb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.3 Fixed-theta NB
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#64-estimated-theta-nb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.4 Estimated-theta NB
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-proposed-implementation-and-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Proposed implementation and API
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Proposed implementation and API">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#public-selection-and-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Public selection and controls
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#results-and-diagnostics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results and diagnostics
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-validation-and-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Validation and acceptance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Validation and acceptance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#81-three-distinct-comparisons" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.1 Three distinct comparisons
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#82-bridge-and-reproducible-fixtures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.2 Bridge and reproducible fixtures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#83-test-ownership-and-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.3 Test ownership and matrix
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-later-operator-and-stochastic-efs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Later operator and stochastic EFS
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-implementation-pr-sequence-and-exit-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Implementation PR sequence and exit criteria
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. Implementation PR sequence and exit criteria">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#performance-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance evidence
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#completion-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Completion checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="jaxgam-extended-fellnerschall-implementation-plan">JaxGAM: extended Fellner–Schall implementation plan<a class="headerlink" href="#jaxgam-extended-fellnerschall-implementation-plan" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Status (2026-11-20): delivered.</strong> The extended Fellner-Schall optimizer
+is implemented and public as <code>GAM(..., optimizer="efs")</code> on the dense,
+streamed and operator routes, merged into <code>main</code> as pull request #87. The
+text below is the plan as written and amended during the work. It is kept
+as a record and is not maintained; its module paths are those of the flat
+<code>fitting/</code> and <code>execution/</code> packages before they were divided into route
+sub-packages. For what was built, and where it is now, see
+<a href="../../architecture/fitting_dense/">the dense fit</a>,
+<a href="../../architecture/fitting_streamed/">the streamed fit</a> and
+<a href="../../architecture/fitting_operator/">the operator fit</a>; for how to use it
+see <a href="../../guide/smoothing_selection/">Smoothing parameter selection</a>.</p>
+</blockquote>
+<p>Original status line: proposed post-v1.0 work; no EFS implementation or public API is enabled by this document. Audited 2026-09-06 against JaxGAM commit <code>c1a31346188186bbd2fe67eea8d0d51ba6c95d79</code>.</p>
+<p>Parent: <a href="../jaxgam_scaling_implementation_plan/">JaxGAM scaling implementation plan</a>, PR 13. This sub-plan owns the EFS algorithm, dense reference implementation, and later operator adapter. The parent owns execution representations, preparation, memory budgets, and bulk uncertainty. EFS means the generalized/extended Fellner–Schall smoothing update used by mgcv's <code>efsudr</code>, not <code>bam(method="fREML")</code> and not the existing Newton REML optimizer.</p>
+<h2 id="1-outcome-and-delivery-boundary">1. Outcome and delivery boundary<a class="headerlink" href="#1-outcome-and-delivery-boundary" title="Permanent link">&para;</a></h2>
+<p>Deliver an explicitly selected EFS optimizer that reuses JaxGAM's basis, penalties, PIRLS, and result construction, with update-level and final-fit parity against the corresponding pinned mgcv EFS path. Start with exact dense trace evaluation at manageable coefficient count p. Its initial benefit is avoiding the full smoothing-parameter Hessian when the number of penalties m is large; it does not remove dense X, coefficient factorizations, or every O(p²) allocation.</p>
+<p>Deliver dense reference, streamed adaptation, and operator adaptation separately:</p>
+<ol>
+<li><strong>Dense reference, EFS-1 through EFS-5:</strong> deterministic penalty statistics, mgcv-style outer control, regular-family scale handling, then NB theta integration. No operator solver, stochastic trace, streaming input, or new smooth is required.</li>
+<li><strong>Wider family coverage and streamed direct providers, EFS-5.1–EFS-5.2:</strong> make the remaining existing-family/link gates explicit, then reuse the parent plan's family contract and streamed coefficient kernels without changing the EFS controller. This remains a manageable-p, exact-trace backend, not a no-p² operator claim.</li>
+<li><strong>Operator adapter, EFS-6:</strong> substitute validated iterative solves and, subsequently, stochastic statistics while retaining the dense EFS reference. This requires parent PR 12. It is a separate approximation contract, not a storage-only port of <code>efsudr</code>.</li>
+</ol>
+<p>The dense work can start on today's <code>FittingData</code>. Parent PR 2's local penalties reduce its memory cost but are not a correctness prerequisite. Parent PRs 5, 7, 8, 9, 10, and 12 are not prerequisites for dense EFS. Gaussian QR compression from PR 9 is an optional fit-provider adapter; the NB derivative optimization in PR 4 is an optional performance improvement, not a replacement for the theta algorithm below.</p>
+<p><strong>September 8 clarification:</strong> parent PR7 (<a href="https://github.com/scatt67/jaxgam/pull/40">#40</a>) only delivers canonical Gaussian/Poisson/binomial cross-product/Cholesky streaming. Its explicit follow-ups PR7.1–7.6 own the generic family contract, QR/TSQR, signed curvature, remaining regular links, NB parameter plumbing and public all-family release. Dense EFS support does not automatically enable streamed EFS, nor does a streamed coefficient fit automatically supply an exact REML derivative. Parent PR8.1–8.3 own exact-REML derivatives/optimization; EFS continues to own its distinct theta-update and scale-carry policies. Use capabilities and shared family kernels rather than add another family-name-based streaming engine.</p>
+<h3 id="initial-support-and-expansion">Initial support and expansion<a class="headerlink" href="#initial-support-and-expansion" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Delivery</th>
+<th>Families / models</th>
+<th>Gate before expansion</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>First dense controller</td>
+<td>Poisson/log and binomial/logit; fixed known scale; finite positive weights; identifiable penalized system; cubic additive and coupled <code>te</code>/<code>ti</code> penalties</td>
+<td>Exact trace/update parity and real fitted-model EFS parity, not only singleton-penalty examples</td>
+</tr>
+<tr>
+<td>Regular-family scale</td>
+<td>Gaussian/identity, then Gamma with individually validated links</td>
+<td>Incoming score scale versus updated/reported scale is reproduced; final covariance/EDF remain compatible</td>
+</tr>
+<tr>
+<td>Extended family</td>
+<td>NB/log with fixed theta, then estimated theta</td>
+<td>Fisher trace versus observed-score split; conditional theta Newton and joint coefficient/theta convergence</td>
+</tr>
+<tr>
+<td>Wider existing basis/link coverage</td>
+<td>Existing <code>tp/ts</code>, <code>cr/cs/cc</code>, <code>gp</code>, dense <code>re</code>, factor-by, other supported links</td>
+<td>Frozen basis parity; rank, clipping, zero/extreme weights, and family-specific validity tests</td>
+</tr>
+<tr>
+<td>Operator EFS</td>
+<td>Initially fixed-scale, supported positive-definite systems</td>
+<td>Parent PR 12 and the scored-iteration/trace accuracy contract in §9</td>
+</tr>
+</tbody>
+</table>
+<p>No automatic switch from Newton based on n, p, or m. Unsupported EFS combinations must fail clearly at preflight, not change the basis, optimizer, or likelihood silently. ML, GCV/UBRE, <code>gam.fit5</code> general families, Tweedie, adaptive smooths, <code>ps/cp/bs</code>, <code>fs</code>, sparse direct libraries, and distributed execution are not deliverables here. The paper's examples do not expand repository scope.</p>
+<h3 id="required-architecture-reconciliation">Required architecture reconciliation<a class="headerlink" href="#required-architecture-reconciliation" title="Permanent link">&para;</a></h3>
+<p><code>docs/design.md</code> (since removed from the repository) was authoritative at the time. Read §1.2, §4.4, §5.10, §7, §8.1, the subsection titled <strong>8.2 Fellner-Schall Method (Fast REML for bam)</strong>, and §18.1–§18.2. There are two §8.2 headings; use the title as well as the number.</p>
+<p>Before public EFS ships, its implementation PR must reconcile the post-v1 scope, optimizer/API contract, and objective-monotonicity policy with the architecture and repository instructions. This plan does not silently override those rules. The old §8.2 sketch is not an executable specification: it conflates EFS with fREML, uses a singleton-rank shortcut that is not general for coupled penalties, omits scale handling, and disagrees between its docstring and code about a lambda factor. Replace that sketch with an accurate summary and a link here when the architectural change is approved. Do not implement it verbatim.</p>
+<h2 id="2-references-and-source-provenance">2. References and source provenance<a class="headerlink" href="#2-references-and-source-provenance" title="Permanent link">&para;</a></h2>
+<h3 id="21-theory-reference">2.1 Theory reference<a class="headerlink" href="#21-theory-reference" title="Permanent link">&para;</a></h3>
+<p>Wood, S. N. and Fasiolo, M. (2017), <em>A generalized Fellner–Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models</em>, Biometrics 73(4), 1071–1081, <a href="https://doi.org/10.1111/biom.12666">doi:10.1111/biom.12666</a>. Use the <a href="https://academic.oup.com/biometrics/article/73/4/1071/7537785">published article</a> for equation numbering: §2 / equation (3) for Gaussian updates, §3 for convergence assumptions, and §4 / equation (8) for general likelihoods. The <a href="https://arxiv.org/abs/1606.04802">arXiv preprint</a> is supplementary; its numbering differs. The publisher records a December 2017 correction, so prefer the corrected published text for theoretical claims.</p>
+<p>The general-likelihood development neglects a likelihood-curvature dependence; exact trace evaluation does not remove that approximation. Gaussian ascent requires suitable step-length control, and the general update does not promise exact finite-sample REML maximization. These distinctions govern the validation contract below. <a href="https://academic.oup.com/biometrics/article/73/4/1071/7537785">Wood and Fasiolo, §§2–4</a>.</p>
+<p>Historical provenance: <a href="https://doi.org/10.1080/00401706.1986.10488097">Fellner (1986), Robust Estimation of Variance Components</a>, and <a href="https://doi.org/10.1093/biomet/78.4.719">Schall (1991), Estimation in generalized linear models with random effects</a>. The generalized paper is the main implementation reference because JaxGAM supports several penalties acting on the same coefficient block.</p>
+<h3 id="22-executable-reference">2.2 Executable reference<a class="headerlink" href="#22-executable-reference" title="Permanent link">&para;</a></h3>
+<p><code>echo $MGCV_SOURCE</code> resolves to <code>/Users/shanecatts/Documents/GitHub/mgcv</code>. Its checkout is mgcv 1.9-4 at <code>1b6a4c8374612da27e36420b4459e93acb183f2d</code>; the test oracle is R 4.5.2 + mgcv 1.9-3, enforced by <a href="../../tests/r_bridge.py">RBridge.check_versions</a>. Unlike the parent document's 1.9-4 links, <strong>all mgcv implementation links in this sub-plan use the pinned 1.9-3 commit</strong> <code>fb7e8e718377513e78ba6c6bf7e60757fc6a32a9</code>.</p>
+<p>Read without changing the clone checkout:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">echo</span><span class="w"> </span><span class="nv">$MGCV_SOURCE</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">"</span><span class="nv">$MGCV_SOURCE</span><span class="s2">"</span><span class="w"> </span>rev-parse<span class="w"> </span>HEAD<span class="w"> </span><span class="m">1</span>.9-3
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">"</span><span class="nv">$MGCV_SOURCE</span><span class="s2">"</span><span class="w"> </span>show<span class="w"> </span><span class="m">1</span>.9-3:R/gam.fit4.r
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">"</span><span class="nv">$MGCV_SOURCE</span><span class="s2">"</span><span class="w"> </span>show<span class="w"> </span><span class="m">1</span>.9-3:R/gam.fit3.r
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">"</span><span class="nv">$MGCV_SOURCE</span><span class="s2">"</span><span class="w"> </span>show<span class="w"> </span><span class="m">1</span>.9-3:R/efam.r
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">"</span><span class="nv">$MGCV_SOURCE</span><span class="s2">"</span><span class="w"> </span>diff<span class="w"> </span><span class="m">1</span>.9-3<span class="w"> </span>HEAD<span class="w"> </span>--<span class="w"> </span>R/gam.fit4.r<span class="w"> </span>R/gam.fit3.r<span class="w"> </span>R/efam.r
+</code></pre></div>
+<p>The inspected <code>efsudr</code> body is unchanged between these revisions, but that does not establish that every callee is unchanged. For example, the 1.9-4 <code>gam.fit4</code> adds an <code>ml.pen</code> score attribute. Record source version and relevant branch in each implementing PR and generated fixture.</p>
+<table>
+<thead>
+<tr>
+<th>Responsibility</th>
+<th>Pinned mgcv code to read</th>
+<th>What to reuse / inspect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Public dispatch</td>
+<td><a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L1632"><code>R/mgcv.r::gam.outer</code></a></td>
+<td><code>optimizer="efs"</code> dispatch, <code>gam.fit3/4</code> versus general-family <code>gam.fit5</code>, no-free-sp handling</td>
+</tr>
+<tr>
+<td>Initial state</td>
+<td><a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L4720"><code>initial.spg</code></a>, <a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L1852"><code>get.null.coef</code></a>, <a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L1870"><code>estimate.gam</code></a></td>
+<td>Family-dependent initial working weights, initial-sp calculation, initial scale, and packing before <code>efsudr</code></td>
+</tr>
+<tr>
+<td>Outer algorithm</td>
+<td><a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/gam.fit4.r#L821"><code>R/gam.fit4.r::efsudr</code></a></td>
+<td>Range-space products, trace/quadratic update, scale, caps, extension/contraction, stopping</td>
+</tr>
+<tr>
+<td>Penalty determinant derivative</td>
+<td><a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/gam.fit3.r#L9"><code>R/gam.fit3.r::gam.reparam</code></a></td>
+<td><code>det1</code> is derivative with respect to <strong>log</strong> smoothing parameters; <code>deriv=1</code> suffices</td>
+</tr>
+<tr>
+<td>Penalty space</td>
+<td><a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/gam.fit3.r#L2659"><code>totalPenaltySpace</code></a></td>
+<td>Common range/null space and penalty roots; compare existing JaxGAM ranks before changing thresholds</td>
+</tr>
+<tr>
+<td>Regular-family fit</td>
+<td><a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/gam.fit3.r#L67"><code>gam.fit3</code></a></td>
+<td><code>scoreType="EFS"</code> requests penalty-det derivatives but suppresses full REML derivatives; Fletcher scale and score scale are separate</td>
+</tr>
+<tr>
+<td>Extended-family fit</td>
+<td><a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/gam.fit4.r#L240"><code>gam.fit4</code></a>, <a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/gam.fit4.r#L4"><code>dDeta</code></a></td>
+<td>Theta update inside PIRLS, deviance refresh, validity/convergence, observed information</td>
+</tr>
+<tr>
+<td>Covariance root</td>
+<td><a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/src/gdi.c#L2325"><code>src/gdi.c::gdi1</code></a>, <a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/src/gdi.c#L1953"><code>gdi2</code></a></td>
+<td>Returned <code>rV</code> uses expected/Fisher information after coefficient/score calculations; rank dropping and pivots</td>
+</tr>
+<tr>
+<td>Conditional theta update</td>
+<td><a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/efam.r#L5"><code>R/efam.r::estimate.theta</code></a></td>
+<td>Conditional likelihood Newton, safeguarded Hessian, bounded step, line search, stopping</td>
+</tr>
+<tr>
+<td>NB numerics</td>
+<td><a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/efam.r#L160"><code>R/efam.r::nb</code></a></td>
+<td><code>Dd</code>, <code>ls</code>, <code>getTheta</code>, <code>putTheta</code>, initialization; log-theta derivative conventions</td>
+</tr>
+<tr>
+<td>Defaults</td>
+<td><a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L2469"><code>R/mgcv.r::gam.control</code></a></td>
+<td><code>epsilon=1e-7</code>, <code>maxit=200</code>, <code>efs.lspmax=15</code>, <code>efs.tol=0.1</code>, Fletcher scale</td>
+</tr>
+<tr>
+<td>Explicit non-target</td>
+<td><a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/gam.fit4.r#L1478"><code>R/gam.fit4.r::efsud</code></a></td>
+<td>This is the <code>gam.fit5</code> route, not the first port for JaxGAM's existing families</td>
+</tr>
+</tbody>
+</table>
+<p>Theory-to-code traceability belongs in tests, not just a bibliography:</p>
+<table>
+<thead>
+<tr>
+<th>Paper anchor</th>
+<th>mgcv realization</th>
+<th>Proposed test responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>§2, equation (3)</td>
+<td><code>efsudr</code>'s <code>ldetS1</code>, <code>trVS</code>, <code>bSb</code>, and <code>phi</code></td>
+<td>Gaussian update algebra, singleton reduction, coupled penalties</td>
+</tr>
+<tr>
+<td>§2, Theorem 1 / Remark 1</td>
+<td>Penalty range handling and nonnegative numerator</td>
+<td>Null-space/rank fixtures and information-matrix assumptions</td>
+</tr>
+<tr>
+<td>§3</td>
+<td>Outer multiplier and stopping policy</td>
+<td>Branch fixtures; no unconditional Newton-speed or convergence guarantee</td>
+</tr>
+<tr>
+<td>§4, equation (8)</td>
+<td><code>gam.fit3/4(scoreType="EFS")</code> and returned covariance root</td>
+<td>Family/curvature conventions; EFS-versus-Newton differences reported separately</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-current-repository-integration-points">3. Current repository integration points<a class="headerlink" href="#3-current-repository-integration-points" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Current implementation</th>
+<th>Required use / change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../../jaxgam/api.py"><code>api.GAM.fit</code>, <code>_check_scope_guards</code></a></td>
+<td><code>optimizer</code> is an accepted keyword but only <code>None</code>/<code>"newton"</code> is allowed; the value is not currently stored for dispatch. Add validation, storage, dispatch, and tests together. <code>method</code> remains <code>"REML"</code>.</td>
+</tr>
+<tr>
+<td><a href="../../jaxgam/api.py"><code>api._fit_fixed_sp</code></a></td>
+<td>Natural-scale strictly positive fixed sp. Unknown-scale <strong>or</strong> estimated-theta families currently route to pinned-lambda Newton. Do not call this as the EFS trial-fit provider: it can run another outer optimization.</td>
+</tr>
+<tr>
+<td><a href="../../jaxgam/fitting/data.py"><code>FittingData.from_setup</code></a></td>
+<td>Reuse <code>X</code>, <code>S_list</code>, <code>max_y</code>, <code>repara_D</code>, rank information, and existing singleton/multi-penalty metadata. Its current <code>log_lambda_init</code> uses prior weights, not <code>initial.spg</code>'s family-dependent working weights; add an EFS initialization adapter without a second basis/constraint setup.</td>
+</tr>
+<tr>
+<td><a href="../../jaxgam/fitting/initialization.py"><code>initialize_beta</code></a></td>
+<td>Initialize once, then warm-start from the accepted state. R-parity controller fixtures can supply a matched initial state independently of public initialization.</td>
+</tr>
+<tr>
+<td><a href="../../jaxgam/fitting/pirls.py"><code>pirls_loop</code>, <code>PIRLSResult</code></a></td>
+<td>Existing pure JAX inner solve; output already includes observed/score and Fisher matrices/factors. Preserve backtracking and stationarity safeguards.</td>
+</tr>
+<tr>
+<td><a href="../../jaxgam/jax_utils.py"><code>block_log_det_S</code></a></td>
+<td>Compute only its first log-lambda derivative for EFS, or equivalent block solves. Do not build a second pseudo-determinant engine.</td>
+</tr>
+<tr>
+<td><a href="../../jaxgam/fitting/reml.py"><code>reml_criterion</code>, <code>reml_criterion_joint</code>, <code>_criterion_core</code></a></td>
+<td>Reuse scalar score evaluation, saturated likelihood, <code>Mp</code> correction, and rank convention. <code>_criterion_core</code> alone omits the outer REML null-space correction.</td>
+</tr>
+<tr>
+<td><a href="../../jaxgam/fitting/reml.py"><code>estimate_edf</code>, <code>fletcher_scale</code>, <code>estimate_scale</code></a></td>
+<td>Retain Fisher EDF and reported-scale behavior. Do not confuse optimized/incoming score phi with reported phi.</td>
+</tr>
+<tr>
+<td><a href="../../jaxgam/fitting/newton.py"><code>NewtonOptimizer</code>, <code>NewtonResult</code></a></td>
+<td>Regression reference and common result fields, not the EFS controller. Do not call <code>_diff_score</code>'s gradient/Hessian on the production EFS path.</td>
+</tr>
+<tr>
+<td><a href="../../jaxgam/families/negative_binomial.py"><code>NegativeBinomial</code></a></td>
+<td>Reuse <code>deviance_fn</code>, <code>saturated_loglik_theta</code>, explicit log-theta arguments, stable count-tail derivatives, and fixed-theta cache safeguards.</td>
+</tr>
+<tr>
+<td><a href="../../jaxgam/results.py"><code>GAMResults._from_fit</code></a></td>
+<td>Preserve coefficient back-transform, Fisher covariance, EDF, full/inference materialization, and family snapshot. This still constructs dense covariance in stage one.</td>
+</tr>
+<tr>
+<td><a href="../../tests/r_bridge.py"><code>RBridge</code></a></td>
+<td><code>fit_gam</code> has no optimizer/control/initial-state arguments today. Add a tested EFS bridge entry point; do not pretend current calls select EFS.</td>
+</tr>
+</tbody>
+</table>
+<p>CPU fitting still uses JAX. Proposed kernels belong in <code>fitting/</code>; new host control belongs in <code>execution/</code>, which does not exist at the audited commit. Keep NumPy-only setup/prediction and pure JIT kernels separate even though the current Newton driver already contains Python orchestration.</p>
+<h2 id="4-numerical-contract-and-exact-dense-statistics">4. Numerical contract and exact dense statistics<a class="headerlink" href="#4-numerical-contract-and-exact-dense-statistics" title="Permanent link">&para;</a></h2>
+<h3 id="41-coordinates-scaling-and-matrix-roles">4.1 Coordinates, scaling, and matrix roles<a class="headerlink" href="#41-coordinates-scaling-and-matrix-roles" title="Permanent link">&para;</a></h3>
+<p>Use one frozen fitting coordinate system throughout an iteration. In the definitions below, beta is <code>PIRLSResult.coefficients</code> and S_j is the matching <strong>unweighted</strong> penalty in <code>FittingData.S_list</code>, after the existing fitting reparameterization. Do not pair public/back-transformed beta with fitting-space S_j. Term labels are not identifiers; use positional penalty indices and <code>TermBlock</code> metadata.</p>
+<p>Define:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>rho_j = log(lambda_j)
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>S_lambda = sum_j exp(rho_j) S_j
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>G_F = Fisher-weighted cross-product, with the existing unit-deviance scale convention
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>H_F = G_F + S_lambda
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>C_F = H_F^{-1}                    # inverse action, not a required stored inverse
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>d_j = partial_{rho_j} log|S_lambda|_+
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    = lambda_j trace(S_lambda^+ S_j), on the fixed penalty range
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>t_j = trace(C_F S_j)
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>q_j = beta.T S_j beta
+</code></pre></div>
+<p>For the mgcv target, t_j corresponds to <code>trVS</code>, q_j to <code>bSb</code>, and d_j to <code>fit$ldetS1</code>. The comment above <code>efsudr</code> abbreviates the derivative convention; its actual <code>exp(-lsp)</code> conversion and <code>gam.reparam</code> establish that <code>ldetS1</code> is a <strong>log-lambda derivative</strong>, not directly <code>trace(S_lambda^+ S_j)</code>.</p>
+<p>The Fisher factor supplies the EFS covariance trace because that is what mgcv returns in <code>rV</code>: inspect the <a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/src/gdi.c#L2769">gdi1 Fisher postprocessing</a> and <a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/src/gdi.c#L2262">gdi2 Fisher postprocessing</a>. The score's log determinant retains the repository's observed-information convention. Do not replace every factor with <code>L_fisher</code> or with <code>L</code> indiscriminately. Canonical first-stage fixtures avoid many differences, but non-canonical and NB tests must expose them explicitly.</p>
+<p>Neither these definitions nor the inverse notation authorize a global inverse allocation. They assume an identifiable positive-definite system and consistent rank treatment. Start there; add rank-deficient support only after projection/pivot parity tests. Existing JaxGAM jitter and clipping are not R's rank-revealing QR and must remain visible in the comparison.</p>
+<h3 id="42-penalty-derivative-and-coupled-blocks">4.2 Penalty derivative and coupled blocks<a class="headerlink" href="#42-penalty-derivative-and-coupled-blocks" title="Permanent link">&para;</a></h3>
+<p>For a singleton block, the current log determinant is <code>rank * rho + constant</code>, hence d_j equals that stored rank. For a multi-penalty block, use the existing common-range projected penalties A_j and form the scaled block sum B = sum_j lambda_j A_j. Compute d_j through the current <code>block_log_det_S</code> gradient or the equivalent <code>lambda_j * trace(solve(B, A_j))</code>, preserving its scaling and static range metadata.</p>
+<p>Do not substitute <code>rank(S_j)</code> for d_j on a tensor block. Several penalties can occupy the same coefficients; their contributions depend on every lambda in the block. Do not re-detect each S_j's rank at every smoothing iteration, silently change the fixed range, or differentiate through data-dependent rank selection. In particular, an invalid/singular block must not acquire a plausible zero derivative from <code>block_log_det_S</code>'s existing negative-sign sentinel.</p>
+<p>First implementation: JIT the gradient of the <strong>penalty-only</strong> log determinant, not the full fitted-model REML score. Check singleton outputs analytically and coupled outputs against <code>gam.reparam(..., deriv=1)$det1</code>. A local-solve optimization can follow with the same tests. No m-by-m Hessian is needed.</p>
+<h3 id="43-quadratic-forms-and-covariance-traces">4.3 Quadratic forms and covariance traces<a class="headerlink" href="#43-quadratic-forms-and-covariance-traces" title="Permanent link">&para;</a></h3>
+<p>For a penalty root B_j with S_j = B_j B_j.T in the same coordinates:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>q_j = ||B_j.T beta||²
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>t_j = ||solve_triangular(L_F, B_j, lower=True)||_F²
+</code></pre></div>
+<p>This directly adapts <code>efsudr</code>'s root products, without constructing covariance. Reuse prepared penalty/range decompositions; if new roots are needed, compute them once on CPU using the existing rank tolerances, then transfer them. Do not eigendecompose every global penalty per EFS iteration.</p>
+<p>With parent PR 2, store roots locally and scatter bounded groups of right-hand sides into fitting coordinates. Dense factor solves still mix coefficient blocks: using only a diagonal block of H_F in place of the full solve is incorrect. For identity/diagonal penalties, use equivalent selected-column or diagonal contractions, with the same full-system semantics. Bound RHS workspace; do not stack roots or covariance derivatives into an m-by-p-by-p array.</p>
+<p><code>PIRLSResult.L_fisher</code> factors a stabilized system. Verify that its inverse action agrees with the R covariance-root contraction over the declared support. Do not silently reuse <code>_criterion_core</code>'s differently scaled/jittered score factor. Record failures at clipping/rank boundaries rather than claim that equal formulas imply equal finite-precision behavior.</p>
+<p>R also forms <code>edf = p - sum_j(lambda_j * t_j)</code>. This identity is useful on a full-rank, unregularized system. JaxGAM's jitter and structural rank deficit can change its relation to <code>estimate_edf(G_F, L_fisher)</code>. Keep the existing EDF calculation for public reporting until the alternative is validated; do not replace p with an invented effective rank inside the R algorithm. Initial support can reject structural rank-deficit cases.</p>
+<h3 id="44-update-and-degenerate-branches">4.4 Update and degenerate branches<a class="headerlink" href="#44-update-and-degenerate-branches" title="Permanent link">&para;</a></h3>
+<p>The pinned <code>efsudr</code> arithmetic is:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>a_j = max(0, exp(-rho_j) * d_j - t_j)
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>ratio_j = phi_update * a_j / max(0, q_j)
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>if a_j == 0 and q_j == 0: ratio_j = 1
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>if ratio_j is not finite: ratio_j = 1e6
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>rho_trial_j = min(rho_j + multiplier * log(ratio_j), log_lambda_max)
+</code></pre></div>
+<p>Here phi_update is the scale chosen by §6. A fixed known scale is used once; t_j is the <strong>unscaled</strong> covariance trace. Multiplying t_j by reported phi and then multiplying the whole ratio by phi again would double-count scale.</p>
+<p>Test the branch order. Positive numerator with zero denominator takes the finite replacement ratio; zero over zero means no change. A zero numerator with positive denominator instead gives ratio zero and a log-lambda proposal of negative infinity: R's outer code has no Newton-style lower cap. Do not add <code>1e-10</code> denominators or copy Newton's <code>[-40, 40]</code> clipping and call it the same update.</p>
+<p>The finite-positive-ratio domain is the first production contract. Outside it, the initial public adapter must return a named non-convergence status with the last valid fit, or raise when no valid fit exists, rather than feed non-finite parameters into the current log-determinant kernels. The raw update unit test still records R's zero-ratio behavior. Supporting an actual zero-lambda boundary or imposing a finite lower bound needs a separately documented range/limit policy and matched R fixtures. A non-finite coefficient fit is not covered by R's non-finite <strong>ratio</strong> replacement.</p>
+<p>An algebraically equivalent scaled numerator, <code>max(0, d_j - lambda_j*t_j)</code>, divided by <code>lambda_j*q_j</code>, can improve some extreme-scale calculations. Treat any reordering as a tested numerical change, especially around cancellation and the clamp. Compare raw d_j, t_j, q_j and numerator before clamping so cancellation is not mistaken for evidence that a term is absent.</p>
+<h2 id="5-dense-outer-controller">5. Dense outer controller<a class="headerlink" href="#5-dense-outer-controller" title="Permanent link">&para;</a></h2>
+<h3 id="51-state-and-initialization">5.1 State and initialization<a class="headerlink" href="#51-state-and-initialization" title="Permanent link">&para;</a></h3>
+<p>Use an immutable accepted/trial state containing rho, explicit log_theta if applicable, beta/PIRLS output, d/t/q statistics, score, score_phi, update_phi, reported_phi, inner convergence status, and stabilization metadata. Every cached quantity must identify the same fitting coordinates and the exact parameter state that produced it. Unknown-scale R fits require the multiple phi fields described in §6; do not force them into one ambiguous <code>scale</code> slot.</p>
+<p>For default initialization, adapt <a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L4720"><code>initial.spg</code></a>'s conventional-regression branch around the existing family initialization and <code>FittingData._initial_sp</code> machinery. R initializes mu, obtains family working weights, then calls <code>initial.sp</code> on the weighted design. Current <code>fd.log_lambda_init</code> instead uses prior weights directly; those starts are not interchangeable for non-Gaussian families.</p>
+<p>Preserve original, pre-<code>repara_D</code> coordinates for this initialization. For regular families the initial weights are <code>wt * mu_eta(eta_start)**2 / variance(mu_start)</code>; for NB read the observed <code>Dd$Dmu2</code> branch and its expected-curvature fallback if any initial weight is negative. Pass working weights, not their square roots, into the current <code>_initial_sp</code> helper, which applies the square root itself. Reuse its existing penalty normalization conventions and validate against the local-block R operation; any padding/threshold mismatch belongs in the initialization parity tests. Add an EFS-specific fitting-boundary initialization policy without changing Newton's defaults or copying basis construction. Keep NumPy setup and any JAX family-derivative kernels on their respective sides of the phase boundary.</p>
+<p>mgcv's <code>efsudr</code> then adds <strong>2.5</strong> to initial log smoothing parameters once, before the first coefficient fit. Do not add it on every restart or accepted iteration. Initialize <code>multiplier=1</code>. A layer test must also permit a matched initial state so initialization differences cannot hide controller bugs; use R's <code>in.out</code> or an internal fit helper when appropriate. Current public <code>sp</code> means fixed values, not starting values. Match unknown-scale initialization through §6.2 rather than borrow Newton's Fletcher-initialized log_phi blindly.</p>
+<p>The R initial fit does not pass exactly the same start arguments as all later trials: initial <code>efsudr</code> omits its <code>mustart</code>/<code>etastart</code> parameters in the <code>gam.fit3</code> call, whereas subsequent trials pass <code>mustart</code>. Preserve the pinned behavior in reference fixtures; do not invent public start semantics during this port.</p>
+<h3 id="52-accepted-and-trial-steps">5.2 Accepted and trial steps<a class="headerlink" href="#52-accepted-and-trial-steps" title="Permanent link">&para;</a></h3>
+<p>Adapt the actual <code>efsudr</code> loop, using a fit provider that reconverges coefficients at each proposed rho. Do not run only one working-model PIRLS step, call <code>bam</code>'s performance iteration, or invoke <code>newton_optimize</code> inside each trial.</p>
+<ol>
+<li>From the accepted fit, compute the update ratio and candidate rho. Save the old score, multiplier, and coefficient start.</li>
+<li>Fit the candidate from that saved coefficient start, following the scale/theta state rules below. A trial must produce finite valid coefficients and usable factors; otherwise it is a numerical failure, not a successful EFS step.</li>
+<li>If candidate score is no larger than old score, accept it. When the original <code>max.step &lt; 0.05</code>, also try a step with <strong>twice</strong> the multiplier from the same old state/start; accept the extension only if it strictly improves on the first candidate. Double the persistent multiplier only when that extension wins.</li>
+<li>If the candidate worsens the score, halve the multiplier and refit while the score is worse <strong>and multiplier &gt; 1</strong>. The mgcv policy accepts the resulting step at multiplier 1 even if it still worsens the score. It does not contract below 1 to enforce REML monotonicity.</li>
+<li>Append the selected fit's score to the history and evaluate stopping. Start the next outer iteration from that selected fit, not the best score seen anywhere in the run.</li>
+</ol>
+<p>Preserve the R timing of <code>max.step</code>: it is computed for the original capped proposal before trial nuisance-parameter updates and is not recomputed after extension/contraction. Likewise, alternative trials are formed from the old full parameter vector; do not seed them with a rejected trial's theta or phi. A cleaner-looking state update can otherwise change control flow. Record both R's stopping statistic and the actual accepted displacement for diagnostics.</p>
+<p>Default constants are distinct from Newton's:</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Pinned EFS value / rule</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Initial rho shift</td>
+<td>+2.5 once</td>
+</tr>
+<tr>
+<td>Outer iteration limit</td>
+<td>200, hard-coded in <code>efsudr</code></td>
+</tr>
+<tr>
+<td>Maximum log lambda</td>
+<td><code>gam.control()$efs.lspmax = 15</code></td>
+</tr>
+<tr>
+<td>Small proposal threshold</td>
+<td>0.05 in max absolute log-parameter displacement</td>
+</tr>
+<tr>
+<td>Score stopping tolerance</td>
+<td><code>gam.control()$efs.tol = 0.1</code>, absolute</td>
+</tr>
+<tr>
+<td>Score-history stopping</td>
+<td>After more than 3 iterations: small proposal and all 3 successive differences among the last 4 scores below tolerance</td>
+</tr>
+<tr>
+<td>Alternate stopping</td>
+<td>After the first iteration: <code>abs(old_dev - new_dev) &lt; 100 * epsilon * abs(new_dev)</code></td>
+</tr>
+<tr>
+<td>Inner tolerance / limit</td>
+<td>mgcv defaults <code>epsilon=1e-7</code>, <code>maxit=200</code>; current <code>pirls_loop</code> defaults are <code>tol=1e-7</code>, <code>max_iter=100</code>, so pass the EFS profile explicitly; Newton uses a tighter inner tolerance</td>
+</tr>
+</tbody>
+</table>
+<p>R's <code>control$eps</code> in the deviance test partially matches <code>epsilon</code>; it is not machine epsilon. R's <code>fit$dev</code> and <code>fit$scale</code> likewise rely on partial field matching. Use explicit field names in Python and in the bridge extraction. At iteration 200 R labels the result as an iteration-limit outcome; record boundary behavior in tests.</p>
+<h3 id="53-monotonicity-failure-and-convergence-policy">5.3 Monotonicity, failure, and convergence policy<a class="headerlink" href="#53-monotonicity-failure-and-convergence-policy" title="Permanent link">&para;</a></h3>
+<p>Recommended reference policy: <strong>mgcv-style EFS</strong>, including finite score-increasing outer steps. This is intentionally not the existing Newton acceptance policy. Keep every Newton regression assertion unchanged. The current <code>tests/test_fitting/test_newton.py::test_reml_monotonicity</code> compares final and initial scores; it does not expose a complete accepted-step history. Add an actual EFS trace for branch tests rather than re-label that test as an EFS trajectory guarantee.</p>
+<p>Repository instructions currently state objective monotonicity as a hard gate. Before public activation, obtain the architectural/instruction update that scopes this correctly: coefficient backtracking remains safeguarded at fixed nuisance parameters; Newton retains its existing score contract; mgcv EFS validates its own step rules and convergence status. Do not merely delete or relax an assertion. If strict outer monotonicity remains mandatory, expose no mgcv-faithful public EFS until a separately named monotone variant is designed and validated; do not claim that variant is an exact port.</p>
+<p>The stopping heuristic is not proof of a small full REML gradient. Record the reason (<code>score_window</code>, <code>deviance_change</code>, <code>iteration_limit</code>, <code>inner_failure</code>, <code>invalid_update</code>, etc.), the final update residual, and inner stationarity diagnostics. A public result must not claim convergence after a failed inner fit, invalid factor, non-finite state, or exhausted solver. Do not fabricate a zero REML gradient to satisfy <code>NewtonResult</code>'s shape. Full score derivatives are optional small-model diagnostics only, not required EFS work.</p>
+<p>No automatic Newton fallback. If a later opt-in fallback is added, record both strategies and the reason; otherwise performance and numerical behavior are impossible to attribute.</p>
+<h2 id="6-family-scale-and-theta-behavior">6. Family, scale, and theta behavior<a class="headerlink" href="#6-family-scale-and-theta-behavior" title="Permanent link">&para;</a></h2>
+<h3 id="61-known-scale-regular-families">6.1 Known-scale regular families<a class="headerlink" href="#61-known-scale-regular-families" title="Permanent link">&para;</a></h3>
+<p>Poisson and binomial use phi=1 under the existing public contract. Reuse <code>pirls_loop</code>, then evaluate the scalar REML criterion and Fisher statistics. Scale cannot accidentally become an additional EFS smoothing parameter. Preserve offsets, prior-weight semantics, binomial initialization, and coefficient-map transformations.</p>
+<p>Initially exclude zero/extreme-weight clipping edges; add them through explicit parity tests. Clipped solve weights versus original deviance weights are an existing numerical convention, not a reason to redefine the likelihood in the EFS driver.</p>
+<h3 id="62-gaussian-and-gamma">6.2 Gaussian and Gamma<a class="headerlink" href="#62-gaussian-and-gamma" title="Permanent link">&para;</a></h3>
+<p>The current Newton implementation jointly optimizes log_phi when scale is unknown and penalties are present, but reports a Fletcher scale. The EFS port must follow <code>gam.fit3(scoreType="EFS")</code> and <code>efsudr</code>, not retain a hidden joint Newton optimization for phi.</p>
+<p>For the initial incoming phi, <a href="https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L1870"><code>estimate.gam</code></a> uses <code>get.null.coef</code>'s <code>null.scale / 10</code>, unless <code>in.out$scale</code> is supplied. That null scale is the family deviance at the initialized response's unweighted mean, divided by the original row count, with prior weights applied in the deviance. It is not the public null-deviance calculation or the existing Newton Fletcher initialization. Reuse family initialization/deviance primitives and retain the resulting scalar at the fitting boundary. Test offsets, weight conventions, and degenerate/nonpositive null scale explicitly; the finite-positive-scale contract must not silently turn log(0) into a valid optimizer state.</p>
+<p>For a regular unknown-scale trial, the incoming full log-parameter vector supplies phi used in the REML score. The coefficient fit also produces a new <code>scale.est</code>; <code>efsudr</code> uses that estimate in subsequent updates and copies its log into the next parameter state. The score was already computed using the incoming phi. Keep <code>score_phi</code>, <code>update_phi</code>, and <code>reported_phi</code> explicit and capture this timing in R fixtures. Re-evaluating every cached score at newly reported phi changes the reference controller, even if the resulting bookkeeping seems more intuitive.</p>
+<p>Use existing <code>fletcher_scale</code>/<code>estimate_scale</code> for the reported value where they match the pinned branch, preserving positive-weight likelihood counts, log-weight terms, total Fisher EDF, and observation-count conventions. Optional per-term EDF reporting does not remove total EDF needed for scale. Do not replace phi with <code>RSS/(n-p)</code> or reuse a Gaussian-only formula for Gamma. A Gaussian QR provider must retain the original n, not substitute its reduced row count.</p>
+<p><code>GAMResults.score</code> should remain the scalar criterion supplied by the chosen optimizer, with diagnostics recording its scale convention. Preserve the public reported-scale/covariance contract through <code>_from_fit</code>. The R bridge already extracts <code>reml_scale</code> separately from <code>scale</code>; extend this to intermediate EFS state, not just final output.</p>
+<h3 id="63-fixed-theta-nb">6.3 Fixed-theta NB<a class="headerlink" href="#63-fixed-theta-nb" title="Permanent link">&para;</a></h3>
+<p>NB has known phi=1, independently of whether theta is fixed or estimated. Start with <code>NegativeBinomial(theta=..., fixed=True)</code> and the existing explicit-theta coefficient kernels. Keep the observed information used for fitting/scoring distinct from Fisher information used for <code>trVS</code>, EDF, and covariance. Fixed theta alone is not an SPD guarantee for arbitrary links.</p>
+<p>Preserve fixed-theta family cache behavior; do not mutate a static family object between compiled calls and assume JAX will notice. Initial support is NB/log in the validated finite/SPD regime; other links require separate tests.</p>
+<h3 id="64-estimated-theta-nb">6.4 Estimated-theta NB<a class="headerlink" href="#64-estimated-theta-nb" title="Permanent link">&para;</a></h3>
+<p>This is not a scalar application of the smoothing-parameter ratio. In the pinned source, <code>gam.fit4(scoreType="EFS")</code> calls <code>estimate.theta</code> <strong>inside PIRLS</strong>, at fixed current mu, then refreshes working quantities and the penalized-deviance baseline. JaxGAM currently estimates theta through joint outer Newton, so this is a real integration change.</p>
+<p>Port the needed one-parameter NB branch of <code>R/efam.r::estimate.theta</code>. Despite stale source-map prose, that routine is a <strong>conditional Newton algorithm</strong>, not another Fellner–Schall trace update. Its objective is:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>NLL(log_theta | mu) = deviance(y, mu, log_theta, wt) / (2 * phi)
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>                     - saturated_loglik(y, wt, log_theta, phi)
+</code></pre></div>
+<p>Use <code>NegativeBinomial.deviance_fn</code> and <code>saturated_loglik_theta</code> with explicit dynamic log_theta, differentiating only this conditional scalar objective at fixed mu/eta. Include saturated-likelihood derivatives and the log-theta chain rule. Reuse the existing stable NB primitives and <code>max_y</code>; do not introduce a new gamma-function cancellation workaround here. The paper's removal of high-order smoothing derivatives does not eliminate the first/second derivatives needed by conditional theta Newton.</p>
+<p>Match the R branch: tolerance <code>1e-7</code>, up to 100 conditional iterations, active-gradient threshold <code>tol * (abs(NLL)+1)</code>, absolute-eigenvalue correction for nonpositive Hessian with relative floor <code>1e-5</code>, max absolute log-theta step 4, and halving against <code>eps_machine^0.75 * abs(NLL)</code> with the existing 25-halving/unchanged-parameter failure rule. Test pathological zero curvature rather than rely on a zero relative floor to fix it. Propagate conditional failure explicitly.</p>
+<p>Add an EFS-specific theta update hook/state to the compiled PIRLS path, or a shared pure inner-iteration kernel plus a dedicated compiled EFS loop. Do not copy all of PIRLS or replace R's in-loop theta updates with a host loop that fully converges beta and then updates theta; that is a different algorithm. Preserve default Newton/fixed-theta compilation and numerical behavior.</p>
+<p>September 8 review checkpoint: the internal EFS5e stage at <code>16b29d5</code> now preserves absent-start provenance and R's per-row default/reset mustart eta, independently checked at the first iteration and selected outer fit. A retained first proposal requiring nonfinite/domain recovery still returns the explicit <code>retained_start_invalid_trial</code> outcome. Complete the corresponding pinned <code>gam.fit4</code> sequential recovery before claiming whole EFS5: earlier validity recovery uses the retained coefficient/eta anchor, while later first-divergence handling resets to the null anchor. A shared null-origin halving result must not bypass this distinction. Keep the compiled beta/theta-loop status separate from conditional-theta Newton status in the controller.</p>
+<p>The carried state must include log_theta. After theta changes, recompute deviance/working quantities before the next convergence or backtracking decision so old and new objectives are not compared at different theta accidentally. R's exact update/convergence ordering, including the pre/post-theta deviance values, needs fixtures; any stronger consistency check is a named departure. Require a consistent finite final fit at the returned theta before declaring public convergence.</p>
+<p>R packs family parameters <strong>before</strong> smoothing parameters, while current JaxGAM Newton uses <code>[log_lambda, &lt;log_theta&gt;, &lt;log_phi&gt;]</code>. Prefer named fields in EFS state; bridge packing is explicit. Do not return R's full <code>exp(lsp)</code> as JaxGAM <code>smoothing_params</code>: that public array contains only the m smoothing parameters.</p>
+<p>Copy the family per fit and commit the selected final theta to that copy for Phase 3. Rejected trials must not mutate accepted family state or the registry singleton. Existing result-family snapshot and repeated-fit tests remain gates.</p>
+<h2 id="7-proposed-implementation-and-api">7. Proposed implementation and API<a class="headerlink" href="#7-proposed-implementation-and-api" title="Permanent link">&para;</a></h2>
+<p>All names below are proposed, not existing interfaces. Introduce the smallest pieces needed by each PR; if a parent-plan module has landed, extend it instead of creating a parallel abstraction.</p>
+<table>
+<thead>
+<tr>
+<th>Location</th>
+<th>Responsibility</th>
+<th>Tests</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/fitting/efs.py</code></td>
+<td>Pure statistics/update/convergence kernels; EFS state pytrees as needed</td>
+<td><code>tests/test_fitting/test_efs.py</code></td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/efs.py</code></td>
+<td>Host accepted/trial controller and dense fit-provider adapter</td>
+<td><code>tests/test_execution/test_efs.py</code></td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/efs_theta.py</code></td>
+<td>Later conditional NB theta kernel</td>
+<td><code>tests/test_fitting/test_efs_theta.py</code></td>
+</tr>
+<tr>
+<td>Existing <code>fitting/pirls.py</code></td>
+<td>Shared inner step and opt-in EFS theta integration</td>
+<td>Extend <code>tests/test_fitting/test_pirls.py</code>; JIT default and EFS paths</td>
+</tr>
+<tr>
+<td>Existing <code>jax_utils.py</code> / <code>fitting/data.py</code></td>
+<td>Reuse penalty determinant metadata; add a first-derivative helper or prepared local roots only if needed</td>
+<td>Extend existing utility/data tests</td>
+</tr>
+<tr>
+<td>Existing <code>api.py</code>, <code>results.py</code></td>
+<td>Dispatch and optimizer-neutral consumed-result contract</td>
+<td>Existing API/result-mode tests plus EFS cases</td>
+</tr>
+<tr>
+<td>Existing <code>tests/r_bridge.py</code></td>
+<td>Explicit EFS end-to-end and intermediate-state oracle</td>
+<td>Extend <code>tests/test_r_bridge.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>Pure kernels take explicit arrays/static structure, run in float64, and compile under <code>jax.jit</code>. Array-dependent branches/loops use <code>jax.lax.cond</code>/<code>while_loop</code>; debug mode uses JAX debug facilities. Host code may select trials and call compiled kernels, following the existing phase boundary. No Python I/O iterator or family mutation inside a JIT trace. Measure compilation reuse; do not generate a new jitted closure per outer step.</p>
+<h3 id="public-selection-and-controls">Public selection and controls<a class="headerlink" href="#public-selection-and-controls" title="Permanent link">&para;</a></h3>
+<p>Proposed minimum call after the public release gate:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Proposed API; optimizer="efs" is rejected by the audited repository.</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">fit</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x, bs='cr')"</span><span class="p">,</span> <span class="n">family</span><span class="o">=</span><span class="s2">"poisson"</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>          <span class="n">method</span><span class="o">=</span><span class="s2">"REML"</span><span class="p">,</span> <span class="n">optimizer</span><span class="o">=</span><span class="s2">"efs"</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"inference"</span><span class="p">)</span>
+</code></pre></div>
+<p>Keep <code>optimizer="newton"</code> and omitted optimizer byte-for-byte compatible where current tests require it. Keep backend <code>"jax"</code>, method <code>"REML"</code>, and result modes <code>"full"</code>/<code>"inference"</code> unchanged. Set an explicit strategy such as <code>lambda_strategy="efs_reml"</code>; this records optimizer selection, not a promise of exact Newton REML equivalence. Do not call the method <code>"fREML"</code>.</p>
+<p>Use an internal immutable <code>EFSControl</code> with explicit fields for outer limit, maximum log lambda, score tolerance, PIRLS tolerance/limit, and debug/history policy. Its reference defaults are in §5.2. Initial shift, ratio conventions, and extension policy are algorithm constants, not arbitrary tuning options. A public control entry point must be added with validated types, accepted-keyword handling, exports, and tests in the same PR. If parent <code>FitControl</code> is present by then, compose this control there; otherwise a narrowly scoped <code>efs_control</code> keyword is sufficient. Do not introduce both competing routes or assume <code>control=</code> works today.</p>
+<p>Fixed <code>sp</code> keeps precedence and its current validation/dispersion route; report <code>lambda_strategy="fixed"</code>, not EFS, when lambda was not estimated. No mixed positive/fixed and negative/estimated sp convention is added. With zero penalties, bypass EFS rather than take maxima over empty arrays. Exercise the current parametric/estimated-theta shortcut separately; do not assume its behavior is equivalent to R merely because it bypasses smoothing.</p>
+<h3 id="results-and-diagnostics">Results and diagnostics<a class="headerlink" href="#results-and-diagnostics" title="Permanent link">&para;</a></h3>
+<p><code>GAMResults._from_fit</code> currently accepts <code>NewtonResult</code> but consumes common fit fields, not a full score Hessian. Add an optimizer-neutral internal protocol/result adapter containing the fields it actually uses. Keep existing <code>NewtonResult</code> behavior; an EFS update residual must not masquerade as its REML gradient. Compose with parent <code>fitting/state.py</code> if available.</p>
+<p>Store compact diagnostics: selected optimizer, source/reference profile, exact-versus-stochastic trace method, step policy, stop reason, outer/inner/theta iteration counts, accepted scores and score_phi, multiplier, maximum proposed/accepted movement, numerator-clamp and cap events, and invalid/stabilized solve indicators. Keep history bounded/configurable; do not retain all n-row fits or p-by-p factors per trial. No <code>gradient=0</code> sentinel suggesting stationarity.</p>
+<p>Dense EFS initially uses existing result postprocessing, including full Vp and per-term EDF/EDF1. Preserve full-versus-inference prediction byte equality from <code>tests/test_result_mode.py</code>. A prediction-only/operator result can later use parent PR 6; new covariance approximations do not belong in the dense EFS milestone.</p>
+<h2 id="8-validation-and-acceptance">8. Validation and acceptance<a class="headerlink" href="#8-validation-and-acceptance" title="Permanent link">&para;</a></h2>
+<h3 id="81-three-distinct-comparisons">8.1 Three distinct comparisons<a class="headerlink" href="#81-three-distinct-comparisons" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Algebra / matched-state parity:</strong> hold basis, coefficients, rho, theta, phi, weights, and coordinate transforms fixed. Compare d_j, t_j, q_j, ratio, and proposed step to the corresponding R operation and independent small NumPy calculations. This isolates EFS correctness from optimizer initialization and trajectory.</li>
+<li><strong>Pinned EFS fit parity:</strong> compare to <code>mgcv::gam(..., method="REML", optimizer="efs")</code> using matched formulas, inputs, controls, and family parameterization. Capture the EFS profile and score-scale timing. This is the acceptance oracle for the new algorithm.</li>
+<li><strong>Existing Newton reference:</strong> same frozen model, evaluate differences in criterion, coefficients/predictions, deviance, scale, theta, EDF, and uncertainty. Gaussian well-conditioned cases provide a strong agreement gate; general-family EFS is not required to land at the exact Newton stationary point. Report method differences separately from implementation error. Do not replace an EFS oracle with default R <code>gam</code> or <code>bam(fREML)</code>.</li>
+</ol>
+<p>Use <a href="../../tests/tolerances.py">tests/tolerances.py</a>: STRICT <code>rtol=1e-10, atol=1e-12</code>; MODERATE <code>rtol=1e-4, atol=1e-6</code>. New equivalent-operation/model R gates must use STRICT or MODERATE under repository instructions. If mgcv's default stopping produces cross-language branch differences beyond those tolerances, first separate matched-state algebra, controlled/tightened EFS fixtures, and default-profile compatibility. Do not loosen tolerances, cherry-pick a different reference optimizer, or claim default-profile parity from tightened-control results. Unresolved supported-case discrepancies block that capability.</p>
+<h3 id="82-bridge-and-reproducible-fixtures">8.2 Bridge and reproducible fixtures<a class="headerlink" href="#82-bridge-and-reproducible-fixtures" title="Permanent link">&para;</a></h3>
+<p>Add a dedicated <code>RBridge.fit_efs</code> and narrowly scoped EFS diagnostic helper rather than a generic arbitrary-R-evaluation API. Support both existing rpy2 and subprocess modes, or explicitly mark a layer helper rpy2-only with a clear skip reason; final EFS parity must work in the pinned CI environment. Existing <code>fit_gam</code> calls/defaults remain unchanged. Extend structured inputs for weights, offsets, link, fixed/estimated theta, EFS controls, and matched initial states as needed; use existing data conversion and extraction code.</p>
+<p>Record full-fit outputs plus intermediate state: <code>ldetS1</code>, covariance-root contractions, <code>bSb</code>, input/output rho/theta/phi, initial shift, multiplier, score and score scale, deviance, selected branch, stop reason, and fit status. Use isolated R instrumentation or a locally scoped function environment for controller fixtures; do not edit the installed mgcv package or the source checkout. Restore temporary tracing/mocks on exit. Pin fixture-generation code as well as serialized results.</p>
+<p>A saved fixture must include R/mgcv version, source commit, formula, seed/data hash, weights/offsets, basis dimensions, fixed versus estimated parameters, and control values. Use real <code>gam.reparam</code>/<code>gam.fit3/4</code> outputs for algebra; a Python re-expression of the EFS formula is not an independent R oracle. Scripted fit-provider sequences are additionally useful to force every controller branch without expensive models.</p>
+<h3 id="83-test-ownership-and-matrix">8.3 Test ownership and matrix<a class="headerlink" href="#83-test-ownership-and-matrix" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Required cases / assertions</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Statistics</td>
+<td>Singleton penalty; two noncommuting PSD penalties on one block; actual <code>te</code>/<code>ti</code>; intercept/null space; identity penalty; penalty permutation; rescaling S_j with inverse lambda rescaling; fitting/public coordinate roundtrip</td>
+</tr>
+<tr>
+<td>Range and conditioning</td>
+<td>Common null space; structural rank deficit; large lambda ratios; near-zero penalty quadratic; near-singular Fisher system; jitter-sensitive cases; no recomputed rank discontinuities</td>
+</tr>
+<tr>
+<td>Raw update</td>
+<td>Positive ratio; zero/zero; positive/zero; zero/positive; non-finite ratio replacement; upper cap; initial +2.5 shift; finite arithmetic versus stable reordered variant</td>
+</tr>
+<tr>
+<td>Controller / initialization</td>
+<td>Family working-weight starts versus prior-weight starts; matched R <code>in.out</code>; initial null scale; ordinary improvement; winning/losing extension; contraction back to 1; accepted finite worsening; original small-step statistic timing; both stops; iteration 200; inner failure; no rejected-state leakage</td>
+</tr>
+<tr>
+<td>Scale</td>
+<td>Known phi; Gaussian and Gamma Fletcher reporting; different input versus output phi; final <code>score</code> versus <code>reml_scale</code>; original row/positive-weight counts; near-perfect Gaussian fits</td>
+</tr>
+<tr>
+<td>NB</td>
+<td>Fixed and estimated theta; conditional derivatives and Newton steps; small/large theta and count tails; theta near Poisson limit; valid-domain failures; family isolation; parameter ordering; post-theta objective consistency</td>
+</tr>
+<tr>
+<td>Public compatibility</td>
+<td>Omitted/newton optimizer unchanged; explicit EFS dispatch; unsupported method/link errors; fixed-sp precedence; zero-penalty bypass; full/inference outputs; pickle/frozen result behavior where already tested</td>
+</tr>
+<tr>
+<td>Compilation / cost</td>
+<td>Statistics/update kernels and NB EFS inner loop compile and run; warm reuse across rho values; no full REML Hessian/custom-JVP fit derivative invoked; bounded RHS/history workspace</td>
+</tr>
+</tbody>
+</table>
+<p>Layer-specific tests live with the implementations above. Broad final <code>GAMResults</code> comparisons and hard-gate invariants belong in <code>tests/test_validation_matrix.py</code>; add representative optimizer-aware cells rather than duplicate expensive fits in every EFS test file. Reuse <code>tests.helpers._AssertCollector</code> for named assertions sharing one fit. Preserve current Newton cases and existing LOOSE legacy assertions, but those alone do not satisfy new EFS parity gates.</p>
+<p>Require finite converged state, valid family parameters, deviance non-negativity, penalty symmetry/PSD, identifiable supported systems, Fisher covariance symmetry/PSD, appropriate EDF bounds, and prediction-on-training-data roundtrip. Signed observed curvature needs its existing algorithm-specific handling; do not force a PSD assertion by silently swapping matrices. EFS outer monotonicity is governed by the approved policy in §5.3, not an unannounced exception.</p>
+<p>Every new module gets a corresponding test file and &gt;80% coverage. Phase 2 changes require explicit JIT compilation-and-execution tests. Relevant existing suites include <code>tests/test_fitting/test_pirls.py</code>, <code>test_reml.py</code>, <code>test_newton.py</code>, <code>test_nb_custom_jvp.py</code>, <code>tests/test_api/test_gam.py</code>, and <code>tests/test_result_mode.py</code>.</p>
+<p>Run through existing Makefile tasks:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>make<span class="w"> </span>lint
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>make<span class="w"> </span>test-file<span class="w"> </span><span class="nv">FILE</span><span class="o">=</span>tests/test_fitting/test_efs.py
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>make<span class="w"> </span>test-file<span class="w"> </span><span class="nv">FILE</span><span class="o">=</span>tests/test_execution/test_efs.py
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>make<span class="w"> </span><span class="nb">test</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>make<span class="w"> </span>test-cov
+</code></pre></div>
+<p>The new file commands apply after those tests exist. <code>make test</code>/<code>test-file</code>/<code>test-cov</code> use Docker with the pinned R oracle. <code>make test-local</code> is useful for development, but R auto-skips are not parity evidence. This documentation change does not require new Makefile targets; add targets only when new reusable benchmark/test capabilities land.</p>
+<h2 id="9-later-operator-and-stochastic-efs">9. Later operator and stochastic EFS<a class="headerlink" href="#9-later-operator-and-stochastic-efs" title="Permanent link">&para;</a></h2>
+<p>First adapt the already-tested controller to the parent PR 12 solve interface and validate exact contractions on moderate p. Keep all quantities' matrix/scale conventions unchanged. Do not conflate a trace-provider change with a new theta algorithm, new basis, or new step policy.</p>
+<p>The first scalable option should retain exact d_j from cheap local penalty blocks wherever possible and approximate only the expensive covariance traces. With shared random vectors z_k satisfying E[z_k z_k.T]=I, solve H_F u_k = z_k once per probe and contract <code>z_k.T @ S_j @ u_k</code> for each penalty. This shares solves across penalties. Individual samples can be negative; clamping noisy numerator estimates introduces bias. Require accuracy checks before applying the deterministic clamp, especially when d_j/lambda_j and t_j nearly cancel.</p>
+<p>Reuse fixed probes across trial comparisons within a run, with explicit seed/probe count and controlled probe growth. Record empirical Monte Carlo uncertainty separately from iterative-solve error; standard error across probes does not bound CG bias. Tighten solves/increase probes when uncertainty is comparable to the update or stopping threshold. Validate calibration across independent seeds, not only reproducibility under one seed. These are new approximation policies, not behavior supplied by mgcv's dense <code>rV</code> products.</p>
+<p><strong>Score availability is a dependency:</strong> the EFS ratio itself needs traces/quadratics, but <code>efsudr</code>'s extension/contraction and score-window stop still use REML scores, including log determinants. An operator backend therefore needs either a validated structured exact score or a separately validated approximate score provider, such as the parent's stochastic log-determinant work. Removing score checks to avoid log determinants creates a different controller. Do not return a fictitious finite score or a converged result with NaN score to satisfy the existing result API.</p>
+<p>If approximate scores are used, compare their uncertainty against trial-score differences and record indeterminate comparisons explicitly. A noisy decrease is not a demonstrated improvement. Projection of unidentifiable directions, the penalty pseudo-determinant, and the observed score matrix must be handled before claiming a usable score provider. A Fisher SPD solver does not make an indefinite observed log determinant suitable for CG/SLQ.</p>
+<p>Parent PR 12 owns preconditioning and Krylov implementation; parent PR 6 owns factor/operator prediction interfaces; bulk approximate intervals remain a separate deliverable. No p-by-p inverse, covariance, or dense global penalty/range matrix may be hidden in setup or postprocessing. This no-p² rule is for the operator stage, not a retroactive claim about dense EFS.</p>
+<p>Operator acceptance compares against the dense <strong>EFS</strong> reference at matched states and on complete fits, then records approximation error relative to the existing Newton reference separately. Parent-plan acceptance governs memory growth, source scans, and numerical uncertainty. An operator EFS implementation without a reliable score or trace provider remains an internal experiment, not a supported large-p optimizer.</p>
+<h2 id="10-implementation-pr-sequence-and-exit-criteria">10. Implementation PR sequence and exit criteria<a class="headerlink" href="#10-implementation-pr-sequence-and-exit-criteria" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>PR</th>
+<th>Bounded deliverable</th>
+<th>Dependencies</th>
+<th>Exit criterion</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>EFS-1</td>
+<td>Pinned-source oracle, fixture schema, controller branch traces, architecture/policy decisions</td>
+<td>Current repo; no parent backend work</td>
+<td>Reproducible <code>efsudr</code> statistics/branches and explicit scope/monotonicity release decision</td>
+</tr>
+<tr>
+<td>EFS-2</td>
+<td>Dense d/t/q kernels, roots/adapters, raw ratio update</td>
+<td>EFS-1; parent PR 2 optional</td>
+<td>STRICT/MODERATE R algebra parity, including coupled penalties; JIT and memory checks</td>
+</tr>
+<tr>
+<td>EFS-3</td>
+<td>Dense known-scale controller and optimizer-neutral result adapter; opt-in API only after release gate</td>
+<td>EFS-2</td>
+<td>Poisson/binomial EFS parity, all controller branches, no full outer Hessian, unchanged Newton defaults</td>
+</tr>
+<tr>
+<td>EFS-4</td>
+<td>Regular-family unknown-scale behavior, Gaussian then Gamma</td>
+<td>EFS-3</td>
+<td>Input/update/reported phi and score timing match pinned EFS; EDF/covariance/public contracts pass</td>
+</tr>
+<tr>
+<td>EFS-5</td>
+<td>Fixed-theta NB, then conditional-theta kernel and EFS-specific PIRLS integration</td>
+<td>EFS-3; EFS-4's state design reused; parent PR 4 optional</td>
+<td>NB conditional and final EFS parity, no registry mutation or default-PIRLS regression</td>
+</tr>
+<tr>
+<td>EFS-5.1</td>
+<td>Remaining existing-family/link dense EFS gates and public capability inventory</td>
+<td>EFS-3–EFS-5; shared inventory/contract from parent 7.1</td>
+<td>All five existing families and supported links, both NB theta modes, have explicit pinned-EFS parity or a reviewed unresolved compatibility issue; no claim of completion while required cells remain missing</td>
+</tr>
+<tr>
+<td>EFS-5.2</td>
+<td>Streamed direct coefficient/statistic/score provider for EFS</td>
+<td>EFS-5.1; parent 5–6 and applicable 7.1–7.5 kernels</td>
+<td>Same controller/scale/theta policy with bounded row scans, exact manageable-p traces/scores, public family snapshots and all-family release gates</td>
+</tr>
+<tr>
+<td>EFS-6</td>
+<td>Operator fit/trace/score adapters, then optional stochastic statistics</td>
+<td>Dense EFS reference for the selected family; parent PR 12; validated score provider</td>
+<td>Calibrated trace/fit error and solver status, no p² hidden work; labeled approximation</td>
+</tr>
+</tbody>
+</table>
+<p>EFS-5 may be split into fixed-theta and estimated-theta PRs if the inner-loop change is large. EFS-6 is an adapter milestone with separate trace/score approximation changes, not permission to bundle CG, SLQ, theta updates, and uncertainty into one unreviewable PR. Public capability expands only as each declared family/link regime passes its gate.</p>
+<p>EFS-5.1 is the explicit follow-up for the earlier table's "wider existing basis/link coverage" family/link requirement; it does not require inventing new distributions or expanding the prepared-basis domain. Use the parent PR7.1 inventory as the source of family/link scope, not only default links. Preserve named EFS-specific departures and pinned-R defects transparently; an expected failure is not a completed support cell. Shared-kernel refactoring must leave dense Newton defaults unchanged.</p>
+<p>EFS-5.2 adapts the existing accepted/trial controller to replayable fit, exact Fisher-trace and scalar-score providers. Preserve score_phi/update_phi/carried_phi timing and NB conditional theta updates <strong>inside</strong> the streamed PIRLS iteration, with globally reduced conditional statistics and objective refreshes. Do not fully converge beta and then alternate theta as a host shortcut, and do not substitute the exact-REML joint theta optimizer from parent PR8.2. Compare streamed versus dense EFS on identical models and against pinned EFS, with STRICT/MODERATE gates, bounded state and explicit source-scan counts. No full training design or response vector may be materialized behind this adapter. This is a new reviewable PR, not assumed to be supplied by the original PR7 or dense EFS implementation.</p>
+<h3 id="performance-evidence">Performance evidence<a class="headerlink" href="#performance-evidence" title="Permanent link">&para;</a></h3>
+<p>Extend <a href="../../scripts/benchmark_large_p.py">scripts/benchmark_large_p.py</a> and <a href="../../scripts/benchmark_vs_r.py">scripts/benchmark_vs_r.py</a> with explicitly labeled EFS runs. Compare JaxGAM Newton, JaxGAM EFS, and pinned R <code>gam(optimizer="efs")</code> on the same model. <code>bam(fREML)</code> may be a separate runtime comparator, not a parity oracle. Reuse <a href="../../scripts/profile_fit.py">scripts/profile_fit.py</a> for attribution.</p>
+<p>Measure cold compilation, warm fit time, inner/outer/theta iterations, coefficient factorizations, RHS solves, penalty derivative time, score evaluations, peak host/device memory, and final numerical differences. Synchronize device results. Use isolated temporary JAX caches rather than copying the existing benchmark scripts' user-global cache deletion. Record hardware, versions, dtype, thread settings, formula, seed, n/p/m, rank, and all controls. Add an appropriate Makefile benchmark target when the harness is implemented.</p>
+<p>Expected shape of the benefit: removal of m-by-m smoothing Hessian formation/storage and full fitted-model derivative propagation. Dense coefficient solves remain generally O(p³); exact root contractions can cost O(p² times the number of RHS columns); row scans and ordinary PIRLS remain. Parent PR 2 is needed before claiming local-only penalty storage instead of today's O(m*p²) representation. Avoid an O(m)-per-iteration or fixed-speedup claim without accounting for these costs and measurements.</p>
+<h3 id="completion-checklist">Completion checklist<a class="headerlink" href="#completion-checklist" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Approved post-v1 optimizer scope, API, and method-specific monotonicity policy; architecture sketch corrected without weakening Newton gates.</li>
+<li>[ ] Paper equation → pinned R routine → JaxGAM kernel/test mapping is implemented and reviewed.</li>
+<li>[ ] Exact dense penalty statistics cover overlapping penalties and matching coordinate/scale conventions.</li>
+<li>[ ] Controller reproduces finite-domain reference branches, initial shift, caps, state timing, and stopping; boundary departures are named.</li>
+<li>[ ] Supported regular-family scale and NB theta paths pass their own gates; unimplemented combinations reject explicitly.</li>
+<li>[ ] EFS-5.1 completes the shared existing-family/link inventory; default-link-only support is not labeled all-family completion.</li>
+<li>[ ] EFS-5.2 validates streamed EFS independently of dense EFS and parent PR8's exact-REML optimizer, including in-loop theta and carried-scale timing.</li>
+<li>[ ] Full/inference results preserve existing coefficient, covariance, family-snapshot, and prediction contracts.</li>
+<li>[ ] STRICT/MODERATE pinned EFS comparisons run in CI; no skipped-oracle or Newton-only substitute.</li>
+<li>[ ] New modules exceed 80% coverage; JIT paths compile and run; no production full-REML Hessian is evaluated.</li>
+<li>[ ] Reproducible benchmark artifacts distinguish many-m improvement from large-p/operator capability.</li>
+<li>[ ] Operator/stochastic support, if delivered, has separate calibrated trace/score error and truthful strategy diagnostics.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

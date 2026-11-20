@@ -1,0 +1,2442 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../api/">
+      
+      
+        <link rel="next" href="fit_lifecycle/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Overview - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#architecture-overview" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Overview
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Where the code is">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#layout-by-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layout by route
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-three-phases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The three phases
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#package-map-and-dependency-directions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Package map and dependency directions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fitting-routes-at-a-glance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fitting routes at a glance
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#glossary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Glossary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading order
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Where the code is">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#layout-by-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layout by route
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-three-phases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The three phases
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#package-map-and-dependency-directions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Package map and dependency directions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fitting-routes-at-a-glance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fitting routes at a glance
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#glossary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Glossary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading order
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="architecture-overview">Architecture overview<a class="headerlink" href="#architecture-overview" title="Permanent link">&para;</a></h1>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>This page is the entry point to the maintainer documentation. It says what
+JaxGAM does, how the three phases split the code, which sub-package depends on
+which, which fitting routes exist and how one is selected, and defines the
+terms the other architecture pages use. It ends with a reading order.</p>
+<p>JaxGAM is a Python port of R's mgcv. It fits generalized additive models: a
+response from an exponential family (Gaussian, Binomial, Poisson, Gamma, or
+negative binomial) whose link-scale mean is a sum of parametric terms and
+penalized smooth functions (thin plate, cubic, Gaussian process, random effect
+and tensor product bases). Smoothing parameters are chosen by REML or by an
+extended Fellner-Schall iteration, or fixed by the caller. The public entry is
+<code>GAM</code> in <code>jaxgam/api.py</code>: <code>GAM(formula, family, ...).fit(data, ...)</code> returns a
+frozen result object that predicts, and on the default route also summarises
+and plots. Besides the in-memory (dense) route, the package fits from a
+replayable row source by streaming, by a discretized compact design (the
+analogue of <code>bam(discrete=TRUE)</code> in mgcv's <code>R/bam.r</code>), and by a matrix-free
+operator route for random effects with very many levels.</p>
+<h2 id="where-the-code-is">Where the code is<a class="headerlink" href="#where-the-code-is" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/__init__.py</code></td>
+<td>Enables float64 in JAX, configures the compilation cache, runs the Accelerate warning, exports the ten public names.</td>
+</tr>
+<tr>
+<td><code>jaxgam/api.py</code></td>
+<td><code>GAM</code>: argument checks, route dispatch, and the per-route fit functions.</td>
+</tr>
+<tr>
+<td><code>jaxgam/control.py</code></td>
+<td>Frozen control dataclasses: <code>FitControl</code>, <code>EFSControl</code>, <code>OperatorControl</code>, <code>ContinuousDiscretizationControl</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/results.py</code></td>
+<td>Result types <code>GAMResults</code>, <code>GAMInferenceResult</code>, <code>GAMPredictionResult</code> and their constructors.</td>
+</tr>
+<tr>
+<td><code>jaxgam/jax_utils.py</code></td>
+<td>Array dispatch, <code>to_jax</code> (the Phase 1 to 2 transfer) and <code>to_numpy</code> (the Phase 2 to 3 transfer).</td>
+</tr>
+<tr>
+<td><code>jaxgam/registry.py</code></td>
+<td><code>Registry</code>, the case-insensitive string-to-class map used by families, links and smooths.</td>
+</tr>
+<tr>
+<td><code>jaxgam/platform_guard.py</code></td>
+<td><code>warn_if_accelerate_lapack</code>, the Apple Accelerate warning.</td>
+</tr>
+<tr>
+<td><code>jaxgam/data/</code></td>
+<td>Phase 1. <code>RowSource</code> protocol, <code>RowBatch</code>, built-in sources, fingerprints, discretization of row sources.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/</code></td>
+<td>Phase 1. Formula parser, term specs, dense <code>ModelSetup</code>, <code>PredictSpec</code> and the prepared model of the row-source routes; the discretized and operator setup are in <code>jaxgam/formula/discrete/</code> and <code>jaxgam/formula/operator/</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/</code></td>
+<td>Phase 1. Smooth bases and penalties, the smooth registry, <code>CoefficientMap</code> identifiability constraints, pinned-arithmetic helpers.</td>
+</tr>
+<tr>
+<td><code>jaxgam/penalties/</code></td>
+<td>Phase 1. <code>Penalty</code>, <code>PenaltyStructure</code> block descriptors, stable reparameterization of multi-penalty blocks.</td>
+</tr>
+<tr>
+<td><code>jaxgam/families/</code></td>
+<td>Used by the fit and by prediction; Phase 1 receives family objects as arguments without importing the package. Family base classes, the five registered families, the execution-capability contract.</td>
+</tr>
+<tr>
+<td><code>jaxgam/links/</code></td>
+<td>Used by the families. The eight link functions and their registry.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/</code></td>
+<td>Phase 2 kernels. JAX code for PIRLS, the REML criterion, the dense Newton optimizer and Fellner-Schall algebra at the top level; one sub-package of kernels per route (<code>gaussian_qr/</code>, <code>stream/</code>, <code>discrete/</code>, <code>operator/</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/</code></td>
+<td>Phase 2 host drivers. Python control loops that scan row sources, call <code>fitting/</code> kernels, and own budgets and step control; one sub-package per route (<code>gaussian_qr/</code>, <code>stream/</code>, <code>discrete/</code>, <code>operator/</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/inference/</code></td>
+<td>Phase 3. <code>GAMPredictor</code>, the shared prediction finish (<code>jaxgam/inference/_core.py</code>), the operator prediction geometry.</td>
+</tr>
+<tr>
+<td><code>jaxgam/summary/</code></td>
+<td>Phase 3. <code>summary</code>, <code>GAMSummary</code>, Davies' method for weighted chi-square tails.</td>
+</tr>
+<tr>
+<td><code>jaxgam/plot/</code></td>
+<td>Phase 3. <code>plot_gam</code> (matplotlib).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="layout-by-route">Layout by route<a class="headerlink" href="#layout-by-route" title="Permanent link">&para;</a></h3>
+<p><code>jaxgam/formula/</code>, <code>jaxgam/fitting/</code> and <code>jaxgam/execution/</code> are laid out the
+same way. A module that only one route uses is in that route's sub-package,
+and the sub-package has the same name in each of the three packages. A module
+that the dense fit uses, or that more than one route uses, stays at the top
+level of its package.</p>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Phase 1 setup</th>
+<th>Kernels (<code>jaxgam/fitting/</code>)</th>
+<th>Host drivers (<code>jaxgam/execution/</code>)</th>
+<th>Page</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Dense, Newton REML</td>
+<td><code>jaxgam/formula/design.py</code></td>
+<td>top level: <code>jaxgam/fitting/pirls.py</code>, <code>jaxgam/fitting/reml.py</code>, <code>jaxgam/fitting/newton.py</code>, <code>jaxgam/fitting/stable_log_det.py</code>, <code>jaxgam/fitting/source_pirls.py</code></td>
+<td>none: the Newton loop is in <code>jaxgam/fitting/newton.py</code></td>
+<td><a href="fitting_dense/">Dense fitting</a></td>
+</tr>
+<tr>
+<td>Dense Fellner-Schall</td>
+<td><code>jaxgam/formula/design.py</code></td>
+<td>top level: <code>jaxgam/fitting/efs.py</code>, <code>jaxgam/fitting/efs_regular_pirls.py</code>, <code>jaxgam/fitting/efs_theta.py</code></td>
+<td>top level: <code>jaxgam/execution/efs.py</code>, <code>jaxgam/execution/efs_provider.py</code></td>
+<td><a href="fitting_dense/">Dense fitting</a></td>
+</tr>
+<tr>
+<td>Gaussian QR</td>
+<td><code>jaxgam/formula/rank_coordinates.py</code></td>
+<td><code>jaxgam/fitting/gaussian_qr/</code></td>
+<td><code>jaxgam/execution/gaussian_qr/</code></td>
+<td><a href="fitting_dense/">Dense fitting</a></td>
+</tr>
+<tr>
+<td>Streamed</td>
+<td><code>jaxgam/formula/prepare.py</code>, <code>jaxgam/formula/design_provider.py</code></td>
+<td><code>jaxgam/fitting/stream/</code></td>
+<td><code>jaxgam/execution/stream/</code></td>
+<td><a href="fitting_streamed/">Streamed fitting</a></td>
+</tr>
+<tr>
+<td>Discretized</td>
+<td><code>jaxgam/formula/discrete/</code>, with <code>jaxgam/data/</code></td>
+<td><code>jaxgam/fitting/discrete/</code></td>
+<td><code>jaxgam/execution/discrete/</code></td>
+<td><a href="fitting_discrete/">Discretized fitting</a></td>
+</tr>
+<tr>
+<td>Operator</td>
+<td><code>jaxgam/formula/operator/</code></td>
+<td><code>jaxgam/fitting/operator/</code></td>
+<td><code>jaxgam/execution/operator/</code></td>
+<td><a href="fitting_operator/">Operator fitting</a></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>jaxgam/execution/
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>├── efs.py, efs_provider.py     Fellner-Schall loop: the dense adapter, shared with the streamed route
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>├── qr.py, null_coefficient.py  reductions that several routes use
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>├── gaussian_qr/                preparation.py, optimizer.py
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>├── stream/                     pirls.py, regular.py, nb.py, nb_theta.py, reml.py, nb_reml.py,
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>│                               efs.py, efs_provider.py, efs_start.py, family_initialization.py, signed_qr.py
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>├── discrete/                   gaussian.py, regular.py, working_model.py, regular_working_model.py,
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>│                               working_theta.py
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>└── operator/                   system.py, fit.py, variance.py, bulk_variance.py, arrowhead.py, logdet.py,
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>                                penalty_determinant.py, score.py, score_rows.py, efs_controller.py,
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>                                efs_provider.py, efs_start.py, efs_trace.py
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>jaxgam/fitting/
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>├── pirls.py, reml.py, newton.py, initialization.py, stable_log_det.py, source_pirls.py   dense fit
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>├── efs.py, efs_regular_pirls.py, efs_theta.py                                            Fellner-Schall algebra
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>├── data.py, state.py, family_execution.py, penalty_ops.py, qr.py, signed_qr.py           shared by the routes
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>├── gaussian_qr/                kernel.py, rank_coordinates.py
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>├── stream/                     kernels.py, regular.py, nb_kernels.py, nb_theta.py, reml.py, nb_reml.py,
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>│                               efs_factor.py
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>├── discrete/                   ops.py, working.py, working_model.py
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>└── operator/                   actions.py, family.py, iterative.py, preconditioners.py, efs_score.py
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>jaxgam/formula/
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>├── parser.py, terms.py, design.py, predict_matrix.py                dense setup and prediction state
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>├── prepare.py, design_provider.py, fitting_prepare.py               prepared model of the row-source routes
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>├── kernel_groups.py, rank_coordinates.py                            shared helpers
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>├── discrete/                   continuous_setup.py, continuous_design.py, continuous_metadata.py, design.py,
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>│                               working_penalties.py
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>└── operator/                   prepare.py, modest.py, radial.py, workspace.py
+</code></pre></div>
+<p>Several file names occur in more than one place: for example
+<code>jaxgam/fitting/reml.py</code> (the dense criterion), <code>jaxgam/fitting/stream/reml.py</code>
+and <code>jaxgam/execution/stream/reml.py</code>, or <code>jaxgam/formula/prepare.py</code> and
+<code>jaxgam/formula/operator/prepare.py</code>. The package path tells them apart, so
+these pages always write the full path. A sub-package's initializer, such as
+<code>jaxgam/execution/operator/__init__.py</code>, holds a description and imports
+nothing, so importing one module of a route does not load the rest. The other packages
+(<code>data/</code>, <code>smooths/</code>, <code>penalties/</code>, <code>families/</code>, <code>links/</code>, <code>inference/</code>,
+<code>summary/</code>, <code>plot/</code>) are flat, and so are the test directories: the tests of
+<code>jaxgam/execution/operator/fit.py</code> are in
+<code>tests/test_execution/test_operator_fit.py</code>.</p>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<h3 id="the-three-phases">The three phases<a class="headerlink" href="#the-three-phases" title="Permanent link">&para;</a></h3>
+<p>Every fit passes through three phases.</p>
+<ul>
+<li><strong>Phase 1, setup (NumPy, CPU).</strong> Parse the formula, build bases, penalties
+  and identifiability constraints, and either assemble the dense model matrix
+  (<code>ModelSetup.build</code> in <code>jaxgam/formula/design.py</code>) or prepare
+  observation-independent metadata by scanning a row source
+  (<code>prepare_model</code> in <code>jaxgam/formula/prepare.py</code>,
+  <code>build_continuous_discrete_setup</code> in <code>jaxgam/formula/discrete/continuous_setup.py</code>,
+  <code>prepare_operator_model</code> in <code>jaxgam/formula/operator/prepare.py</code>).
+  Packages: <code>data</code>, <code>formula</code>, <code>smooths</code>, <code>penalties</code>.</li>
+<li><strong>Phase 2, fit (JAX).</strong> Arrays cross to a JAX device and the smoothing
+  parameters and coefficients are estimated. JIT kernels live in
+  <code>jaxgam/fitting/</code>; host-side drivers that iterate over row sources, hold
+  accepted and trial states and enforce memory budgets live in
+  <code>jaxgam/execution/</code>. Not all of <code>fitting/</code> is jitted: the outer loop of
+  <code>NewtonOptimizer.run</code> in <code>jaxgam/fitting/newton.py</code> is host Python, and
+  <code>jaxgam/fitting/stable_log_det.py</code> runs in NumPy between jitted evaluations.</li>
+<li><strong>Phase 3, post-estimation (NumPy, CPU).</strong> Results return through
+  <code>to_numpy</code> and become frozen result objects (<code>jaxgam/results.py</code>) holding a
+  prediction core (<code>jaxgam/inference/</code>); <code>summary</code> and <code>plot</code> work on the
+  full result only.</li>
+</ul>
+<pre class="mermaid"><code>flowchart LR
+    subgraph phase1["Phase 1 - setup, NumPy"]
+        parse_formula["parse_formula"]
+        ModelSetup["ModelSetup.build&lt;br/&gt;dense X, penalties, CoefficientMap"]
+        rowsetup["row-source setup group&lt;br/&gt;prepare_model, build_continuous_discrete_setup,&lt;br/&gt;prepare_operator_model"]
+    end
+    subgraph phase2["Phase 2 - fit, JAX"]
+        FittingData["FittingData.from_setup&lt;br/&gt;calls to_jax, jax.device_put"]
+        execution["host drivers group&lt;br/&gt;jaxgam/execution/"]
+        fitting["JIT kernels group&lt;br/&gt;jaxgam/fitting/"]
+    end
+    subgraph phase3["Phase 3 - post-estimation, NumPy"]
+        builders["result builders group&lt;br/&gt;GAMResults._from_fit,&lt;br/&gt;GAMPredictionResult._from_stream_fit, _from_discrete, _from_operator_fit"]
+        GAMPredictor["GAMPredictor"]
+        summary["summary and plot_gam"]
+    end
+    parse_formula --&gt; ModelSetup
+    parse_formula --&gt; rowsetup
+    ModelSetup --&gt;|"dense arrays"| FittingData
+    FittingData --&gt; fitting
+    rowsetup --&gt;|"metadata, then per-batch jax.device_put"| execution
+    execution --&gt; fitting
+    fitting --&gt;|"to_numpy, np.asarray"| builders
+    execution --&gt;|"row-free fit state"| builders
+    builders --&gt; GAMPredictor
+    builders --&gt; summary</code></pre>
+<p>Read left to right: the dense route hands a whole model matrix to JAX through
+<code>FittingData.from_setup</code> (which calls <code>to_jax</code> in <code>jaxgam/jax_utils.py</code>); the
+row-source routes hand over metadata and move each scanned batch to the device
+inside their host drivers. Only <code>GAMResults</code> reaches <code>summary</code> and <code>plot_gam</code>.</p>
+<p>Which packages import JAX (an AST walk of the import statements at HEAD):</p>
+<table>
+<thead>
+<tr>
+<th>Package or module</th>
+<th>JAX imports</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fitting/</code></td>
+<td>32 of its 37 files at module level (all but the five <code>__init__.py</code> files).</td>
+</tr>
+<tr>
+<td><code>execution/</code></td>
+<td>18 of 40 files at module level; the other 22, five <code>__init__.py</code> files among them, use NumPy and SciPy only.</td>
+</tr>
+<tr>
+<td><code>families/</code></td>
+<td><code>jaxgam/families/standard.py</code> and <code>jaxgam/families/negative_binomial.py</code> at module level; <code>jaxgam/families/base.py</code> imports <code>jaxgam.jax_utils</code>.</td>
+</tr>
+<tr>
+<td><code>links/</code></td>
+<td><code>jaxgam/links/links.py</code> only under <code>TYPE_CHECKING</code> and inside functions, but it imports <code>jaxgam.jax_utils</code> at module level.</td>
+</tr>
+<tr>
+<td><code>jaxgam/api.py</code></td>
+<td>Under <code>TYPE_CHECKING</code> and inside functions only.</td>
+</tr>
+<tr>
+<td><code>jaxgam/__init__.py</code>, <code>jaxgam/jax_utils.py</code>, <code>jaxgam/platform_guard.py</code></td>
+<td>At module level.</td>
+</tr>
+<tr>
+<td><code>data/</code>, <code>formula/</code>, <code>smooths/</code>, <code>penalties/</code>, <code>inference/</code>, <code>summary/</code>, <code>plot/</code>, <code>jaxgam/control.py</code>, <code>jaxgam/registry.py</code>, <code>jaxgam/results.py</code></td>
+<td>None.</td>
+</tr>
+</tbody>
+</table>
+<p><code>jaxgam/results.py</code> has no JAX import of its own, but it imports
+<code>jaxgam.fitting.state</code> and <code>jaxgam.jax_utils</code>, which do. And because every
+<code>import jaxgam.&lt;module&gt;</code> first runs <code>jaxgam/__init__.py</code>, which imports <code>jax</code>,
+"no JAX import" is a property of the source text: the guard tests load a
+module under a stub parent package to check it (see Rules and invariants).</p>
+<h3 id="package-map-and-dependency-directions">Package map and dependency directions<a class="headerlink" href="#package-map-and-dependency-directions" title="Permanent link">&para;</a></h3>
+<p>The diagrams below show the import edges between sub-packages that occur at
+runtime (module-level imports as solid arrows, imports inside functions only as
+dotted arrows; <code>TYPE_CHECKING</code> imports are left out). The first shows Phase 1
+and the shared packages, the second Phase 2, Phase 3 and <code>jaxgam/api.py</code>; the second
+leaves out edges into <code>control</code>, <code>jax_utils</code> and <code>registry</code>, which the table
+after it lists with every other edge.</p>
+<pre class="mermaid"><code>flowchart LR
+    subgraph p1["Phase 1 packages"]
+        data["data"]
+        formula["formula"]
+        smooths["smooths"]
+        penalties["penalties"]
+    end
+    subgraph shared["Shared packages and modules"]
+        families["families"]
+        links["links"]
+        jax_utils["jax_utils"]
+        registry["registry"]
+        control["control"]
+    end
+    formula --&gt; data
+    formula --&gt; smooths
+    formula --&gt; penalties
+    smooths --&gt;|"formula.terms"| formula
+    smooths --&gt; penalties
+    smooths --&gt; data
+    smooths --&gt; registry
+    penalties --&gt; smooths
+    data --&gt;|"formula.terms"| formula
+    data -.-&gt; smooths
+    families --&gt; links
+    families --&gt; jax_utils
+    families --&gt; registry
+    links --&gt; jax_utils
+    links --&gt; registry
+    control --&gt; data</code></pre>
+<p>Phase 1 packages import one another in cycles (<code>smooths</code> and <code>data</code> both
+import <code>jaxgam.formula.terms</code>; <code>penalties</code> and <code>smooths</code> import each other),
+but nothing in Phase 1 imports <code>families</code>, <code>links</code> or <code>jax_utils</code>.</p>
+<pre class="mermaid"><code>flowchart LR
+    api["api"]
+    results["results"]
+    inference["inference"]
+    summary["summary"]
+    plot["plot"]
+    fitting["fitting"]
+    execution["execution"]
+    phase1["Phase 1 packages group&lt;br/&gt;data, formula, smooths, penalties"]
+    famlinks["families and links group"]
+    api --&gt; fitting
+    api --&gt; results
+    api --&gt; phase1
+    api --&gt; famlinks
+    api -.-&gt; execution
+    execution --&gt; fitting
+    execution --&gt; phase1
+    execution --&gt; famlinks
+    execution --&gt; inference
+    fitting --&gt; phase1
+    fitting --&gt; famlinks
+    fitting -.-&gt;|"one lazy import"| execution
+    results --&gt; inference
+    results --&gt; fitting
+    results --&gt; phase1
+    results -.-&gt; execution
+    results -.-&gt; summary
+    results -.-&gt; plot
+    inference --&gt; phase1
+    plot -.-&gt; phase1</code></pre>
+<p>The edges in detail (counts are import statements):</p>
+<table>
+<thead>
+<tr>
+<th>From</th>
+<th>To, module level</th>
+<th>To, inside functions only</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/api.py</code></td>
+<td><code>control</code>, <code>data</code>, <code>families</code> (3), <code>fitting</code> (7), <code>formula</code> (4), <code>results</code></td>
+<td><code>execution</code> (32), <code>families</code>, <code>fitting</code>, <code>formula</code>, <code>links</code></td>
+</tr>
+<tr>
+<td><code>execution/</code></td>
+<td><code>fitting</code> (73), <code>formula</code> (37), <code>families</code> (25), <code>data</code> (12), <code>penalties</code> (9), <code>control</code> (8), <code>links</code> (5), <code>smooths</code> (5), <code>inference</code> (4)</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>fitting/</code></td>
+<td><code>families</code> (21), <code>jax_utils</code> (8), <code>formula</code> (6), <code>links</code> (4), <code>penalties</code> (3)</td>
+<td><code>execution</code> (1)</td>
+</tr>
+<tr>
+<td><code>jaxgam/results.py</code></td>
+<td><code>control</code>, <code>fitting</code>, <code>inference</code> (2), <code>jax_utils</code>, <code>smooths</code></td>
+<td><code>execution</code> (3), <code>inference</code>, <code>fitting</code>, <code>formula</code>, <code>penalties</code>, <code>data</code>, <code>summary</code>, <code>plot</code>, <code>smooths</code></td>
+</tr>
+<tr>
+<td><code>inference/</code></td>
+<td><code>formula</code> (3), <code>data</code> (2), the <code>jaxgam</code> package itself (for <code>__version__</code>)</td>
+<td><code>formula</code></td>
+</tr>
+<tr>
+<td><code>plot/</code></td>
+<td>none</td>
+<td><code>smooths</code> (5)</td>
+</tr>
+<tr>
+<td><code>summary/</code></td>
+<td>none (only a <code>TYPE_CHECKING</code> import of <code>results</code>)</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>formula/</code></td>
+<td><code>smooths</code> (41), <code>data</code> (14), <code>penalties</code> (10)</td>
+<td><code>smooths</code></td>
+</tr>
+<tr>
+<td><code>smooths/</code></td>
+<td><code>formula</code> (7), <code>penalties</code> (7), <code>data</code> (2), <code>registry</code> (2)</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>penalties/</code></td>
+<td><code>smooths</code> (3)</td>
+<td><code>smooths</code> (2)</td>
+</tr>
+<tr>
+<td><code>data/</code></td>
+<td><code>formula</code> (1)</td>
+<td><code>smooths</code> (1)</td>
+</tr>
+<tr>
+<td><code>families/</code></td>
+<td><code>jax_utils</code> (3), <code>links</code> (3), <code>registry</code> (1)</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>links/</code></td>
+<td><code>jax_utils</code>, <code>registry</code></td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>jaxgam/control.py</code></td>
+<td><code>data</code></td>
+<td>none</td>
+</tr>
+</tbody>
+</table>
+<p>Directions that never occur:</p>
+<ul>
+<li>No Phase 1 package (<code>data</code>, <code>formula</code>, <code>smooths</code>, <code>penalties</code>) imports
+  <code>fitting</code>, <code>execution</code>, <code>families</code>, <code>links</code>, <code>jax_utils</code>, <code>inference</code>,
+  <code>results</code>, <code>summary</code>, <code>plot</code> or <code>api</code>. Family objects reach Phase 1 code as
+  arguments, without an import.</li>
+<li><code>families</code> and <code>links</code> import no Phase 1, Phase 2 or Phase 3 package.</li>
+<li><code>execution</code> never imports <code>results</code>, <code>api</code>, <code>summary</code> or <code>plot</code>.</li>
+<li><code>fitting</code> never imports <code>inference</code>, <code>results</code> or <code>api</code>.</li>
+<li><code>inference</code> never imports <code>fitting</code> or <code>execution</code>.</li>
+<li>Nothing imports <code>api</code> except <code>jaxgam/__init__.py</code>.</li>
+</ul>
+<p>The one known exception to "kernels do not depend on drivers" is in
+<code>jaxgam/fitting/data.py</code>: <code>_structural_penalty_roots</code> imports
+<code>structural_rank</code> from <code>jaxgam/execution/qr.py</code> inside the function, with a
+comment giving the circular import as the reason. It runs from
+<code>FittingData.from_setup</code> for every dense model with penalties, so a dense fit
+loads <code>jaxgam.execution</code>. Two other edges cross the phase lines on purpose:
+<code>jaxgam/execution/discrete/gaussian.py</code> calls the Phase 1 setup builders for the
+discretized route, and <code>GAMPredictionResult.bulk_link_variance</code> in
+<code>jaxgam/results.py</code> calls into <code>jaxgam/execution/</code> after the fit.</p>
+<h3 id="fitting-routes-at-a-glance">Fitting routes at a glance<a class="headerlink" href="#fitting-routes-at-a-glance" title="Permanent link">&para;</a></h3>
+<p><code>FitControl.execution</code> selects the route. Inside a route, <code>sp</code>, <code>optimizer</code>,
+<code>FitControl.smoothing_strategy</code> and <code>FitControl.gaussian_compression</code> select
+the sub-route, which the result reports in <code>execution_route</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Selected by</th>
+<th>Input</th>
+<th>Phase 1 entry</th>
+<th>Host driver package and main drivers</th>
+<th>Result type</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>dense</td>
+<td><code>execution="dense"</code> (default)</td>
+<td>DataFrame or dict</td>
+<td><code>parse_formula</code>, <code>ModelSetup.build</code></td>
+<td>mostly none: <code>jaxgam/api.py</code> calls <code>newton_optimize</code>, <code>pirls_loop</code> and <code>source_pirls</code> in <code>fitting/</code> directly; <code>jaxgam/execution/efs.py</code> for <code>optimizer="efs"</code>, <code>jaxgam/execution/gaussian_qr/optimizer.py</code> for Gaussian QR</td>
+<td><code>GAMResults</code>, <code>GAMInferenceResult</code> or <code>GAMPredictionResult</code>, by <code>result=</code></td>
+</tr>
+<tr>
+<td>stream</td>
+<td><code>execution="stream"</code></td>
+<td><code>RowSource</code></td>
+<td><code>prepare_model</code>, <code>StreamDesign</code></td>
+<td><code>jaxgam/execution/stream/pirls.py</code>, <code>jaxgam/execution/stream/regular.py</code>, <code>jaxgam/execution/stream/nb.py</code>, <code>jaxgam/execution/stream/reml.py</code>, <code>jaxgam/execution/stream/nb_reml.py</code>, <code>jaxgam/execution/stream/efs.py</code>, <code>jaxgam/execution/gaussian_qr/optimizer.py</code></td>
+<td><code>GAMPredictionResult</code> only</td>
+</tr>
+<tr>
+<td>discrete</td>
+<td><code>execution="discrete"</code> plus <code>FitControl.discretization</code></td>
+<td><code>RowSource</code></td>
+<td><code>build_continuous_discrete_setup</code> (called from the driver)</td>
+<td><code>jaxgam/execution/discrete/gaussian.py</code> (<code>fit_discrete_gaussian</code>), <code>jaxgam/execution/discrete/regular.py</code> (<code>fit_discrete_regular</code>)</td>
+<td><code>GAMPredictionResult</code> only</td>
+</tr>
+<tr>
+<td>operator</td>
+<td><code>execution="operator"</code> plus <code>linear_solver="pcg"</code></td>
+<td><code>RowSource</code></td>
+<td><code>prepare_operator_model</code></td>
+<td><code>jaxgam/execution/operator/fit.py</code> (<code>fit_operator_fixed_sp</code>), <code>jaxgam/execution/operator/efs_controller.py</code> (<code>run_operator_efs_known_scale</code>)</td>
+<td><code>GAMPredictionResult</code> only</td>
+</tr>
+</tbody>
+</table>
+<pre class="mermaid"><code>flowchart TD
+    fit["GAM.fit"] --&gt; execution{"FitControl.execution"}
+    execution --&gt;|"dense"| dense_sp{"sp, penalties, optimizer"}
+    dense_sp --&gt;|"sp given"| _fit_fixed_sp["_fit_fixed_sp"]
+    dense_sp --&gt;|"no penalties, or optimizer newton"| newton_optimize["newton_optimize&lt;br/&gt;or L-BFGS-B under Gaussian QR"]
+    dense_sp --&gt;|"optimizer efs"| dense_efs["dense_efs_known_scale&lt;br/&gt;dense_efs_unknown_scale"]
+    _fit_fixed_sp --&gt; _from_fit["GAMResults._from_fit"]
+    newton_optimize --&gt; _from_fit
+    dense_efs --&gt; _from_fit
+    _from_fit --&gt;|"result full"| GAMResults["GAMResults"]
+    _from_fit --&gt;|"result inference"| GAMInferenceResult["GAMInferenceResult"]
+    _from_fit --&gt;|"result prediction"| GAMPredictionResult["GAMPredictionResult"]
+    execution --&gt;|"stream"| _fit_stream["_fit_stream"]
+    _fit_stream --&gt;|"sp given"| stream_fixed["stream, stream_qr,&lt;br/&gt;stream_gaussian_qr"]
+    _fit_stream --&gt;|"no sp, optimizer newton"| stream_exact["stream_exact_reml_qr&lt;br/&gt;or stream_gaussian_qr"]
+    _fit_stream --&gt;|"no sp, optimizer efs"| stream_efs["stream_efs_qr&lt;br/&gt;or stream_parametric_qr"]
+    stream_fixed --&gt; _from_stream_fit["GAMPredictionResult._from_stream_fit"]
+    stream_exact --&gt; _from_stream_fit
+    stream_efs --&gt; _from_stream_fit
+    execution --&gt;|"discrete"| _fit_discrete["_fit_discrete&lt;br/&gt;sp given, or working_model_reml"]
+    _fit_discrete --&gt; _from_discrete["GAMPredictionResult._from_discrete"]
+    execution --&gt;|"operator"| _fit_operator["_fit_operator&lt;br/&gt;sp given, or optimizer efs"]
+    _fit_operator --&gt; _from_operator_fit["GAMPredictionResult._from_operator_fit"]
+    _from_stream_fit --&gt; GAMPredictionResult
+    _from_discrete --&gt; GAMPredictionResult
+    _from_operator_fit --&gt; GAMPredictionResult</code></pre>
+<p>Read from the top: the execution route is chosen first, then the smoothing
+selection inside it. Only the dense route can build <code>GAMResults</code> or
+<code>GAMInferenceResult</code>; the other three refuse any <code>result</code> but <code>"prediction"</code>.
+<a href="fit_lifecycle/">Lifecycle of a fit</a> gives every branch and label.</p>
+<h2 id="key-types">Key types<a class="headerlink" href="#key-types" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>classDiagram
+    class GAM {
+        +formula str
+        +family object
+        +method str
+        +sp list
+        +device str
+        +optimizer str
+        +control FitControl
+        +fit(data, weights, offset, result) object
+    }
+    class FitControl {
+        +execution str
+        +batch_rows int
+        +memory_budget_bytes int
+        +output_budget_bytes int
+        +uncertainty str
+        +linear_solver str
+        +gaussian_compression bool
+        +efs EFSControl
+        +operator OperatorControl
+        +discretization ContinuousDiscretizationControl
+        +smoothing_strategy str
+        +working_model_max_iterations int
+        +working_model_epsilon float
+    }
+    class EFSControl {
+        +outer_limit int
+        +log_lambda_max float
+        +score_tolerance float
+        +pirls_tolerance float
+        +pirls_max_iter int
+        +history_limit int
+    }
+    class OperatorControl {
+        +max_modest_coefficients int
+        +max_iterations int
+        +tolerance float
+        +cg_max_iterations int
+        +cg_rtol float
+        +cg_atol float
+        +use_coarse bool
+    }
+    class ContinuousDiscretizationControl {
+        +m int
+        +factor_names tuple
+        +budget DiscretizationBudget
+        +pair_policy str
+        +seed int
+        +prediction_policy str
+    }
+    GAM *-- FitControl
+    FitControl *-- EFSControl
+    FitControl *-- OperatorControl
+    FitControl o-- ContinuousDiscretizationControl</code></pre>
+<p><code>GAM</code> is a mutable specification object; <code>fit</code> may be called many times. The
+controls are frozen dataclasses in <code>jaxgam/control.py</code> that validate
+themselves in <code>__post_init__</code> (for example <code>execution="discrete"</code> requires a
+<code>discretization</code> policy and the reverse). <code>ContinuousDiscretizationControl</code>
+has more fields than shown (<code>selector_memmap_directory</code>,
+<code>max_pair_histogram_bytes</code>, <code>max_retained_representatives</code>). The result types
+are drawn on <a href="results_and_prediction/">Phase 3: results and prediction</a>.</p>
+<h2 id="rules-and-invariants">Rules and invariants<a class="headerlink" href="#rules-and-invariants" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Phase 1 stays free of JAX.</strong> <code>data</code>, <code>formula</code>, <code>smooths</code> and <code>penalties</code>
+  must not import <code>jax</code>, <code>jaxgam.fitting</code>, <code>jaxgam.execution</code>,
+  <code>jaxgam.families</code>, <code>jaxgam.links</code> or <code>jaxgam.jax_utils</code>. Six tests load a
+  Phase 1 module under a stub <code>jaxgam</code> package and assert that no <code>jax</code>
+  module was imported: <code>test_discretize_module_imports_without_jax</code>
+  (<code>tests/test_data/test_discretize.py</code>) and its siblings in
+  <code>tests/test_data/test_continuous_discretize.py</code>,
+  <code>tests/test_data/test_continuous_frame.py</code>,
+  <code>tests/test_data/test_continuous_request.py</code>,
+  <code>tests/test_formula/test_continuous_metadata.py</code> and
+  <code>tests/test_formula/test_rank_coordinates.py</code>. No other import-boundary
+  check (such as an import linter) runs in CI; the rest of this page's
+  direction rules are kept by review.</li>
+<li><strong>Kernels do not import drivers.</strong> <code>fitting/</code> imports <code>execution/</code> only in
+  <code>_structural_penalty_roots</code>. A new import in that direction is likely to
+  create a circular import, because <code>jaxgam/execution/</code> imports streamed
+  routes that import <code>jaxgam/fitting/data.py</code>.</li>
+<li><strong>Float64 everywhere.</strong> <code>jaxgam/__init__.py</code> sets <code>jax_enable_x64</code> before
+  anything is compiled. See <a href="numerics_and_platform/">Numerics and platform</a>.</li>
+<li><strong>Row-source routes return prediction results only.</strong> <code>_fit_stream</code>,
+  <code>_fit_discrete</code> and <code>_fit_operator</code> raise <code>NotImplementedError</code> for
+  <code>result="full"</code> or <code>"inference"</code>, and take weights and offset from the
+  source, never from <code>fit(weights=, offset=)</code>.</li>
+<li><strong>Phase 3 operates on host arrays.</strong> Result builders convert with
+  <code>to_numpy</code> before any covariance, EDF or prediction work.</li>
+</ul>
+<h2 id="pitfalls">Pitfalls<a class="headerlink" href="#pitfalls" title="Permanent link">&para;</a></h2>
+<ul>
+<li>A plain <code>import jaxgam.smooths.tprs</code> imports JAX through
+  <code>jaxgam/__init__.py</code>. Checking "no JAX in Phase 1" by importing a module in
+  a normal interpreter proves nothing; use the stub-package pattern of the
+  guard tests.</li>
+<li><code>jaxgam/execution/__init__.py</code> says execution code "does not construct
+  formula bases or perform post-estimation work". The discretized route's
+  driver calls Phase 1 setup builders, and <code>bulk_link_variance</code> runs after
+  the fit, so treat that sentence as a guideline, not a fact about every
+  module.</li>
+<li><code>GAM</code> does not validate <code>family</code>, <code>sp</code> or the formula at construction: an
+  unknown family name raises <code>KeyError</code> only in <code>fit</code>, from
+  <code>Registry.get_class</code>.</li>
+<li><code>FitControl.smoothing_strategy</code> defaults to <code>"exact_reml"</code> and is read only
+  by the discretized route, which cannot use that default without an <code>sp</code>.</li>
+</ul>
+<h2 id="where-to-change-things">Where to change things<a class="headerlink" href="#where-to-change-things" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>To do this</th>
+<th>Edit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Add a public name</td>
+<td><code>jaxgam/__init__.py</code> (<code>__all__</code>)</td>
+</tr>
+<tr>
+<td>Add a fit argument or control field</td>
+<td><code>jaxgam/control.py</code> and its readers in <code>jaxgam/api.py</code>; see <a href="fit_lifecycle/">Lifecycle of a fit</a></td>
+</tr>
+<tr>
+<td>Change route selection</td>
+<td><code>GAM.fit</code> and the <code>_fit_*</code> methods in <code>jaxgam/api.py</code></td>
+</tr>
+<tr>
+<td>Add a family, link or smooth</td>
+<td>see <a href="families_links_smooths/">Extension points</a></td>
+</tr>
+<tr>
+<td>Change what a result keeps</td>
+<td><code>jaxgam/results.py</code>, <code>jaxgam/inference/predictor.py</code>; see <a href="results_and_prediction/">Phase 3</a></td>
+</tr>
+<tr>
+<td>Change the Phase 1 to 2 transfer</td>
+<td><code>to_jax</code> in <code>jaxgam/jax_utils.py</code>, <code>FittingData.from_setup</code> in <code>jaxgam/fitting/data.py</code></td>
+</tr>
+<tr>
+<td>Add a module to a route</td>
+<td>That route's sub-package in <code>jaxgam/formula/</code>, <code>jaxgam/fitting/</code> or <code>jaxgam/execution/</code>. Put it at the top level of the package instead when the dense fit or a second route uses it; see <a href="#layout-by-route">Layout by route</a>.</td>
+</tr>
+</tbody>
+</table>
+<p>A planned refactor will merge the per-route controllers in <code>fitting/</code> and
+<code>execution/</code> and the routing in <code>jaxgam/api.py</code>; see
+<a href="../unify_fit/design/">the unified fitting design</a>.</p>
+<h2 id="glossary">Glossary<a class="headerlink" href="#glossary" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Smoothing parameter.</strong> The weight <code>lambda_j</code> on penalty <code>S_j</code>. <code>GAM(sp=)</code>
+  takes natural-scale values; the code optimizes <code>log_lambda</code>. Results report
+  a supplied <code>sp</code> verbatim (<code>_report_smoothing_params</code> in
+  <code>jaxgam/results.py</code>) and estimated ones as <code>exp(log_lambda)</code>.</li>
+<li><strong>Penalty, <code>S_lambda</code>.</strong> The penalty matrix <code>sum_j lambda_j S_j</code>, held as
+  local coefficient-block descriptors in <code>PenaltyStructure</code>
+  (<code>jaxgam/penalties/structure.py</code>) and materialized by <code>FittingData.S_lambda</code>.</li>
+<li><strong>Scale.</strong> The dispersion <code>phi</code>; 1 for known-scale families
+  (<code>scale_known</code>), estimated for Gaussian and Gamma.</li>
+<li><strong>Theta.</strong> The negative binomial shape parameter, fixed or estimated
+  (<code>NegativeBinomial(theta, fixed=...)</code> in
+  <code>jaxgam/families/negative_binomial.py</code>).</li>
+<li><strong>EDF.</strong> Effective degrees of freedom: the trace of
+  <code>F = (X'WX + S_lambda)^-1 X'WX</code> over a smooth's coefficient block. <code>edf1</code> is
+  <code>2 edf - tr(F F)</code> per block, which <code>summary</code> uses to set the reference
+  degrees of freedom of the smooth tests (<code>_compute_per_smooth_edf</code>,
+  <code>_compute_per_smooth_edf1</code> in <code>jaxgam/results.py</code>).</li>
+<li><strong>PIRLS.</strong> Penalized iteratively reweighted least squares, the inner
+  coefficient fit at fixed smoothing parameters: <code>pirls_loop</code>
+  (<code>jaxgam/fitting/pirls.py</code>) and <code>source_pirls</code>
+  (<code>jaxgam/fitting/source_pirls.py</code>, the port of <code>gam.fit3</code> in mgcv's
+  <code>R/gam.fit3.r</code> and <code>gam.fit4</code> in <code>R/gam.fit4.r</code>).</li>
+<li><strong>REML.</strong> Restricted maximum likelihood, the smoothing-selection criterion
+  (<code>REMLCriterion</code> in <code>jaxgam/fitting/reml.py</code>). <code>method="REML"</code> is the only
+  accepted method; <code>"ML"</code> raises <code>NotImplementedError</code>.</li>
+<li><strong>Newton optimizer.</strong> The dense outer loop over log smoothing parameters,
+  <code>newton_optimize</code> and <code>NewtonOptimizer</code> in <code>jaxgam/fitting/newton.py</code>, a
+  port of <code>newton</code> in mgcv's <code>R/gam.fit3.r</code>.</li>
+<li><strong>Fellner-Schall (EFS).</strong> The extended Fellner-Schall update of smoothing
+  parameters, selected by <code>optimizer="efs"</code>, a port of <code>efsudr</code> in mgcv's
+  <code>R/gam.fit4.r</code>. Dense in <code>jaxgam/execution/efs.py</code>, streamed in
+  <code>jaxgam/execution/stream/efs.py</code>, operator in
+  <code>jaxgam/execution/operator/efs_controller.py</code>; settings in <code>EFSControl</code>.</li>
+<li><strong>Row source.</strong> An object satisfying the <code>RowSource</code> protocol
+  (<code>jaxgam/data/source.py</code>): <code>n_rows</code>, <code>scan(batch_rows)</code> yielding <code>RowBatch</code>
+  objects in a stable order, and <code>fingerprint()</code>. Built-ins:
+  <code>ArrayRowSource</code>, <code>DataFrameRowSource</code>, <code>MemmapRowSource</code>.</li>
+<li><strong>Scan.</strong> One full pass over a row source in batches of <code>batch_rows</code> rows.
+  Results count fit scans in <code>source_scans</code> and <code>batches_scanned</code>.</li>
+<li><strong>Fingerprint.</strong> A content digest of a row source, compared at the start
+  and end of a fit (<code>single_fit_fingerprints</code>) to detect data that changed.</li>
+<li><strong>Compact or discretized design.</strong> On the discrete route, the compact
+  frame of representative covariate rows (<code>build_compact_setup_frame</code> in
+  <code>jaxgam/data/continuous_frame.py</code>) plus row selectors, and the indexed
+  design built on it (<code>FrozenDiscreteDesign</code>, <code>DeviceDiscreteDesign</code>), on
+  which kernels such as <code>discrete_xwxd</code> act. The analogue of mgcv's
+  <code>discrete.mf</code> and <code>XWXd</code>.</li>
+<li><strong>Working model.</strong> On the discrete route, the frozen coefficient-space
+  Gaussian problem on which one <code>Sl.fitChol</code> proposal (mgcv
+  <code>R/fast-REML.r</code>) is taken per iteration; repeated re-forming of it is the
+  performance iteration of <code>bgam.fitd</code> (<code>R/bam.r</code>). Selected by
+  <code>smoothing_strategy="working_model_reml"</code>.</li>
+<li><strong>Prediction policy.</strong> On the discrete route, <code>continuous_frozen_basis</code>
+  evaluates new covariate values exactly; <code>mgcv_predict_bamd</code> first
+  compresses the whole request as mgcv's <code>predict.bamd</code> does.</li>
+<li><strong>CoefficientMap.</strong> The Phase 1 to 3 contract in
+  <code>jaxgam/smooths/constraints.py</code>: per-term <code>TermBlock</code> entries holding the
+  identifiability transform (<code>Z_centering</code>, <code>del_index</code>) that maps a raw basis
+  block to the constrained coefficients (<code>transform_X</code>).</li>
+<li><strong>PredictSpec.</strong> The observation-free prediction state (<code>CoefficientMap</code>,
+  factor levels, smooth metadata) in <code>jaxgam/formula/predict_matrix.py</code>.</li>
+<li><strong>Operator route.</strong> The matrix-free route for large random effects:
+  indexed random effects (<code>IndexedRandomEffect</code>) never form dense columns,
+  a small "modest" block holds the other terms, and systems are solved by
+  preconditioned conjugate gradients (<code>jaxgam/fitting/operator/iterative.py</code>).</li>
+<li><strong>Gaussian QR compression.</strong> <code>FitControl(gaussian_compression=True)</code>:
+  one weighted QR reduction of a Gaussian identity model, then
+  coefficient-space smoothing trials (<code>jaxgam/execution/gaussian_qr/preparation.py</code>).</li>
+<li><strong>Fisher factor.</strong> A retained triangular factor of the penalized Fisher
+  information (lower Cholesky, or a <code>PivotedQRFisherFactor</code>) from which
+  prediction standard errors are computed without a dense covariance.</li>
+<li><strong>Execution route.</strong> The <code>execution_route</code> string on every result, naming
+  the sub-route that ran; <code>lambda_strategy</code> names how smoothing parameters
+  were set; <code>execution_fallback_reason</code> records an unmet Gaussian QR request.</li>
+<li><strong>Host driver and kernel.</strong> A driver is Python in <code>jaxgam/execution/</code> that
+  loops, scans and decides; a kernel is a pure function in <code>jaxgam/fitting/</code>,
+  usually jitted.</li>
+<li><strong>Memory budget.</strong> <code>FitControl.memory_budget_bytes</code> and
+  <code>output_budget_bytes</code>: prospective estimates of known arrays, checked
+  before allocation and raising <code>MemoryError</code>. Dense fitting is not budgeted.</li>
+</ul>
+<h2 id="reading-order">Reading order<a class="headerlink" href="#reading-order" title="Permanent link">&para;</a></h2>
+<ol>
+<li><a href="fit_lifecycle/">Lifecycle of a fit</a> - one <code>GAM.fit()</code> call end to end: checks, routing, the <code>_fit_*</code> methods, route labels.</li>
+<li><a href="setup/">Phase 1: setup</a> - formula parsing, smooth construction, <code>CoefficientMap</code>, penalties, and the streamed, discretized and operator setup.</li>
+<li><a href="data_sources/">Data sources</a> - <code>RowSource</code>, <code>RowBatch</code>, built-in sources, fingerprints and discretization.</li>
+<li><a href="fitting_dense/">Phase 2: dense fitting</a> - <code>FittingData</code>, PIRLS, the REML criterion, the Newton optimizer, dense EFS and Gaussian QR.</li>
+<li><a href="fitting_streamed/">Phase 2: streamed fitting</a> - streamed PIRLS, QR reducers, exact streamed REML, streamed theta and EFS.</li>
+<li><a href="fitting_discrete/">Phase 2: discretized fitting</a> - indexed design actions, the working-model REML proposal and the performance iteration.</li>
+<li><a href="fitting_operator/">Phase 2: operator fitting</a> - matrix-free actions, PCG, the operator EFS controller and bulk variance.</li>
+<li><a href="results_and_prediction/">Phase 3: results and prediction</a> - result types, the prediction core, batched prediction, summary, plot and pickling.</li>
+<li><a href="families_links_smooths/">Extension points</a> - family, link and smooth base classes, registries, and checklists for adding one.</li>
+<li><a href="testing_and_ci/">Testing and CI</a> - test layout, the R bridge, tolerance classes, the validation matrix and CI jobs.</li>
+<li><a href="numerics_and_platform/">Numerics and platform</a> - float64, the pinned LAPACK provider, BLAS threads, the Accelerate guard, determinism.</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

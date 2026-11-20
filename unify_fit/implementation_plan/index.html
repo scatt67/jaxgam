@@ -1,0 +1,1759 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Unified Fitting Engine: Implementation Plan - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#unified-fitting-engine-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Unified Fitting Engine: Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#entry-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entry criteria
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-tooling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project tooling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#global-rules-for-every-pr-in-this-series" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Global rules for every PR in this series
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-0-baseline-harness-and-guardrails-no-production-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 0: Baseline, harness and guardrails (no production change)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 0: Baseline, harness and guardrails (no production change)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#01-fingerprint-harness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.1 Fingerprint harness
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#02-architecture-test-report-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.2 Architecture test, report-only
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#03-duplicate-code-check-report-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.3 Duplicate-code check, report-only
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#04-re-measure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.4 Re-measure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-1-exact-and-near-exact-duplicates-small-low-risk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1: Exact and near-exact duplicates (small, low risk)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-2-names-and-boundary-moves-mechanical" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2: Names and boundary moves (mechanical)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-3-provider-and-solver-interfaces-adapters-no-behaviour-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3: Provider and solver interfaces (adapters, no behaviour change)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-4-one-efs-optimizer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 4: One EFS optimizer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-5-one-exact-streamed-reml-optimizer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 5: One exact streamed REML optimizer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-6-one-pirls-driver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 6: One PIRLS driver
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-7-newton-over-providers-dense-becomes-the-in-memory-provider" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 7: Newton over providers; dense becomes the in-memory provider
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-8-routing-and-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 8: Routing and results
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-9-lock-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 9: Lock in
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sequencing-and-rough-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sequencing and rough size
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="unified-fitting-engine-implementation-plan">Unified Fitting Engine: Implementation Plan<a class="headerlink" href="#unified-fitting-engine-implementation-plan" title="Permanent link">&para;</a></h1>
+<p><strong>Design reference:</strong> <a href="../design/">design.md</a></p>
+<p><strong>When:</strong> start only after the current body of work is complete (see Entry criteria). This series must be the only active work on the stack, so that every step composes once.</p>
+<p><strong>Shape:</strong> a sequence of PRs, one logical unification each, starting from <code>main</code> (the stacked PRs this plan was written against were merged into <code>main</code> as one squash commit, #87). Each PR proves bit-identical numerics. Nothing is merged without the user.</p>
+<hr />
+<h2 id="entry-criteria">Entry criteria<a class="headerlink" href="#entry-criteria" title="Permanent link">&para;</a></h2>
+<p>All of the following must hold before Phase 0 starts:</p>
+<ol>
+<li>PR9, PR11 (incl. its NB <code>estimate.theta</code>, approximation and runtime studies), PR12, EFS6 and PR13 are composed, published as stacked PRs and native-CI green.</li>
+<li>The scaling plan's §8 performance and numerical acceptance gates are met and recorded.</li>
+<li><code>verify_active_stack.py</code> (or its successor) passes: every head, base edge and native-stack position is verified.</li>
+<li>No other implementation branch is in flight.</li>
+</ol>
+<p><strong>Status (2026-11-20):</strong> criteria 1 and 2 are met: that work was consolidated and merged into <code>main</code> as pull request #87 (commit <code>e919938</code>) with CI green, after the acceptance measurements were taken. Criterion 3 belonged to the stacked-PR workflow and no longer applies; the equivalent check is that Phase 0 starts from <code>main</code>. Criterion 4 must be checked again when Phase 0 starts.</p>
+<hr />
+<h2 id="project-tooling">Project tooling<a class="headerlink" href="#project-tooling" title="Permanent link">&para;</a></h2>
+<p>Per AGENTS.md, use <code>uv</code> and <code>make</code>; never call <code>python</code> or <code>pytest</code> directly.</p>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Install</td>
+<td><code>make install</code></td>
+</tr>
+<tr>
+<td>Lint (ruff, format, vulture; later the duplicate check)</td>
+<td><code>make lint</code></td>
+</tr>
+<tr>
+<td>Focused local tests</td>
+<td><code>uv run pytest &lt;path&gt; -x --tb=short</code></td>
+</tr>
+<tr>
+<td>Full pinned suite (R 4.5.2 + mgcv 1.9-3, one BLAS thread)</td>
+<td><code>make test</code> / <code>make docker-build</code> then <code>docker run --rm …</code></td>
+</tr>
+<tr>
+<td>Focused pinned file</td>
+<td><code>make test-file FILE=…</code></td>
+</tr>
+</tbody>
+</table>
+<p>Further rules:
+- R comparisons use typed rpy2 <code>RBridge</code> only. No saved fixtures, raw evidence or local diagnostic scripts are tracked.
+- The fingerprint harness below is tooling and is tracked; its outputs are not.</p>
+<hr />
+<h2 id="global-rules-for-every-pr-in-this-series">Global rules for every PR in this series<a class="headerlink" href="#global-rules-for-every-pr-in-this-series" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>One logical unification per PR.</strong> PR title format: <code>[phase2] execution: …</code> or <code>[refactor] fitting: …</code>.</li>
+<li><strong>Bit-identity gate.</strong> Run <code>make fit-fingerprint</code> (Phase 0) on the PR base and on the PR head, on the host and on the pinned Linux image. Every fingerprinted field must be byte-identical.</li>
+<li>Any intended difference must be listed in the PR body, per case, with its pinned-R comparison still at the original tolerance class. The only expected case is the §2.3 drift in the design.</li>
+<li><strong>No tolerance, oracle or digest edits.</strong> If a gate fails, the refactor is wrong.</li>
+<li><strong>Full pinned Linux suite and native CI green.</strong> Branch coverage must not fall below the base. New modules need &gt;80%.</li>
+<li><strong>Delete as you go.</strong> A PR that introduces the unified path removes the replaced implementation in the same PR. No dead parallel copies survive a merge point.</li>
+<li><strong>Record the reduction.</strong> Report line counts and duplicate-scan results for the touched modules, before and after.</li>
+<li><strong>JIT tests.</strong> Any changed Phase-2 kernel keeps or gains a compile-and-run test. Record compile counts on the fingerprint cases; a regression needs justification.</li>
+</ol>
+<hr />
+<h2 id="phase-0-baseline-harness-and-guardrails-no-production-change">Phase 0: Baseline, harness and guardrails (no production change)<a class="headerlink" href="#phase-0-baseline-harness-and-guardrails-no-production-change" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> make every later step measurable and protected.</p>
+<h3 id="01-fingerprint-harness">0.1 Fingerprint harness<a class="headerlink" href="#01-fingerprint-harness" title="Permanent link">&para;</a></h3>
+<p>Add <code>scripts/fit_fingerprint.py</code> and <code>make fit-fingerprint</code>. The harness:
+- runs a fixed, runtime-generated case list over every route, family/link and mode that the validation matrix covers (dense, stream fixed-sp, exact REML, Gaussian QR, EFS dense/stream, discrete, operator, bulk uncertainty);
+- writes a SHA-256 per result field (coefficients, smoothing parameters, scale, theta, score, EDF, fitted values, SEs, convergence fields, work counters) to a local JSON outside the repo;
+- in <code>--compare A B</code> mode, diffs two checkouts, as <code>benchmark_scaling.py --checkout</code> does today: commit and dirty-tree provenance per child, refusing mixed provenance.</p>
+<p>Tests cover the harness itself: deterministic output, provenance refusal and diff reporting.</p>
+<h3 id="02-architecture-test-report-only">0.2 Architecture test, report-only<a class="headerlink" href="#02-architecture-test-report-only" title="Permanent link">&para;</a></h3>
+<p>Add <code>tests/test_architecture.py</code>, with an AST import scan and a scan for <code>isinstance</code> checks against concrete family classes.
+- <strong>Enforced now:</strong> <code>fitting/</code> never imports <code>execution/</code>, host <code>scipy</code>, <code>sqlite3</code> or file I/O; Phase-1 packages have no JAX. These hold on <code>main</code> with one exception to allowlist and then remove in Phase 2: <code>fitting/data.py::_structural_penalty_roots</code> imports <code>execution/qr.py</code> inside the function.
+- <strong>Recorded as an explicit allowlist:</strong> the current host-loop exceptions (<code>fitting/newton.py::NewtonOptimizer</code>, <code>fitting/data.py</code> preparation) and the current family <code>isinstance</code> sites (36–43 per line in October 2026; 46 on <code>main</code> after the merge). Later phases shrink the allowlist to empty.</p>
+<h3 id="03-duplicate-code-check-report-only">0.3 Duplicate-code check, report-only<a class="headerlink" href="#03-duplicate-code-check-report-only" title="Permanent link">&para;</a></h3>
+<p>Choose pylint <code>duplicate-code</code> or <code>jscpd</code> (design §9 Q1) and add it to <code>make lint</code> in report mode, with a committed baseline. Also commit the structural scan used in design §2.2, normalised-AST similarity over functions with at least 15 body lines, as <code>scripts/duplicate_scan.py</code>. The textual tools miss renamed copies.</p>
+<h3 id="04-re-measure">0.4 Re-measure<a class="headerlink" href="#04-re-measure" title="Permanent link">&para;</a></h3>
+<p>Re-run the design §2 inventory on the final composed stack and update <code>design.md</code> §2 tables with the real starting point.</p>
+<p><strong>Acceptance:</strong>
+- the harness is deterministic across two runs on the same commit, on host and on Linux;
+- the architecture test and duplicate report pass in report-only mode;
+- the inventory is updated.</p>
+<hr />
+<h2 id="phase-1-exact-and-near-exact-duplicates-small-low-risk">Phase 1: Exact and near-exact duplicates (small, low risk)<a class="headerlink" href="#phase-1-exact-and-near-exact-duplicates-small-low-risk" title="Permanent link">&para;</a></h2>
+<p>Each item is its own commit, and the phase ships as one PR.</p>
+<ol>
+<li><strong><code>_factor_inverse_residual</code>:</strong> keep one copy, move it to a shared execution utility, and use it from both <code>execution/stream/reml.py</code> and <code>execution/stream/nb_reml.py</code>.</li>
+<li><strong><code>_link_name</code>:</strong> delete both copies, <code>execution/stream/nb.py</code> and <code>fitting/stream/nb_reml.py</code>. Use a family/link capability (e.g. <code>link.name</code>, or a capability enumerating supported streamed NB links).</li>
+<li><strong>Saturated log-likelihood:</strong> keep one kernel and make the other call site use it. The two are <code>fitting/family_execution.py::batch_saturated_loglikelihood</code> and <code>fitting/stream/kernels.py::saturated_loglik_reduction</code>. Prove reduction-order identity by fingerprint.</li>
+<li><strong>NB theta objective:</strong> keep one jitted NB negative log-likelihood kernel, used by <code>fitting/efs_theta.py</code> and <code>fitting/stream/nb_theta.py</code> (structural similarity 0.98).</li>
+<li><strong><code>efsudr</code> update:</strong> the operator EFS controller uses <code>fitting/efs.py::efs_raw_update</code> (or a NumPy wrapper over the same kernel), and <code>_raw_ratio</code>/<code>_trial_rho</code> are deleted.</li>
+<li>First resolve the <code>phi*n/q</code> vs <code>(n/q)*phi</code> order against pinned <code>R/gam.fit4.r::efsudr</code> (1.9-3).</li>
+<li>The non-matching route's change is the one documented exception. Its R gates must stay STRICT.</li>
+<li><strong>Score-bound helpers:</strong> make <code>_indexed_poisson_score_bound</code>, <code>_indexed_gaussian_score_bound</code> and <code>_arrowhead_poisson_score_bound</code> one family-generic bound, parameterised by family capability terms.</li>
+</ol>
+<p><strong>Acceptance:</strong> global rules. Fingerprint identical except item 5's documented case.</p>
+<hr />
+<h2 id="phase-2-names-and-boundary-moves-mechanical">Phase 2: Names and boundary moves (mechanical)<a class="headerlink" href="#phase-2-names-and-boundary-moves-mechanical" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Renames: done, by a different route.</strong> This item proposed renaming the exact streamed REML drivers so that their names no longer suggested a pair with the dense kernels in <code>fitting/reml.py</code>. The move into route sub-packages on 2026-11-20 (design §9, question 5) settled it: the drivers are <code>execution/stream/reml.py</code> and <code>execution/stream/nb_reml.py</code>, beside their kernels <code>fitting/stream/reml.py</code> and <code>fitting/stream/nb_reml.py</code>. Check the remaining same-named pairs (<code>efs.py</code>, <code>qr.py</code> and <code>regular.py</code>, <code>nb_theta.py</code>, <code>efs_provider.py</code> across packages) for a kernel/driver relationship that does not exist.</li>
+<li><strong>Move host code out of <code>fitting/</code>:</strong></li>
+<li><code>NewtonOptimizer</code>'s host loop moves to <code>execution/optimizers/newton.py</code>. Its jitted derivative pieces stay in <code>fitting/newton.py</code>, renamed to reflect that they are kernels.</li>
+<li><code>FittingData.from_setup</code> NumPy preparation moves to <code>execution/providers/in_memory.py</code>, or stays as a transfer type, per design §9 Q2.</li>
+<li><strong>Re-export shims:</strong> add them only where something outside the package imports the old path. Check <code>jaxgam/__init__.py</code>, docs and benchmark scripts. Internal modules get no shims.</li>
+<li><strong>Architecture test:</strong> remove the host-loop exceptions from its allowlist.</li>
+</ol>
+<p><strong>Acceptance:</strong> global rules (pure moves, so the fingerprint must be identical). <code>git log --follow</code> history is preserved by using <code>git mv</code>.</p>
+<hr />
+<h2 id="phase-3-provider-and-solver-interfaces-adapters-no-behaviour-change">Phase 3: Provider and solver interfaces (adapters, no behaviour change)<a class="headerlink" href="#phase-3-provider-and-solver-interfaces-adapters-no-behaviour-change" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Introduce the interfaces:</strong> <code>FitProvider</code>, <code>ProviderCapabilities</code>, <code>FitState</code>, <code>CoefficientSolver</code>, <code>WorkingSystem</code> and <code>OptimizationResult</code> (design §5.1). Generalise the existing <code>EFSFitProvider</code>/<code>EFSFitRequest</code>/<code>EFSControllerContext</code> rather than adding a parallel set.</li>
+<li><strong>Wrap existing data access as providers,</strong> delegating to today's functions:</li>
+<li><code>in_memory</code> (dense);</li>
+<li><code>stream</code>, regular and NB (<code>pirls.py</code>, <code>regular.py</code> and <code>nb.py</code> in <code>execution/stream/</code>);</li>
+<li><code>gaussian_qr</code> (PR9);</li>
+<li><code>discrete</code> (PR11);</li>
+<li><code>operator</code> (PR12/EFS6).</li>
+<li><strong>Wrap the solvers:</strong> cholesky, qr, signed_qr, pcg, and <code>working_model</code> (<code>Sl.fitChol</code> with the pinned DPSTRF host factor).</li>
+<li><strong>Contract tests for each provider:</strong></li>
+<li>exact gradient vs finite differences of the score at STRICT where exact;</li>
+<li>replay determinism;</li>
+<li>work-counter monotonicity;</li>
+<li>the capability flags truthfully reflect implemented methods.</li>
+</ol>
+<p><strong>Acceptance:</strong> global rules. Routes are not yet switched, so the fingerprint is identical.</p>
+<hr />
+<h2 id="phase-4-one-efs-optimizer">Phase 4: One EFS optimizer<a class="headerlink" href="#phase-4-one-efs-optimizer" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Merge the two dense loops.</strong> <code>_run_efs_known_scale</code> and <code>_run_efs_unknown_scale</code> become <code>execution/optimizers/efs.py</code>, with scale handling as an option. Preserve each loop's exact step and scale-update order, as named branches where they differ.</li>
+<li><strong>Fold in the operator controller.</strong> <code>_run_operator_efs</code> becomes the same optimizer plus a provider whose <code>ScoreTerms</code> carries an error bound. The optimizer's three-way comparison (better / worse / uncertain) reproduces the operator controller's "retain accepted state on uncertain comparisons" policy and its calibration boundaries.</li>
+<li><strong>Delete</strong> the old loops and <code>OperatorEFSFitProvider</code> (now a <code>FitProvider</code>).</li>
+</ol>
+<p><strong>Acceptance:</strong>
+- global rules;
+- every EFS gate passes (dense, stream, operator, p257–512 calibration, <code>test_validation_matrix.py -k efs</code>), with an identical fingerprint;
+- EFS controller code is roughly halved; record the actual figure.</p>
+<hr />
+<h2 id="phase-5-one-exact-streamed-reml-optimizer">Phase 5: One exact streamed REML optimizer<a class="headerlink" href="#phase-5-one-exact-streamed-reml-optimizer" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Merge the evaluators.</strong> <code>evaluate_regular_stream_reml</code> and <code>evaluate_nb_stream_reml</code> become one evaluator, with theta as an optional coordinate supplied by the provider.</li>
+<li><strong>Merge the drivers.</strong> <code>optimize_regular_stream_reml</code> and <code>optimize_nb_stream_reml</code> become one <code>exact_lbfgs</code> optimizer. It keeps the shared pinned-first <code>newton()</code> completions (pinned scale/theta, free m≤4) and their routing precedence. The completion helpers move to <code>optimizers/completion.py</code>.</li>
+<li><strong>Merge preflight.</strong> <code>_preflight_regular_reml</code> and <code>_preflight_nb_reml</code> become one capability-driven preflight.</li>
+<li><strong>Canonical driver:</strong> retire <code>optimize_stream_reml</code> (canonical known-scale), or keep it as a mode, per design §9 Q3. Either way it shares the evaluator.</li>
+</ol>
+<p><strong>Acceptance:</strong>
+- global rules;
+- every streamed REML, NB theta-mode, completion-routing and forced-stop test passes with an identical fingerprint;
+- #67/#68 public parity cells unchanged.</p>
+<hr />
+<h2 id="phase-6-one-pirls-driver">Phase 6: One PIRLS driver<a class="headerlink" href="#phase-6-one-pirls-driver" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Extract the step policy.</strong> Create <code>fitting/pirls_step.py</code> for the pure kernels (step, midpoint, divergence/domain recovery) and <code>execution/inner/pirls.py</code> for the host driver. The policy covers <code>gam.fit3</code>/<code>gam.fit4</code> step halving, divergence and domain recovery, and convergence.</li>
+<li><strong>Make the system a strategy.</strong> <code>WorkingSystem</code> selects Fisher, observed, signed, or the EFS system with <code>gam.fit3</code> scoring. Choose it from family capabilities.</li>
+<li><strong>Port the inner loops one at a time,</strong> each as its own commit with a fingerprint check:</li>
+<li>dense <code>fitting/pirls.py</code>;</li>
+<li><code>fitting/efs_regular_pirls.py</code>;</li>
+<li>streamed canonical (<code>execution/stream/pirls.py</code>);</li>
+<li>streamed signed (<code>execution/stream/regular.py</code>);</li>
+<li>streamed NB (<code>execution/stream/nb.py</code>);</li>
+<li>operator (<code>execution/operator/fit.py</code>);</li>
+<li>discrete working model (PR11).</li>
+</ol>
+<p>Fused <code>lax.while_loop</code> kernels stay fused where they are today. The unification is in the step-policy functions they call, not in turning jitted loops into host loops.
+4. <strong>Theta strategies.</strong> Move the nuisance theta strategies to <code>execution/inner/theta.py</code>: joint REML, conditional <code>estimate.theta</code>, and EFS in-PIRLS theta.</p>
+<p><strong>Acceptance:</strong>
+- global rules, with an identical fingerprint for every route;
+- JIT compile counts unchanged or justified;
+- the PIRLS-loop count goes from about 7 to 1 driver plus strategies; record it.</p>
+<hr />
+<h2 id="phase-7-newton-over-providers-dense-becomes-the-in-memory-provider">Phase 7: Newton over providers; dense becomes the in-memory provider<a class="headerlink" href="#phase-7-newton-over-providers-dense-becomes-the-in-memory-provider" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Generalise the newton optimizer.</strong> <code>execution/optimizers/newton.py</code> takes curvature from the provider: exact AD Hessian (in-memory), HVP, or central differences of exact gradients.</li>
+<li><strong>Route dense through the engine.</strong> Dense <code>gam()</code> becomes in-memory provider + cholesky + PIRLS + newton, and the dense-specific orchestration is deleted. This is the highest-risk step: it touches the validated v1.0 path, so it runs last of the numerical phases.</li>
+<li><strong>PR9.</strong> <code>optimize_gaussian_qr_lbfgs</code> becomes the <code>gaussian_qr</code> provider plus <code>newton</code>/<code>exact_lbfgs</code>.</li>
+<li><strong>PR11.</strong> The performance-iteration controller (<code>advance_*_working_model</code>) becomes <code>optimizers/performance_iteration.py</code> over the discrete provider and <code>working_model</code> solver.</li>
+</ol>
+<p><strong>Acceptance:</strong>
+- global rules;
+- the complete validation matrix and the v1.0 dense R gates pass with an identical fingerprint on host and Linux;
+- §8 benchmark timings within noise of the baseline, recorded.</p>
+<hr />
+<h2 id="phase-8-routing-and-results">Phase 8: Routing and results<a class="headerlink" href="#phase-8-routing-and-results" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Router.</strong> Add <code>execution/routing.py</code>, which builds a <code>FitPlan</code> from <code>FitControl</code>, family capabilities and provider/solver capabilities. The <code>api.py</code> route functions (<code>_fit_stream_*</code>, <code>_fit_operator*</code>, <code>_fit_discrete</code>, <code>_fit_fixed_sp</code>, …) collapse into validate → plan → execute → build result.</li>
+<li><code>execution_route</code> and <code>lambda_strategy</code> labels are derived from the plan.</li>
+<li>Rejection messages are preserved; add a test per message.</li>
+<li><strong>Results.</strong> One result builder replaces the per-route constructors (<code>_from_stream_state</code> and siblings).</li>
+<li><strong>Routing tests.</strong> A table-driven test covers every <code>FitControl</code> × family × sp-mode cell, asserting the selected plan and the label.</li>
+</ol>
+<p><strong>Acceptance:</strong>
+- global rules;
+- the public API is unchanged: same signatures, same result fields;
+- every route-selection, rejection and validation test passes.</p>
+<hr />
+<h2 id="phase-9-lock-in">Phase 9: Lock in<a class="headerlink" href="#phase-9-lock-in" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Blocking guardrails.</strong> Switch the duplicate-code check to blocking. Shrink the architecture-test allowlists to empty, or to a reviewed and justified minimum.</li>
+<li><strong>Docs.</strong> Update the architecture pages under <code>docs/architecture/</code> and <code>docs/api.md</code> where internals are described. Add the review checklist from design §7.</li>
+<li><strong>AGENTS.md.</strong> Propose wording to the user covering the layers, the dependency rule and "extend via <code>FitProvider</code>/solver/strategy, never by copying a controller or PIRLS loop". The user applies it.</li>
+<li><strong>Final report.</strong> Before/after line counts per package, duplicate-scan results, compile counts and benchmark timings.</li>
+</ol>
+<p><strong>Acceptance:</strong>
+- full pinned Linux suite and native CI green;
+- fingerprint identical to the Phase-0 baseline, apart from the documented Phase-1 item 5 case;
+- guardrails blocking.</p>
+<hr />
+<h2 id="sequencing-and-rough-size">Sequencing and rough size<a class="headerlink" href="#sequencing-and-rough-size" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>PRs</th>
+<th>Risk</th>
+<th>Depends on</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0 Harness and guardrails</td>
+<td>1</td>
+<td>low</td>
+<td>entry criteria</td>
+</tr>
+<tr>
+<td>1 Exact duplicates</td>
+<td>1</td>
+<td>low</td>
+<td>0</td>
+</tr>
+<tr>
+<td>2 Renames and moves</td>
+<td>1</td>
+<td>low</td>
+<td>1</td>
+</tr>
+<tr>
+<td>3 Interfaces and adapters</td>
+<td>1–2</td>
+<td>medium</td>
+<td>2</td>
+</tr>
+<tr>
+<td>4 EFS optimizer</td>
+<td>1</td>
+<td>medium</td>
+<td>3</td>
+</tr>
+<tr>
+<td>5 Exact REML optimizer</td>
+<td>1</td>
+<td>medium</td>
+<td>3</td>
+</tr>
+<tr>
+<td>6 PIRLS driver</td>
+<td>2–3 (one per inner-loop group)</td>
+<td>high</td>
+<td>3 (4 and 5 recommended first)</td>
+</tr>
+<tr>
+<td>7 Newton and dense provider</td>
+<td>1–2</td>
+<td>high</td>
+<td>6</td>
+</tr>
+<tr>
+<td>8 Routing and results</td>
+<td>1</td>
+<td>medium</td>
+<td>7</td>
+</tr>
+<tr>
+<td>9 Lock in</td>
+<td>1</td>
+<td>low</td>
+<td>8</td>
+</tr>
+</tbody>
+</table>
+<p>Phases 4 and 5 are independent and may be developed in parallel worktrees, but they publish in order.</p>
+<p><strong>Rollback:</strong> each PR is self-contained and deletes only what it replaces, so reverting the PR restores the previous path. Do not start a phase until the previous one is published and native-green.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

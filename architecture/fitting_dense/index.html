@@ -1,0 +1,2707 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../data_sources/">
+      
+      
+        <link rel="next" href="../fitting_streamed/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>The dense fit - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#phase-2-the-dense-fit" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              The dense fit
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dispatch-inside-gamfit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dispatch inside GAM.fit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fittingdata-the-phase-1-to-phase-2-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FittingData: the Phase 1 to Phase 2 boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-inner-fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The inner fit
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The inner fit">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-pinned-gamfit3-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The pinned gam.fit3 loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-ordinary-pirls-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The ordinary PIRLS loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-reml-criterion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The REML criterion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-newton-outer-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Newton outer loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#starting-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Starting values
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed-sp-fits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed-sp fits
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#negative-binomial-theta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Negative-binomial theta
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-dense-extended-fellner-schall-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The dense extended Fellner-Schall path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-gaussian-qr-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Gaussian QR route
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dispatch-inside-gamfit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dispatch inside GAM.fit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fittingdata-the-phase-1-to-phase-2-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FittingData: the Phase 1 to Phase 2 boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-inner-fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The inner fit
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The inner fit">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-pinned-gamfit3-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The pinned gam.fit3 loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-ordinary-pirls-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The ordinary PIRLS loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-reml-criterion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The REML criterion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-newton-outer-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Newton outer loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#starting-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Starting values
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed-sp-fits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed-sp fits
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#negative-binomial-theta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Negative-binomial theta
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-dense-extended-fellner-schall-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The dense extended Fellner-Schall path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-gaussian-qr-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Gaussian QR route
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="phase-2-the-dense-fit">Phase 2: the dense fit<a class="headerlink" href="#phase-2-the-dense-fit" title="Permanent link">&para;</a></h1>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>This page covers the default in-memory fit (<code>FitControl(execution="dense")</code>): the
+Phase 1 to Phase 2 boundary object <code>FittingData</code>, the inner coefficient loops
+(PIRLS and the pinned ports of mgcv's <code>gam.fit3</code> and <code>gam.fit4</code>), the REML
+criterion, the outer Newton optimizer for the log smoothing parameters, fixed-<code>sp</code>
+fits, negative-binomial theta, the dense extended Fellner-Schall (EFS) optimizer
+and the opt-in Gaussian QR route. How <code>GAM.fit()</code> reaches this code is on
+<a href="../fit_lifecycle/">the fit lifecycle page</a>; how the result is built afterwards is
+on <a href="../results_and_prediction/">the results page</a>.</p>
+<h2 id="where-the-code-is">Where the code is<a class="headerlink" href="#where-the-code-is" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/fitting/data.py</code></td>
+<td><code>FittingData</code>: device arrays, reparameterized penalty blocks, starts, null anchor and rank metadata built from <code>ModelSetup</code>; also <code>PreparedFittingMetadata</code> for the streamed routes.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/initialization.py</code></td>
+<td><code>initialize_beta_cpu</code> (PIRLS start) and <code>r_null_coefficients</code> (port of mgcv's <code>get.null.coef</code> anchor), both NumPy.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/pirls.py</code></td>
+<td><code>pirls_loop</code>, the ordinary <code>jax.lax.while_loop</code> PIRLS with step halving, <code>PIRLSResult</code>, and the NB in-loop theta solver <code>efs_theta_pirls_loop</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/efs_regular_pirls.py</code></td>
+<td><code>efs_regular_pirls_loop</code>: the jitted port of the <code>gam.fit3</code> coefficient loop (Fisher retry, sequential recovery, convergence test, final <code>gdi1</code> solve).</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/source_pirls.py</code></td>
+<td><code>source_pirls</code>: selects the pinned <code>gam.fit3</code> or <code>gam.fit4</code> loop for a dense inner fit; <code>SOURCE_EPSILON</code>; status messages.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/reml.py</code></td>
+<td>The REML criterion (<code>_criterion_core</code>, <code>reml_criterion</code>, <code>REMLCriterion</code>, <code>JointREMLCriterion</code>), <code>fletcher_scale</code>, <code>estimate_edf</code>, <code>fisher_edf</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/stable_log_det.py</code></td>
+<td>Host NumPy port of <code>gam.reparam</code>/<code>get_stableS</code> for multi-penalty blocks: <code>StableSystem</code>, <code>stable_system</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/penalty_ops.py</code></td>
+<td>JAX algebra on local penalty blocks: <code>materialize</code>, <code>log_pdet</code>, <code>augmented_root</code>, <code>JaxPenaltyRoots</code>, <code>JaxCoefficientRotation</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/newton.py</code></td>
+<td><code>NewtonOptimizer</code> / <code>newton_optimize</code>: the host outer loop, the differentiable score <code>_diff_score</code> with its <code>jax.custom_jvp</code>, <code>NewtonResult</code>, <code>OuterScoreProvider</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/efs.py</code></td>
+<td>Jitted EFS algebra: <code>prepare_efs_statistics</code>, <code>efs_statistics</code> (d, t, q), <code>efs_raw_update</code>, <code>efs_fisher_factor</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/efs_theta.py</code></td>
+<td>Conditional NB theta Newton kernel (port of mgcv's <code>estimate.theta</code> branch used by <code>gam.fit4</code> under EFS).</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/stream/efs_factor.py</code></td>
+<td><code>efs_factor_statistics</code>: d, t, q computed from a coefficient-factor object; used by streamed EFS only.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/gaussian_qr/kernel.py</code></td>
+<td><code>FrozenGaussianQR</code> and <code>gaussian_qr_reml_score</code>: the Gaussian REML score from frozen QR statistics.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/gaussian_qr/rank_coordinates.py</code></td>
+<td><code>reduced_augmented_qr</code> JAX kernel for rank-coordinate Gaussian QR solves; no module in <code>jaxgam/</code> imports it today, only tests.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/efs.py</code></td>
+<td>Host EFS controller (<code>dense_efs_known_scale</code>, <code>dense_efs_unknown_scale</code>, <code>_run_efs_known_scale</code>, <code>_run_efs_unknown_scale</code>), <code>EFSFitState</code>, <code>EFSResult</code>, start values.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/efs_provider.py</code></td>
+<td>The provider seam: <code>EFSFitRequest</code>, <code>EFSControllerContext</code>, <code>EFSFitProvider</code> protocol.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/gaussian_qr/preparation.py</code></td>
+<td>Host preparation of the frozen Gaussian QR (<code>prepare_frozen_gaussian_qr</code>), <code>GaussianQRIneligible</code>, the penalty-count threshold, workspace estimates.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/gaussian_qr/optimizer.py</code></td>
+<td><code>DenseGaussianQROuterProvider</code>, <code>build_dense_gaussian_qr_provider</code>, <code>optimize_gaussian_qr_lbfgs</code>, <code>use_gaussian_qr_lbfgs</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Phase 2 is split as on every route: jitted kernels in <code>jaxgam/fitting/</code>, host
+control in <code>jaxgam/execution/</code>. The dense route is the exception that its main
+optimizer, <code>NewtonOptimizer</code>, lives in <code>jaxgam/fitting/newton.py</code> and is itself a
+host Python loop around jitted pieces.</p>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<h3 id="dispatch-inside-gamfit">Dispatch inside <code>GAM.fit</code><a class="headerlink" href="#dispatch-inside-gamfit" title="Permanent link">&para;</a></h3>
+<p>After <code>parse_formula</code> and <code>ModelSetup.build</code> (Phase 1), <code>GAM.fit</code> in
+<code>jaxgam/api.py</code> builds <code>FittingData.from_setup(setup, family, device)</code> and then
+chooses, in this order:</p>
+<ol>
+<li>If <code>FitControl.gaussian_compression</code> is set, try
+   <code>build_dense_gaussian_qr_provider</code> (see <a href="#the-gaussian-qr-route">Gaussian QR</a>).</li>
+<li><code>sp</code> supplied: <code>_fit_fixed_sp</code> (see <a href="#fixed-sp-fits">Fixed-sp fits</a>),
+   <code>lambda_strategy="fixed"</code>.</li>
+<li>No penalties: <code>newton_optimize</code>, which takes its parametric shortcut.</li>
+<li><code>optimizer="efs"</code>: <code>dense_efs_known_scale</code> or <code>dense_efs_unknown_scale</code>,
+   <code>lambda_strategy="efs_reml"</code>.</li>
+<li>Otherwise Newton (<code>newton_optimize</code>), or SciPy L-BFGS-B when a Gaussian QR
+   provider exists and the model has more than 50 penalties.</li>
+</ol>
+<p>Every branch returns an object with the <code>NewtonResult</code> field names (EFS returns
+<code>EFSResult</code>), which <code>_warn_factor_regularization</code> inspects and
+<code>GAMResults._from_fit</code> consumes.</p>
+<h3 id="fittingdata-the-phase-1-to-phase-2-boundary">FittingData: the Phase 1 to Phase 2 boundary<a class="headerlink" href="#fittingdata-the-phase-1-to-phase-2-boundary" title="Permanent link">&para;</a></h3>
+<p><code>FittingData.from_setup</code> does all of its numerical preparation in NumPy, then
+moves arrays with <code>to_jax</code> (<code>jax.device_put</code> of float64). In order:</p>
+<ul>
+<li><strong>Initial smoothing parameters.</strong> <code>_initial_sp</code> forms <code>diag(X'WX)</code> in
+  8192-row batches and calls <code>initial_log_sp_from_diagonal</code>, the port of mgcv's
+  <code>initial.sp</code> (<code>R/mgcv.r</code>).</li>
+<li><strong>Reparameterization.</strong> <code>reparameterize_structure</code>
+  (<code>jaxgam/formula/fitting_prepare.py</code>) rotates each penalty block so its
+  coordinates split into the null and range space of the block's total penalty,
+  mgcv's <code>totalPenaltySpace</code> (<code>R/gam.fit3.r</code>). A single penalty becomes an exact
+  0/1 diagonal; overlapping penalties use the eigenbasis of the norm-balanced sum
+  <code>sum_j S_j / |S_j|_F</code>. The transformed penalties hold exact zeros on null rows
+  and columns, which keeps a large smoothing parameter from amplifying roundoff
+  into a spurious null-space penalty. <code>apply_transforms_to_design</code> applies the
+  same block transforms to X, so the whole fit runs in these "fitting
+  coordinates".</li>
+<li><strong>Start values.</strong> <code>initialize_beta_cpu</code> (see <a href="#starting-values">Starting values</a>)
+  gives <code>beta_init</code>; <code>_null_beta</code> gives <code>null_beta</code> from <code>r_null_coefficients</code>
+  (<code>None</code> when the link of the response mean is not finite).</li>
+<li><strong>Penalty metadata.</strong> <code>_build_block_metadata</code> classifies blocks into
+  singletons (rank and log-eigenvalue constant, so <code>log|S+|</code> is exactly
+  <code>rank * rho + const</code>) and multi-penalty blocks (range-space projections
+  <code>multi_block_proj_S</code>).</li>
+<li><strong>Rank.</strong> <code>_unpenalized_rank_deficit</code> counts aliasing among unpenalized
+  columns and penalty null spaces.</li>
+<li><strong>Structural penalty roots.</strong> <code>_structural_penalty_roots</code> repeats mgcv's
+  lambda-free identifiability test from <code>pls_fit1</code> (<code>src/gdi.c</code>): it QR-factors
+  <code>sqrt(w) X</code> and asks <code>structural_rank</code> whether <code>[R1; E]</code> has full column rank.
+  If so it stores unscaled roots (<code>JaxPenaltyRoots</code>) and the inner fit solves by
+  QR (<code>penalized_qr_solve</code>, a port of <code>pls_fit1</code>'s arithmetic) instead of the
+  normal equations; if not, <code>penalty_roots</code> is <code>None</code> and the Cholesky solve is
+  kept, because <code>pls_fit1</code>'s unidentifiable-column drop is not ported.</li>
+<li><strong>NB counts.</strong> For <code>family_name == "nb"</code> a <code>CountPrefixPlan</code> records integer
+  counts for the lgamma recurrences; other families keep <code>max_y = 0</code> so the
+  response does not split JIT cache entries.</li>
+</ul>
+<p><code>_structural_penalty_roots</code> imports <code>structural_rank</code> from <code>jaxgam.execution.qr</code>
+inside the function. A module-level import would be circular:
+<code>jaxgam/execution/__init__.py</code> imports <code>jaxgam/execution/stream/pirls.py</code>, which
+imports <code>_to_jax_structure</code> from <code>jaxgam/fitting/data.py</code>. As a consequence a
+dense penalized fit loads <code>jaxgam.execution</code> (and its stream module) even though
+the dense route uses nothing else from it. This is the only import from
+<code>jaxgam/fitting/</code> into <code>jaxgam/execution/</code>.</p>
+<p><code>FittingData.uses_source_loop</code> is true when <code>null_beta</code> exists, <code>rank_deficit</code>
+is 0 and the family is one of the five registered classes (<code>uses_source_loop</code> in
+<code>jaxgam/fitting/source_pirls.py</code>). It decides which inner loop runs.</p>
+<h3 id="the-inner-fit">The inner fit<a class="headerlink" href="#the-inner-fit" title="Permanent link">&para;</a></h3>
+<p><code>_inner_fit</code> in <code>jaxgam/fitting/newton.py</code> is the single entry point used by
+Newton and by fixed-<code>sp</code> fits:</p>
+<ul>
+<li>with a <code>null_beta</code> (full-rank models of the five registered families) it calls
+  <code>source_pirls</code>, which runs</li>
+<li><code>efs_regular_pirls_loop</code> for Gaussian, Binomial, Poisson and Gamma: the port
+    of <code>gam.fit3</code> (<code>R/gam.fit3.r</code>);</li>
+<li><code>_efs_theta_pirls_loop_jit</code> with <code>estimate_theta=False</code> for
+    <code>NegativeBinomial</code>: the port of <code>gam.fit4</code> (<code>R/gam.fit4.r</code>), with theta as
+    dynamic data so one compiled loop serves every theta;</li>
+<li>without one (structurally rank-deficient models, hand-built fixtures) it calls
+  the ordinary <code>pirls_loop</code>.</li>
+</ul>
+<p>Both source loops converge at <code>SOURCE_EPSILON = 1e-11</code>, R's
+<code>gam.control(epsilon=1e-11)</code> rather than R's default <code>1e-7</code>, and run at most 200
+iterations. Called from Newton, the ordinary loop runs at the optimizer's PIRLS
+tolerance (<code>min(tol / 100, 1e-8)</code>); called from <code>_fit_fixed_sp</code> it keeps
+<code>pirls_loop</code>'s default <code>1e-7</code>. Either way it runs at most 100 iterations.</p>
+<h4 id="the-pinned-gamfit3-loop">The pinned gam.fit3 loop<a class="headerlink" href="#the-pinned-gamfit3-loop" title="Permanent link">&para;</a></h4>
+<p><code>_efs_regular_pirls_loop_jit</code> is one <code>jax.lax.while_loop</code>; every decision is a
+<code>jnp.where</code> on traced values.</p>
+<pre class="mermaid"><code>stateDiagram-v2
+    state "Start shrink&lt;br/&gt;eta = 0.9 eta + 0.1 null_eta, at most 20 times" as StartShrink
+    state "Working system&lt;br/&gt;_regular_factors, observed and Fisher solves" as WorkingSystem
+    state "Same-step Fisher retry" as FisherRetry
+    state "Raw proposal beta_raw" as Proposal
+    state "Non-finite deviance recovery&lt;br/&gt;halve toward the anchor" as NonfiniteRecovery
+    state "Domain recovery&lt;br/&gt;halve while mu or eta is invalid" as DomainRecovery
+    state "Divergence recovery&lt;br/&gt;halve while pdev exceeds the baseline, at most 100" as DivergenceRecovery
+    state "Convergence test&lt;br/&gt;pdev change and max gradient against epsilon" as ConvergenceTest
+    state "Final gdi1 solve and factors" as FinalSolve
+    state "Loop exits with a failure status" as Failed
+    [*] --&gt; StartShrink
+    StartShrink --&gt; Failed : start still invalid
+    StartShrink --&gt; WorkingSystem : valid start
+    WorkingSystem --&gt; FisherRetry : observed system indefinite, non-canonical link
+    WorkingSystem --&gt; Proposal : solved
+    FisherRetry --&gt; Proposal
+    Proposal --&gt; Failed : coefficients not finite
+    Proposal --&gt; NonfiniteRecovery
+    NonfiniteRecovery --&gt; DomainRecovery
+    DomainRecovery --&gt; DivergenceRecovery
+    DivergenceRecovery --&gt; Failed : a recovery did not succeed
+    DivergenceRecovery --&gt; ConvergenceTest : step accepted, anchor moves
+    ConvergenceTest --&gt; WorkingSystem : not converged
+    ConvergenceTest --&gt; FinalSolve : converged or iteration limit
+    Failed --&gt; FinalSolve
+    FinalSolve --&gt; [*]</code></pre>
+<p>Read it top to bottom; each box between the start and the final solve is one
+stage of one <code>while_loop</code> iteration. Every exit, including a failure, passes
+through the final solve; a failure is carried in the status code. The details,
+all from <code>jaxgam/fitting/efs_regular_pirls.py</code>:</p>
+<ul>
+<li><strong>Working system.</strong> <code>_regular_factors</code> returns <code>gam.fit3</code>'s weights and working
+  response. Canonical links use Fisher weights. Non-canonical links use the full
+  Newton system, Fisher weights times <code>alpha = 1 + (y - mu) (V'/V + g'' mu.eta)</code>,
+  whose weights can be negative. <code>_checked_exact_solve</code> classifies the
+  curvature of the unit-diagonal <code>H</code>; a material negative eigenvalue triggers the
+  same-step Fisher retry, as in <code>gam.fit3</code>. With <code>penalty_roots</code>, every
+  nonnegative-weight system is solved by <code>_positive_qr_solve</code>.</li>
+<li><strong>Recovery.</strong> The order is R's: a non-finite coefficient stops the loop; then
+  non-finite deviance, then invalid <code>mu</code>/<code>eta</code>, then penalized-deviance
+  divergence beyond <code>10 (0.1 + |old pdev|) sqrt(eps)</code> (at most 100 halvings).
+  Each halving moves <code>beta</code> and <code>eta</code> half-way toward the anchor, which starts at
+  <code>null_beta</code> and becomes the last accepted state.</li>
+<li><strong>Convergence.</strong> Converged when the penalized-deviance change is below
+  <code>epsilon (|scale| + |pdev|)</code> and <code>max|2 X'W(X beta - z) + 2 S beta|</code> is at most
+  <code>epsilon (|pdev| + |scale|)</code>. A family whose capability <code>single_step_pirls</code> is
+  set (Gaussian with identity link) is converged at its first accepted step, R's
+  "strictly additive" branch.</li>
+<li><strong>Final solve.</strong> After the loop, <code>gam.fit3</code>'s closing <code>gdi1</code> call is ported:
+  weights are rebuilt at the final state, <code>XtWX</code> (observed) and <code>XtWX_fisher</code> are
+  formed, and one last penalized solve gives the reported coefficients, unless
+  that candidate leaves the family domain, in which case the pre-solve
+  coefficients are kept. The reported deviance is the pre-solve deviance, and
+  <code>penalized_deviance</code> adds the candidate's penalty, as R's <code>Dp</code> does.</li>
+<li><strong>Status.</strong> A failure is reported in <code>inner_status</code> with one of the
+  <code>EFS_REGULAR_STATUS_*</code> codes, never as convergence; <code>status_message</code> maps it to
+  R's wording ("inner loop 3; can't correct step size ...").</li>
+</ul>
+<p>The NB loop (<code>_efs_theta_pirls_loop_jit</code> in <code>jaxgam/fitting/pirls.py</code>) follows
+<code>gam.fit4</code> instead: observed weights <code>0.5 d2D/deta2</code>, a positive-weight retry
+for an indefinite system, the same recovery order and <code>gam.fit4</code>'s convergence
+test.</p>
+<h4 id="the-ordinary-pirls-loop">The ordinary PIRLS loop<a class="headerlink" href="#the-ordinary-pirls-loop" title="Permanent link">&para;</a></h4>
+<p><code>_pirls_loop_jit</code> (behind <code>pirls_loop</code>) is a <code>jax.lax.while_loop</code> over
+<code>_PIRLSState</code>. Its body calls <code>_beta_step</code>, which forms the weighted system,
+solves it (<code>penalized_solve</code>, or <code>penalized_qr_solve</code> when a root is given) and
+runs an inner <code>while_loop</code> over <code>_StepHalvingState</code>: a trial is accepted when
+its penalized deviance is finite, <code>valid_mu</code>/<code>valid_eta</code> hold, and it is no more
+than <code>1e-7 |pdev|</code> above the current value (any valid finite trial is accepted
+on the first iteration). At most 25 halvings toward the previous coefficients
+are tried; if none is accepted the iteration keeps the old state. Convergence is
+tested only from iteration index 3, when both the relative penalized-deviance
+change and the relative maximum coefficient change are below <code>tol</code>.</p>
+<p>After the loop, the curvature is rebuilt at the final <code>mu</code> following mgcv's
+information split: the <code>XtWX</code> that enters <code>log|H|</code> uses observed information for
+non-canonical links (signed weights from <code>_observed_weights</code>, built by
+<code>_signed_XtWX</code>), while <code>XtWX_fisher</code> and <code>L_fisher</code> use Fisher weights for EDF
+and covariance. For canonical links the two are the same array. Standard
+families use Fisher scoring (<code>gam.fit3</code>); a family with <code>n_theta &gt; 0</code> uses
+observed weights and working response (<code>gam.fit4</code>).</p>
+<p>The plain Cholesky used here is <code>cho_factor</code> in <code>jaxgam/jax_utils.py</code>: it adds a
+diagonal-relative jitter (<code>1e-12</code>, then <code>1e-6</code>) only when the plain factor fails,
+and records the level in <code>factor_regularization</code>.</p>
+<h3 id="the-reml-criterion">The REML criterion<a class="headerlink" href="#the-reml-criterion" title="Permanent link">&para;</a></h3>
+<p><code>_criterion_core</code> in <code>jaxgam/fitting/reml.py</code> computes, for converged inner-fit
+outputs,</p>
+<div class="highlight"><pre><span></span><code>Dp / (2 phi) - ls_sat + log|H| / 2 - log|S+| / 2
+</code></pre></div>
+<p>with <code>Dp = deviance + beta' S_lambda beta</code> and <code>H = XtWX + S_lambda</code>; the caller
+subtracts <code>Mp / 2 log(2 pi phi)</code>, where <code>Mp</code> is the total penalty null-space
+dimension. This is the Laplace REML of <code>gam.fit3</code> (<code>R/gam.fit3.r</code>). The terms:</p>
+<ul>
+<li><code>ls_sat</code> is the family's saturated log-likelihood (<code>saturated_loglik</code>, or
+  <code>saturated_loglik_theta</code> when theta is a free coordinate).</li>
+<li><code>log|H|</code> comes from one of three places in <code>_criterion_log_determinants</code>:
+  <code>qr_log_det</code> (<code>jaxgam/fitting/qr.py</code>, the QR of <code>[sqrt(W) X; E]</code>, with a
+  <code>jax.custom_jvp</code> whose tangent is <code>tr(H^-1 dH)</code>) when <code>uses_qr_log_det</code> holds
+  (roots present, no rank deficit, canonical link, no theta); otherwise a
+  Cholesky of <code>H</code> scaled to unit diagonal; or, for a structurally rank-deficient
+  <code>H</code>, the sum of log eigenvalues after dropping the <code>rank_deficit</code> smallest.</li>
+<li><code>log|S+|</code> comes from <code>penalty_ops.log_pdet</code>: the exact <code>rank * rho + const</code>
+  for singletons and a block log-determinant for multi-penalty blocks.</li>
+</ul>
+<p>For multi-penalty blocks, mgcv calls <code>gam.reparam</code> (<code>R/gam.fit3.r</code>, which calls
+the C routine <code>get_stableS</code> in <code>src/gdi.c</code>) at every evaluation. That routine
+branches on the smoothing parameters, so <code>jaxgam/fitting/stable_log_det.py</code>
+runs it on the host, in NumPy, between jitted calls: <code>stable_system</code> returns a
+<code>StableSystem</code> (block rotations, rotated penalties and roots, and
+<code>StableLogDetTerms</code> holding <code>log|S+|</code> with its first and second derivatives at
+that point). The jitted criterion evaluates the quadratic expansion of those
+terms, which is exact at that point and NaN anywhere else, so it cannot be used
+away from the host's evaluation point. The inner fit is then run in the
+rotated coordinates and mapped back by <code>pirls_from_stable</code>.</p>
+<p>Scale and EDF: <code>fisher_edf</code> takes the QR trace <code>fisher_edf</code> recorded by the
+inner fit when available, else <code>estimate_edf</code> (<code>tr(H^-1 XtWX_fisher)</code>).
+<code>fletcher_scale</code> is the Fletcher (2012) Pearson estimate used by <code>gam.fit3</code>;
+<code>estimate_scale</code> returns 1 for known-scale families.</p>
+<p><code>REMLCriterion</code> and <code>JointREMLCriterion</code> wrap this core with fixed inner-fit
+outputs. They are used to report <code>edf</code> and <code>scale</code> at an accepted point, by the
+parametric shortcut, and by <code>_fit_fixed_sp</code>. They are not what Newton
+differentiates: the outer gradient and Hessian come from <code>_diff_score</code>. Only
+REML is implemented; <code>NewtonOptimizer</code> raises <code>ValueError</code> for any other
+<code>method</code>.</p>
+<h3 id="the-newton-outer-loop">The Newton outer loop<a class="headerlink" href="#the-newton-outer-loop" title="Permanent link">&para;</a></h3>
+<p><code>NewtonOptimizer</code> ports mgcv's <code>newton</code> (<code>R/gam.fit3.r</code>) for non-Gaussian
+families and the step handling of <code>fast.REML.fit</code> (an mgcv routine in
+<code>R/fast-REML.r</code>) for Gaussian. Its parameter vector is
+<code>[log_lambda, &lt;log_theta&gt;, &lt;log_phi&gt;]</code>: <code>log_theta</code> only for an NB family with
+estimated theta (<code>_joint_theta</code>), <code>log_phi</code> only for unknown-scale families
+(<code>_joint_scale</code>), and both only when the model has penalties.</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant Api as GAM.fit in api.py
+    participant Opt as NewtonOptimizer.run
+    participant Fwd as _jit_fit_and_score
+    participant Inner as _inner_fit
+    participant Crit as _criterion_core
+    participant Diff as _jit_diff_grad_hess
+    participant Step as _safe_newton_step
+    Api-&gt;&gt;Opt: newton_optimize(fd, method)
+    Opt-&gt;&gt;Fwd: params, beta_init
+    Fwd-&gt;&gt;Inner: S_lambda from log_lambda
+    Inner--&gt;&gt;Fwd: PIRLSResult
+    Fwd-&gt;&gt;Crit: XtWX, beta, deviance, ls_sat
+    Crit--&gt;&gt;Fwd: score
+    Fwd--&gt;&gt;Opt: score and PIRLSResult
+    Opt-&gt;&gt;Diff: params, accepted coefficients
+    Diff--&gt;&gt;Opt: gradient and Hessian through custom_jvp
+    loop each outer iteration, at most max_iter
+        Opt-&gt;&gt;Opt: _compute_uconv_ind
+        Opt-&gt;&gt;Step: gradient and Hessian on unconverged coordinates
+        Step--&gt;&gt;Opt: capped step and is_pdef
+        loop _step_halve or _step_halve_gaussian
+            Opt-&gt;&gt;Fwd: trial params, warm start from accepted beta
+            Fwd--&gt;&gt;Opt: trial score
+        end
+        Opt-&gt;&gt;Diff: accepted params
+        Diff--&gt;&gt;Opt: gradient and Hessian
+        Opt-&gt;&gt;Opt: _check_convergence
+    end
+    Opt--&gt;&gt;Api: NewtonResult from _build_result</code></pre>
+<p>The outer loop and all decisions are host Python (<code>for outer_iter in
+range(self._max_iter)</code>); each arrow into <code>_jit_fit_and_score</code>,
+<code>_jit_diff_grad_hess</code> and <code>_safe_newton_step</code> is one jitted dispatch. With
+multi-penalty blocks, every evaluation first calls <code>stable_system</code> on the host.</p>
+<p><strong>Forward pass.</strong> <code>_fit_and_score_impl</code>, jitted as <code>_jit_fit_and_score</code>, fuses
+<code>S_lambda</code> construction, the inner fit and the score into one XLA program. Trial
+fits during step halving use only this.</p>
+<p><strong>Derivatives.</strong> <code>_diff_score</code> is the same computation written for
+differentiation. Inside it the inner fit is wrapped in a <code>jax.custom_jvp</code>
+(<code>_pirls_out</code>, or <code>_pirls_out_ext</code> when theta is a coordinate). The JVP rule
+applies the implicit function theorem at the converged state instead of
+differentiating through the <code>while_loop</code>:</p>
+<ul>
+<li><code>d beta = -H^-1 (dS beta)</code> with <code>H = XtWX + S_lambda</code> (for joint theta, the
+  observed Hessian <code>X' d2D X + 2 S</code> and an extra <code>X' d2D/(deta dtheta) dtheta</code>
+  term);</li>
+<li><code>dXtWX</code> from the JVP of the weight function at the converged <code>eta</code>: Fisher
+  weights for canonical links, observed weights <code>0.5 d2D/deta2</code> otherwise and
+  for NB;</li>
+<li>the deviance change from the JVP of the deviance at <code>eta</code>.</li>
+</ul>
+<p><code>jax.grad</code> and <code>jax.hessian</code> of <code>_diff_score</code> then give the full first and
+second derivatives, the role mgcv's <code>gdi.c</code> and <code>Sl.ift</code> play in R. They are
+compiled once per static configuration at module level (<code>_jit_diff_grad</code>,
+<code>_jit_diff_hess</code>, <code>_jit_diff_grad_hess</code>). The penalty root and the scale enter
+<code>_pirls_out</code> as primals whose tangents are ignored: they change the solver and
+the convergence threshold, not the stationary point.</p>
+<p><strong>Step.</strong> <code>_safe_newton_step</code> (jitted) eigendecomposes the Hessian, flips
+negative eigenvalues, floors small ones at <code>max|eig| * eps^0.7</code> (<code>eps^0.5</code> for
+Gaussian), and caps the largest step component at 5. <code>_compute_uconv_ind</code>
+restricts the step to coordinates whose gradient or Hessian diagonal is not
+negligible, R's <code>uconv.ind</code>. Free log smoothing parameters are clamped to
+<code>[-40, 40]</code> (<code>lsp_max</code>), a safety bound that mgcv's <code>newton</code> does not have.</p>
+<p><strong>Step control.</strong></p>
+<ul>
+<li>Gaussian (<code>_step_halve_gaussian</code>, as <code>fast.REML.fit</code>): halve while the trial
+  is non-finite or strictly worse, at most 25 times or until four consecutive
+  insignificant changes; a step failure ends the optimization. Small changes are
+  compared with <code>_gaussian_score_change</code>, an exact difference of the criterion
+  that avoids subtracting two large scores near a flat optimum.</li>
+<li>Other families (<code>_step_halve</code>, as <code>newton</code>): accept immediately when the score
+  falls, the Hessian is positive definite and the quadratic model's relative
+  error is below 0.8; otherwise halve (at most 30 times), switching once to a
+  steepest-descent step after three halvings in the first ten iterations, with
+  the error threshold lowered to 0.4 after more than four halvings. The outcome is
+  <code>ACCEPTED</code>, <code>STUCK</code> or <code>FAILED</code> (<code>_StepOutcome</code>).</li>
+</ul>
+<p><strong>Convergence.</strong> <code>_check_convergence</code> uses <code>score_scale = 1 + |score|</code> for
+Gaussian and <code>|log scale| + |score|</code> otherwise. Gaussian converges when
+<code>max|grad| &lt;= tol * score_scale</code> and the score change is at most
+<code>tol * score_scale</code>; other families additionally need a positive-definite
+Hessian and test the projected gradient (zeroed at active <code>lsp_max</code> bounds)
+against <code>5 * tol * score_scale</code>. <code>tol</code> is <code>sqrt(eps)</code> for Gaussian and <code>1e-6</code>
+otherwise, mgcv's <code>newton.conv.tol</code>. A step failure while the gradient is
+already within tolerance counts as convergence (<code>_gradient_within_tol</code>); three
+consecutive <code>STUCK</code> outcomes also end the loop as converged.</p>
+<p><strong>What it reports.</strong> <code>_build_result</code> sets <code>convergence_info</code> to "full
+convergence", "step failed", "iteration limit", or "non-finite REML score or
+gradient" (the last is never converged). When the source inner loop did not
+converge at the final point it appends "; inner fit did not converge: ..." and
+marks the fit not converged. <code>factorization_fallbacks</code> re-checks every
+factorization of the reported fit; a fired jitter is appended as "; fallback
+jitter <level> in <factors>" and <code>GAM.fit</code> raises a <code>RuntimeWarning</code>. With
+multi-penalty blocks, <code>stable_rotation</code> carries the block maps needed to form
+<code>Vp</code> in Phase 3.</p>
+<p><strong>Parametric shortcut.</strong> With no penalties, <code>run</code> performs one inner fit, builds
+a criterion and returns <code>n_iter=0</code>, converged. NB theta is not estimated there:
+<code>_joint_theta</code> requires penalties.</p>
+<h3 id="starting-values">Starting values<a class="headerlink" href="#starting-values" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>initialize_beta_cpu</code>: <code>mu = family.initialize(y, wt)</code>, <code>eta = link(mu)</code>, then
+  a least-squares projection onto X. If the fitted start leaves the family's
+  domain, it projects the constant <code>link(weighted mean of y)</code> instead. It is
+  computed once in <code>FittingData.from_setup</code>; <code>NewtonOptimizer._initial_beta</code>
+  reuses it.</li>
+<li><code>r_null_coefficients</code>: the unweighted response mean through the link,
+  projected onto X with no offset; the recovery anchor of the source loops.</li>
+<li><code>log_lambda_init</code>: R's <code>initial.sp</code>, from <code>FittingData._initial_sp</code>.</li>
+<li><code>log_phi</code> start: one eager inner fit at <code>log_lambda_init</code>
+  (<code>_eager_inner_fit</code>), then <code>fletcher_scale</code> with the Fisher EDF.</li>
+<li><code>log_theta</code> start: the family's current theta (<code>get_theta</code>).</li>
+</ul>
+<h3 id="fixed-sp-fits">Fixed-sp fits<a class="headerlink" href="#fixed-sp-fits" title="Permanent link">&para;</a></h3>
+<p><code>_fit_fixed_sp</code> in <code>jaxgam/api.py</code> validates <code>sp</code> (one positive finite value per
+penalty) and then:</p>
+<ul>
+<li>with a Gaussian QR provider and more than 50 penalties: <code>optimize_gaussian_qr_lbfgs</code>
+  with <code>pin_lambda=True</code>;</li>
+<li>for an NB family with estimated theta, or any unknown-scale family:
+  <code>newton_optimize(..., pin_lambda=True)</code>. The smoothing parameters are held
+  bitwise and only <code>log_theta</code>/<code>log_phi</code> move, as mgcv's <code>gam.outer</code> keeps
+  theta and log scale free for a supplied <code>sp</code>. Such a fit can report
+  <code>n_iter &gt; 0</code>;</li>
+<li>otherwise one inner fit (<code>source_pirls</code> or <code>pirls_loop</code>, in <code>gam.reparam</code>
+  coordinates when there are multi-penalty blocks), then <code>REMLCriterion</code> for the
+  reported score. <code>convergence_info</code> is "fixed sp", or names the inner-loop
+  failure or a non-finite score, and <code>n_iter=0</code>.</li>
+</ul>
+<h3 id="negative-binomial-theta">Negative-binomial theta<a class="headerlink" href="#negative-binomial-theta" title="Permanent link">&para;</a></h3>
+<p><code>family="nb"</code> is a <code>NegativeBinomial</code> with estimated theta; <code>GAM.fit</code> deep-copies
+it so the registry instance is never changed. Under Newton, <code>log_theta</code> is a
+joint coordinate: <code>_diff_score</code> takes it as a traced primal, the saturated
+likelihood uses <code>saturated_loglik_theta</code>, and the custom JVP adds the theta
+cross-terms. <code>_build_result</code> writes the final theta into the copied family with
+<code>put_theta</code> and reports it as <code>NewtonResult.theta</code>; a fixed-theta NB reports
+<code>theta=None</code>. Under EFS, theta is updated inside the coefficient loop instead
+(below).</p>
+<h3 id="the-dense-extended-fellner-schall-path">The dense extended Fellner-Schall path<a class="headerlink" href="#the-dense-extended-fellner-schall-path" title="Permanent link">&para;</a></h3>
+<p><code>optimizer="efs"</code> with estimated smoothing parameters and at least one penalty
+runs the host controller in <code>jaxgam/execution/efs.py</code>, a port of <code>efsudr</code>
+(<code>R/gam.fit4.r</code>). Supported: Poisson and Binomial, NB with log, identity or sqrt
+link (theta fixed or estimated), Gaussian and Gamma (<code>_known_scale_family_supported</code>,
+<code>_unknown_scale_family_supported</code>). The model must be identifiable
+(<code>rank_deficit == 0</code>) and prior weights must lie in <code>[1e-10, 1e10]</code> (zero
+weights are allowed only for Gaussian log and inverse links); violations raise
+<code>ValueError</code>.</p>
+<p><strong>Start.</strong> <code>efs_initial_log_lambda</code> ports mgcv's <code>initial.spg</code>; the controller
+adds efsudr's <code>+2.5</code> once. For unknown scale, <code>efs_initial_log_scale</code> gives the
+incoming scale <code>null.scale / 10</code> from the null deviance.</p>
+<p><strong>One fit.</strong> <code>_fit_state</code> refits the coefficients at the requested
+<code>log_lambda</code> with the inner loop matching mgcv's EFS call:
+<code>efs_theta_pirls_loop</code> for NB (with conditional theta for estimated theta),
+<code>efs_regular_pirls_loop</code> for non-canonical regular links, <code>pirls_loop</code> for
+canonical ones. Except after the <code>gam.fit3</code> loop, which already forms plain
+Cholesky factors, it then replaces the Fisher factor by <code>efs_fisher_factor</code>, an
+unjittered Cholesky of <code>X'W_F X + S_lambda</code> (a failure invalidates the fit
+instead of being repaired). It computes <code>EFSStatistics</code> with <code>efs_statistics</code>
+(d: derivative of <code>log|S+|</code>; t: <code>tr(H_F^-1 S_j)</code> per penalty from triangular
+solves against local roots; q: <code>beta' S_j beta</code>), the scalar REML score at the
+incoming scale <code>score_phi</code>, and the Fletcher scale <code>update_phi</code> of the new fit.
+The result is an immutable <code>EFSFitState</code>.</p>
+<p><strong>The update.</strong> <code>efs_raw_update</code> reproduces efsudr's arithmetic:
+<code>numerator = max(0, exp(-rho) d - t)</code>, <code>ratio = phi * numerator / max(0, q)</code>,
+ratio 1 when both are zero, <code>1e6</code> when not finite, and
+<code>trial = min(rho + log(ratio) * multiplier, log_lambda_max)</code>.</p>
+<pre class="mermaid"><code>flowchart TD
+    A["accepted EFSFitState"] --&gt; B["efs_raw_update&lt;br/&gt;ratio and trial log_lambda"]
+    B --&gt; C{"finite_positive?"}
+    C -- no --&gt; X1["stop: invalid_update"]
+    C -- yes --&gt; D["provider refit at trial&lt;br/&gt;warm start from accepted beta"]
+    D --&gt; E{"candidate valid?"}
+    E -- no --&gt; X2["stop: failure label"]
+    E -- yes --&gt; F{"candidate score &lt;= accepted score?"}
+    F -- yes --&gt; G{"largest step &lt; 0.05?"}
+    G -- no --&gt; K["accept candidate"]
+    G -- yes --&gt; H["refit with multiplier x 2"]
+    H --&gt; I{"extension valid and better?"}
+    I -- yes --&gt; J["accept extension, double multiplier"]
+    I -- no --&gt; K
+    F -- no --&gt; L["halve multiplier while above 1, refit"]
+    L --&gt; M["accept last candidate, multiplier at least 1"]
+    K --&gt; N["append score to history"]
+    J --&gt; N
+    M --&gt; N
+    N --&gt; O{"score_window or deviance_change?"}
+    O -- yes --&gt; Y["stop: converged"]
+    O -- no --&gt; A</code></pre>
+<p>Read from the top: every iteration proposes one trial, may try one extension or
+several contractions, and always accepts a valid state before testing the stop
+rules. <code>score_window</code> needs iteration &gt; 3, a largest proposed step below 0.05,
+and the last four accepted scores differing by less than <code>score_tolerance</code>;
+<code>deviance_change</code> needs <code>|dev change| &lt; 100 * pirls_tolerance * |dev|</code>. Every
+refit starts from the old accepted coefficients (and theta), never from a
+rejected trial. Reaching <code>outer_limit</code> reports "iteration limit reached", not
+converged, even if a stop rule first held on that iteration.</p>
+<p><strong>Scale.</strong> Unknown scale is not a coordinate. <code>_run_efs_unknown_scale</code> scores
+each fit at the incoming <code>score_phi</code> and feeds the fit's Fletcher estimate
+(<code>update_phi</code>) into the next ratio. After a winning extension the next score uses
+the candidate's scale while the next ratio uses the extension's, as R does; the
+field <code>carried_phi</code> records this. The reported <code>scale</code> is the accepted fit's
+Fletcher estimate, while <code>score</code> was evaluated at the incoming scale.</p>
+<p><strong>Theta.</strong> For estimated-theta NB, <code>efs_theta_pirls_loop</code> runs the conditional
+theta Newton of <code>jaxgam/fitting/efs_theta.py</code> inside each coefficient iteration,
+as <code>gam.fit4</code> does under EFS. Theta lives in <code>EFSFitState.log_theta</code>, never in
+the family object during the loop; <code>GAM.fit</code> writes the selected theta with
+<code>put_theta</code> afterwards. A fixed-theta NB reports its fixed value as <code>theta</code>.</p>
+<p><strong>Provider interface.</strong> The controller functions <code>_run_efs_known_scale</code> and
+<code>_run_efs_unknown_scale</code> never touch data. They call an <code>EFSFitProvider</code> (a
+callable taking an <code>EFSFitRequest</code> and returning an <code>EFSFitState</code>) with an
+<code>EFSControllerContext</code>. <code>_dense_fit_provider</code> wraps <code>_fit_state</code> for the dense
+route; the streamed route passes its own providers to the same two functions
+(see <a href="../fitting_streamed/">the streamed fit</a>).</p>
+<p><strong>Diagnostics.</strong> <code>_EFSDiagnosticsAccumulator</code> counts on the host and <code>finish</code>
+returns <code>EFSOptimizerDiagnostics</code> (<code>jaxgam/fitting/state.py</code>), exposed as
+<code>result.optimizer_diagnostics</code>: <code>reference_profile</code>
+("mgcv-1.9-3-efsudr-dense"), <code>trace_method</code>, <code>step_policy</code>, <code>stop_reason</code>,
+outer, inner and theta iteration counts, the accepted score history (and score
+<code>phi</code> history for unknown scale), the multiplier, the last update residual, the
+largest proposed and accepted moves, counts of numerator clamps, ratio
+replacements and <code>log_lambda_max</code> caps, and flags for invalid fits and
+stabilized solves.</p>
+<h3 id="the-gaussian-qr-route">The Gaussian QR route<a class="headerlink" href="#the-gaussian-qr-route" title="Permanent link">&para;</a></h3>
+<p><code>FitControl(gaussian_compression=True)</code> asks for a reduction that freezes the
+weighted data once and evaluates every REML trial in coefficient space.</p>
+<pre class="mermaid"><code>flowchart TD
+    A["GAM.fit, gaussian_compression=True"] --&gt; B{"optimizer efs and sp is None?"}
+    B -- yes --&gt; F1["record fallback reason&lt;br/&gt;ordinary dense fit"]
+    B -- no --&gt; C["build_dense_gaussian_qr_provider"]
+    C --&gt; D{"exact Gaussian, identity link?"}
+    D -- no --&gt; F2["GaussianQRIneligible"]
+    D -- yes --&gt; E{"at least one penalty?"}
+    E -- no --&gt; F2
+    E -- yes --&gt; G{"rank_deficit == 0?"}
+    G -- no --&gt; F2
+    G -- yes --&gt; H{"finite data, weights in 1e-10 to 1e10?"}
+    H -- no --&gt; F2
+    H -- yes --&gt; I["prepare_frozen_gaussian_qr&lt;br/&gt;one host weighted QR"]
+    F2 --&gt; F3["execution_fallback_reason = message&lt;br/&gt;ordinary dense fit"]
+    I --&gt; J{"sp supplied?"}
+    J -- yes --&gt; K["_fit_fixed_sp with provider&lt;br/&gt;log_lambda pinned, log_phi free"]
+    J -- no --&gt; L{"use_gaussian_qr_lbfgs: more than 50 penalties?"}
+    L -- no --&gt; M["newton_optimize with score_provider"]
+    L -- yes --&gt; N["optimize_gaussian_qr_lbfgs"]
+    M --&gt; O["provider.finalize: one pass over X"]
+    N --&gt; O
+    K --&gt; O
+    O --&gt; P["execution_route = gaussian_qr"]</code></pre>
+<p>Read from the top: every "no" on the eligibility chain raises
+<code>GaussianQRIneligible</code>, which <code>GAM.fit</code> catches; the ordinary dense fit then
+runs with <code>execution_route="dense"</code> and the message in
+<code>execution_fallback_reason</code>. Other errors from preparation are not caught.</p>
+<p><strong>Frozen statistics.</strong> <code>prepare_frozen_gaussian_qr</code> (<code>jaxgam/execution/gaussian_qr/preparation.py</code>,
+modelled on <code>qr_update</code> in mgcv's <code>R/bam.r</code> and <code>Sl.fit</code> in <code>R/fast-REML.r</code>)
+QR-reduces <code>[sqrt(w) X, sqrt(w)(y - offset)]</code> with <code>reduce_positive_qr</code>,
+re-expresses the factor in the coordinate map's global coordinates (on the dense
+route, the public coefficients) with a second small QR, and stores a <code>FrozenGaussianQR</code>: <code>R</code>, <code>qtz</code>, the residual tail, <code>n_obs</code>,
+<code>n_positive_weights</code> and the sum of log positive weights; compact penalty roots,
+coordinate bases and the penalty range basis sit beside it in
+<code>FrozenGaussianQRPreparation</code>. The dense design is still built first, because
+<code>FittingData.from_setup</code> runs before the provider.</p>
+<p><strong>Scoring.</strong> <code>DenseGaussianQROuterProvider</code> implements the four-method
+<code>OuterScoreProvider</code> protocol of <code>jaxgam/fitting/newton.py</code>:
+<code>initial_parameters</code> (adds <code>log_phi</code> from a unit-scale evaluation), <code>evaluate</code>
+(<code>jit_gaussian_qr_reml_score</code> on coefficient-sized arrays only), <code>differentiate</code>
+(<code>jit_gaussian_qr_reml_value_and_grad</code> and <code>jit_gaussian_qr_reml_hessian</code>, JAX
+autodiff through the QR-based score, with no custom JVP), and <code>finalize</code>,
+the one call that touches X to build a <code>PIRLSResult</code> for Phase 3. With a
+provider, <code>NewtonOptimizer</code> skips <code>_diff_score</code> and the stable-system work.</p>
+<p><strong>Optimizer choice.</strong> Up to 50 penalties (<code>GAUSSIAN_LBFGS_PENALTY_THRESHOLD</code>),
+the same <code>NewtonOptimizer</code> runs (<code>lambda_strategy="newton_reml"</code>). Above 50,
+<code>optimize_gaussian_qr_lbfgs</code> runs SciPy L-BFGS-B on exact gradients with no
+outer Hessian (<code>lambda_strategy="lbfgs_reml"</code>): <code>maxcor=10</code>, <code>gtol=1e-10</code>,
+<code>ftol=0</code>, log smoothing parameters bounded to <code>[-40, 40]</code>, log scale unbounded.
+It converges when the projected-gradient max-norm is at most
+<code>gtol (1 + |score|)</code>; after a line-search stop it may profile the log scale
+exactly (<code>phi = penalized RSS / (n_positive - Mp)</code>) or apply mgcv's relative
+test (<code>mgcv_relative_convergence</code>) before reporting.</p>
+<p><strong>Known limit with many penalties.</strong> The L-BFGS-B branch is tested at one size,
+51 penalties (<code>tests/test_execution/test_gaussian_optimizer.py</code>), and its
+agreement with Newton is asserted at MODERATE tolerance, not STRICT. On that
+fixture both optimizers converge and the scores agree to about <code>8e-8</code> relative,
+but the REML surface is flat and L-BFGS-B stops with <code>log10(sp)</code> near 10 where
+dense Newton stops near 6.7. Expect the same fitted model and different
+smoothing parameters at such optima. Its behaviour above 51 penalties is not
+covered by tests.</p>
+<h2 id="key-types">Key types<a class="headerlink" href="#key-types" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>classDiagram
+    class FittingData {
+        +X Array
+        +y Array
+        +wt Array
+        +offset Array
+        +penalty_structure JaxPenaltyStructure
+        +log_lambda_init Array
+        +family ExponentialFamily
+        +beta_init Array
+        +null_beta Array
+        +penalty_roots JaxPenaltyRoots
+        +rank_deficit int
+        +count_prefix_plan CountPrefixPlan
+        +from_setup(setup, family, device) FittingData
+        +S_lambda(log_lambda) Array
+        +penalty_root(log_lambda) Array
+        +uses_source_loop bool
+    }
+    class PIRLSResult {
+        +coefficients Array
+        +mu Array
+        +eta Array
+        +deviance Array
+        +penalized_deviance Array
+        +n_iter Array
+        +converged Array
+        +XtWX Array
+        +L Array
+        +working_weights Array
+        +XtWX_fisher Array
+        +L_fisher Array
+        +factor_regularization Array
+        +inner_status Array
+        +fisher_edf Array
+    }
+    class SourcePIRLSOutcome {
+        +pirls_result PIRLSResult
+        +status Array
+        +source str
+    }
+    class NewtonOptimizer {
+        +run() NewtonResult
+        -_fit_and_score(params, beta_init)
+        -_check_convergence(criterion, params, score, score_old, is_pdef, pirls_result)
+        -_step_halve(log_lambda, step, score, beta_warm, score_scale, grad, hess, outer_iter, is_pdef)
+        -_step_halve_gaussian(log_lambda, step, score, beta_warm, score_scale)
+    }
+    class NewtonResult {
+        +log_lambda Array
+        +smoothing_params Array
+        +converged bool
+        +n_iter int
+        +score Array
+        +gradient Array
+        +edf Array
+        +scale Array
+        +pirls_result PIRLSResult
+        +convergence_info str
+        +theta float
+        +factor_regularization float
+        +stable_rotation tuple
+    }
+    class REMLCriterion {
+        +edf Array
+        +scale Array
+        +score(log_lambda) Array
+        +grad_hess(log_lambda) tuple
+    }
+    class JointREMLCriterion {
+        +edf Array
+        +scale Array
+        +score(params) Array
+    }
+    class StableSystem {
+        +rotation JaxCoefficientRotation
+        +penalty_structure JaxPenaltyStructure
+        +penalty_roots JaxPenaltyRoots
+        +log_det_terms tuple
+        +host_rotation tuple
+    }
+    class OuterScoreProvider {
+        &lt;&lt;protocol&gt;&gt;
+        +initial_parameters(log_lambda) Array
+        +evaluate(params) tuple
+        +differentiate(params, state) tuple
+        +finalize(params, state) PIRLSResult
+    }
+    NewtonOptimizer --&gt; FittingData : reads
+    NewtonOptimizer ..&gt; StableSystem : builds per evaluation
+    NewtonOptimizer ..&gt; REMLCriterion : builds at accepted points
+    NewtonOptimizer ..&gt; JointREMLCriterion : unknown scale
+    NewtonOptimizer ..&gt; OuterScoreProvider : optional
+    NewtonOptimizer ..&gt; NewtonResult : returns
+    SourcePIRLSOutcome *-- PIRLSResult
+    NewtonResult *-- PIRLSResult</code></pre>
+<p><code>FittingData</code> is a frozen dataclass and is read-only after construction.
+<code>PIRLSResult</code> and <code>SourcePIRLSOutcome</code> are JAX pytrees, so they can be returned
+from jitted functions; <code>NewtonResult</code> is a plain host dataclass.
+<code>OuterScoreProvider</code> is the seam the Gaussian QR providers implement.</p>
+<pre class="mermaid"><code>classDiagram
+    class EFSFitProvider {
+        &lt;&lt;protocol&gt;&gt;
+        +__call__(request) EFSFitState
+    }
+    class EFSFitRequest {
+        +log_lambda Array
+        +beta_start Array
+        +score_phi Array
+        +log_theta_start Array
+        +beta_old_init Array
+        +start_is_absent bool
+        +regular_start_present bool
+    }
+    class EFSFitState {
+        +log_lambda Array
+        +pirls_result PIRLSResult
+        +score Array
+        +edf Array
+        +statistics EFSStatistics
+        +valid bool
+        +inner_converged bool
+        +score_phi Array
+        +update_phi Array
+        +carried_phi Array
+        +log_theta Array
+        +source_scans int
+    }
+    class EFSStatistics {
+        +determinant_derivative Array
+        +fisher_trace Array
+        +quadratic Array
+        +determinant_valid Array
+        +input_valid Array
+    }
+    class EFSRawUpdate {
+        +numerator Array
+        +ratio Array
+        +log_smoothing_trial Array
+        +finite_positive Array
+    }
+    class EFSControllerContext {
+        +estimated_theta bool
+        +fixed_theta float
+        +reference_profile str
+        +trace_method str
+        +source_fingerprint str
+    }
+    class EFSResult {
+        +log_lambda Array
+        +converged bool
+        +n_iter int
+        +score Array
+        +scale Array
+        +pirls_result PIRLSResult
+        +convergence_info str
+        +theta float
+        +optimizer_diagnostics EFSOptimizerDiagnostics
+    }
+    class EFSControl {
+        +outer_limit int
+        +log_lambda_max float
+        +score_tolerance float
+        +pirls_tolerance float
+        +pirls_max_iter int
+        +history_limit int
+    }
+    EFSFitProvider ..&gt; EFSFitRequest : consumes
+    EFSFitProvider ..&gt; EFSFitState : returns
+    EFSFitState *-- EFSStatistics
+    EFSRawUpdate ..&gt; EFSStatistics : computed from
+    EFSResult ..&gt; EFSControllerContext : labels from
+    EFSResult ..&gt; EFSControl : limits from</code></pre>
+<p><code>EFSControl</code> is the public <code>FitControl.efs</code> field (<code>jaxgam/control.py</code>): 200
+outer iterations, <code>log_lambda_max=15.0</code>, <code>score_tolerance=0.1</code>,
+<code>pirls_tolerance=1e-7</code>, <code>pirls_max_iter=200</code>, <code>history_limit=200</code> by default.</p>
+<pre class="mermaid"><code>classDiagram
+    class OuterScoreProvider {
+        &lt;&lt;protocol&gt;&gt;
+        +evaluate(params) tuple
+        +finalize(params, state) PIRLSResult
+    }
+    class DenseGaussianQROuterProvider {
+        +finalize_calls int
+        +initial_parameters(log_lambda) Array
+        +evaluate(params) tuple
+        +differentiate(params, state, second_order) tuple
+        +finalize(params, state) PIRLSResult
+    }
+    class StreamGaussianQROuterProvider {
+        +source_scans int
+        +batches_scanned int
+        +to_stream_state(result) StreamFitState
+    }
+    class FrozenGaussianQRPreparation {
+        +compression FrozenGaussianQR
+        +penalty_roots tuple
+        +coordinate_basis ndarray
+        +public_basis ndarray
+        +penalty_range_basis ndarray
+        +root_sp_indices tuple
+        +penalty_nullity int
+    }
+    class FrozenGaussianQR {
+        +R Array
+        +qtz Array
+        +residual_tail Array
+        +n_obs Array
+        +n_positive_weights Array
+        +sum_log_positive_weights Array
+    }
+    class GaussianQROuterState {
+        +score_state GaussianQRScore
+        +coefficients Array
+        +fisher_factor Array
+        +xtwx Array
+        +edf Array
+        +scale Array
+    }
+    class GaussianQRScore {
+        +score Array
+        +coefficients Array
+        +residual_sum_squares Array
+        +penalized_residual_sum_squares Array
+        +log_det_hessian Array
+        +log_det_penalty Array
+        +scale Array
+    }
+    OuterScoreProvider &lt;|.. DenseGaussianQROuterProvider
+    DenseGaussianQROuterProvider &lt;|-- StreamGaussianQROuterProvider
+    DenseGaussianQROuterProvider *-- FrozenGaussianQRPreparation
+    FrozenGaussianQRPreparation *-- FrozenGaussianQR
+    DenseGaussianQROuterProvider ..&gt; GaussianQROuterState : evaluate returns
+    GaussianQROuterState *-- GaussianQRScore</code></pre>
+<p>The streamed subclass replaces the single dense QR by one source replay; it is
+described on <a href="../fitting_streamed/">the streamed page</a>.</p>
+<h2 id="rules-and-invariants">Rules and invariants<a class="headerlink" href="#rules-and-invariants" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Phase boundary.</strong> Everything numerical in <code>FittingData.from_setup</code> happens
+  in NumPy before <code>to_jax</code>; after that, the fit sees only device arrays. The
+  exceptions on the host are deliberate and documented in their modules: the
+  Newton and EFS controllers, <code>stable_system</code> (<code>get_stableS</code> branches on the
+  smoothing parameters), and the Gaussian QR preparation.</li>
+<li><strong>Inner loops are jit-compatible.</strong> <code>pirls_loop</code>, <code>efs_regular_pirls_loop</code>,
+  the NB loop and <code>source_pirls</code> contain no Python branching on array values;
+  Python <code>if</code> is used only on static arguments (<code>family</code>, flags). Enforced by
+  <code>tests/test_fitting/test_pirls.py</code> (<code>TestJITCompilation</code>) and
+  <code>tests/test_fitting/test_dense_source_parity.py</code>
+  (<code>test_source_inner_loops_compile_and_converge_under_jit</code>,
+  <code>test_source_loops_hold_the_hard_gates_under_jit</code>).</li>
+<li><strong><code>family</code> is a static JIT argument.</strong> Mutable family state read inside a
+  jitted function is baked into the executable, so theta is passed as dynamic
+  <code>log_theta</code> (see <code>pirls_loop</code>'s docstring). Do not read <code>get_theta()</code> inside a
+  jitted body.</li>
+<li><strong>Failures are never convergence.</strong> A non-converged source loop, a non-finite
+  score or gradient, or a failed EFS refit is reported as not converged
+  (<code>tests/test_fitting/test_newton.py</code> <code>TestPinnedSmoothingParameters</code>,
+  <code>tests/test_execution/test_efs.py</code>
+  <code>test_production_controller_named_stops_and_iteration_200</code>).</li>
+<li><strong>Jitter is visible.</strong> Any fallback regularization appears in
+  <code>convergence_info</code> and raises a <code>RuntimeWarning</code>
+  (<code>test_every_fallback_jitter_is_visible_in_the_result</code>,
+  <code>test_dense_fit_warns_only_when_the_fallback_regularizes</code>).</li>
+<li><strong>Derivatives are checked.</strong> The custom JVP gradient and Hessian are compared
+  with finite differences in <code>tests/test_fitting/test_newton.py</code> (<code>TestCustomJVP</code>)
+  and <code>tests/test_fitting/test_nb_custom_jvp.py</code>; the host <code>get_stableS</code> terms in
+  <code>tests/test_fitting/test_stable_log_det.py</code>.</li>
+<li><strong>Hard gates.</strong> Outer Hessian symmetry and positive semi-definiteness and REML
+  monotonicity are in <code>tests/test_fitting/test_newton.py</code> (<code>TestInvariants</code>,
+  <code>test_reml_monotonicity</code>); the full set of hard-gate invariants over the
+  validation matrix is <code>TestHardGateInvariants</code> in
+  <code>tests/test_validation_matrix.py</code>.</li>
+<li><strong>EFS refits start from the accepted state.</strong> Extension and contraction trials
+  use the old accepted coefficients, theta and scale
+  (<code>test_production_controller_extension_and_contraction_keep_old_warm_start</code>,
+  <code>test_unknown_scale_extension_uses_old_accepted_phi</code>).</li>
+<li><strong>Gaussian QR threshold.</strong> <code>use_gaussian_qr_lbfgs(50)</code> is false and
+  <code>use_gaussian_qr_lbfgs(51)</code> true
+  (<code>test_lbfgs_selection_threshold_is_strictly_above_fifty</code>); the scoring arrays
+  contain no observation-sized array
+  (<code>test_provider_score_and_derivative_jaxprs_have_no_observation_arrays</code>).</li>
+</ul>
+<h2 id="pitfalls">Pitfalls<a class="headerlink" href="#pitfalls" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Rank-deficient models take a different inner loop.</strong> With <code>rank_deficit &gt; 0</code>
+  there is no <code>null_beta</code> path and no QR roots, so the ordinary <code>pirls_loop</code>
+  and Cholesky solve run, and <code>log|H|</code> drops the smallest eigenvalues. Dense
+  EFS and Gaussian QR reject such models.</li>
+<li><strong><code>log_phi</code> and <code>score</code> under EFS.</strong> The EFS <code>score</code> is the criterion at the
+  incoming scale, not at the reported Fletcher <code>scale</code>. Do not "fix" this by
+  rescoring; <code>EFSFitState</code> keeps <code>score_phi</code>, <code>update_phi</code> and <code>carried_phi</code>
+  separate on purpose.</li>
+<li><strong>A supplied <code>sp</code> does not always mean one PIRLS fit.</strong> Gaussian, Gamma and
+  estimated-theta NB still run Newton with the smoothing parameters pinned.</li>
+<li><strong>Parametric NB models keep their starting theta</strong> under Newton, because theta
+  is a coordinate only when there are penalties.</li>
+<li><strong>The PIRLS tolerance is not the source epsilon.</strong> The Newton optimizer's
+  <code>_pirls_tol</code> reaches only the ordinary loop; the source loops use
+  <code>SOURCE_EPSILON</code> (<code>test_source_loop_epsilon_is_an_explicit_parameter</code>).</li>
+<li><strong>Flat optima.</strong> The REML surface is often flat near the optimum, so smoothing
+  parameters can differ between equally valid fits (see the Gaussian QR limit
+  above). Compare deviance, coefficients and score, not <code>sp</code>.</li>
+<li><strong>The criterion classes are not the optimizer's derivative.</strong>
+  <code>REMLCriterion.grad_hess</code> treats the inner-fit outputs as constants;
+  <code>_diff_score</code> is what the Newton loop differentiates.</li>
+</ul>
+<h2 id="where-to-change-things">Where to change things<a class="headerlink" href="#where-to-change-things" title="Permanent link">&para;</a></h2>
+<ul>
+<li>To change how an inner fit iterates or recovers for a standard family, edit
+  <code>_efs_regular_pirls_loop_jit</code> in <code>jaxgam/fitting/efs_regular_pirls.py</code>; for NB,
+  <code>_efs_theta_pirls_loop_jit</code> in <code>jaxgam/fitting/pirls.py</code>; for rank-deficient
+  models, <code>_pirls_loop_jit</code>.</li>
+<li>To change which inner loop a family uses, edit <code>uses_source_loop</code> in
+  <code>jaxgam/fitting/source_pirls.py</code> and <code>_inner_fit</code> in <code>jaxgam/fitting/newton.py</code>.</li>
+<li>To change a REML term, edit <code>_criterion_core</code> or
+  <code>_criterion_log_determinants</code> in <code>jaxgam/fitting/reml.py</code>, then check
+  <code>_diff_score</code>, which calls the same core.</li>
+<li>To change outer step control or convergence, edit <code>_step_halve</code>,
+  <code>_step_halve_gaussian</code>, <code>_check_convergence</code> and <code>_build_result</code> in
+  <code>NewtonOptimizer</code>.</li>
+<li>To change how derivatives pass through the inner fit, edit the <code>defjvp</code> rules
+  inside <code>_diff_score</code>.</li>
+<li>To add an EFS family, extend <code>_known_scale_family_supported</code> or
+  <code>_unknown_scale_family_supported</code> and the inner-loop choice in <code>_fit_state</code>
+  (<code>jaxgam/execution/efs.py</code>); the controller itself does not change.</li>
+<li>To change the Gaussian QR eligibility or threshold, edit
+  <code>build_dense_gaussian_qr_provider</code> and <code>use_gaussian_qr_lbfgs</code>
+  (<code>jaxgam/execution/gaussian_qr/optimizer.py</code>) and
+  <code>GAUSSIAN_LBFGS_PENALTY_THRESHOLD</code> (<code>jaxgam/execution/gaussian_qr/preparation.py</code>).</li>
+</ul>
+<p>A proposed refactor would merge the several inner loops and outer controllers
+across routes; see <a href="../../unify_fit/design/">the unified fitting design</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

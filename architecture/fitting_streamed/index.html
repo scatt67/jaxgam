@@ -1,0 +1,2681 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../fitting_dense/">
+      
+      
+        <link rel="next" href="../fitting_discrete/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>The streamed fit - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#phase-2-the-streamed-fit" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              The streamed fit
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#host-drivers-and-batch-kernels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host drivers and batch kernels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#entry-and-route-choice" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entry and route choice
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scanning-lineage-and-fingerprints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scanning, lineage and fingerprints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed-smoothing-pirls-fit_streamed_pirls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed-smoothing PIRLS: fit_streamed_pirls
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed-smoothing-pirls-the-regular-and-nb-controllers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed-smoothing PIRLS: the regular and NB controllers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-qr-reductions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The QR reductions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exact-streamed-reml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exact streamed REML
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#streamed-nb-theta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streamed NB theta
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#streamed-fellner-schall" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streamed Fellner-Schall
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#streamed-gaussian-qr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streamed Gaussian QR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#observation-independent-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observation-independent state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scan-and-batch-accounting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scan and batch accounting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#memory-preflights-and-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory preflights and errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#host-drivers-and-batch-kernels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host drivers and batch kernels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#entry-and-route-choice" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entry and route choice
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scanning-lineage-and-fingerprints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scanning, lineage and fingerprints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed-smoothing-pirls-fit_streamed_pirls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed-smoothing PIRLS: fit_streamed_pirls
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed-smoothing-pirls-the-regular-and-nb-controllers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed-smoothing PIRLS: the regular and NB controllers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-qr-reductions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The QR reductions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exact-streamed-reml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exact streamed REML
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#streamed-nb-theta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streamed NB theta
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#streamed-fellner-schall" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streamed Fellner-Schall
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#streamed-gaussian-qr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streamed Gaussian QR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#observation-independent-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observation-independent state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scan-and-batch-accounting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scan and batch accounting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#memory-preflights-and-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory preflights and errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="phase-2-the-streamed-fit">Phase 2: the streamed fit<a class="headerlink" href="#phase-2-the-streamed-fit" title="Permanent link">&para;</a></h1>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>This page covers <code>FitControl(execution="stream")</code>: fitting from a replayable
+<code>RowSource</code> without ever holding the model matrix or any row-aligned array. It
+describes the host drivers in <code>jaxgam/execution/</code> and the per-batch JAX kernels
+in <code>jaxgam/fitting/</code> for fixed-<code>sp</code> PIRLS, the positive and signed QR solvers,
+exact streamed REML with its L-BFGS-B optimizer, streamed negative-binomial
+theta, streamed Fellner-Schall, and the scan accounting and memory checks
+around them. Streamed setup (<code>prepare_model</code>) is on <a href="../setup/">the setup page</a>
+and the sources themselves on <a href="../data_sources/">the data sources page</a>.</p>
+<h2 id="where-the-code-is">Where the code is<a class="headerlink" href="#where-the-code-is" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/api.py</code></td>
+<td><code>GAM._fit_stream</code>, <code>GAM._fit_stream_routes</code> and the module helpers <code>_fit_stream_fixed_regular</code>, <code>_fit_stream_fixed_nb</code>, <code>_fit_stream_exact_reml</code>, <code>_fit_stream_gaussian_qr</code>, <code>_fit_stream_parametric_bypass</code>, <code>_check_stream_fixed_family</code>, <code>_check_stream_efs_family</code>, <code>_preflight_stream_workspace</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/stream/pirls.py</code></td>
+<td><code>fit_streamed_pirls</code>: fixed-sp PIRLS for families whose Fisher and observed information agree, by summed normal equations (Cholesky) or positive QR; <code>StreamPIRLSControl</code>; the shared scanners <code>_source_batches</code> and <code>_fitting_batches</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/stream/regular.py</code></td>
+<td><code>fit_regular_streamed_pirls</code>: the <code>gam.fit3</code> port for Gaussian, Binomial, Poisson and Gamma with signed (observed-information) QR; <code>regular_working_scan</code>; <code>preflight_regular_stream_workspace</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/stream/nb.py</code></td>
+<td><code>fit_nb_streamed_pirls</code>: the <code>gam.fit4</code> port for NB, optionally estimating theta inside the loop.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/qr.py</code></td>
+<td>CPU packed-reflector QR reducer: <code>PositiveQRState</code>, <code>qr_update</code>, <code>reduce_positive_qr</code>, <code>solve_augmented_qr</code>, <code>structural_rank</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/stream/signed_qr.py</code></td>
+<td><code>SignedQRState</code>, <code>signed_qr_update</code>, <code>solve_signed_qr</code>: the negative-weight correction of mgcv's <code>pls_fit1</code> (<code>src/gdi.c</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/null_coefficient.py</code></td>
+<td><code>project_null_coefficients</code>: mgcv's <code>get.null.coef</code> projection from QR statistics.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/stream/family_initialization.py</code></td>
+<td><code>select_initial_working_state_cpu</code>: R-style start with up to 20 shrinks toward the null predictor, by replay.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/stream/reml.py</code></td>
+<td>Exact streamed REML: <code>evaluate_regular_stream_reml</code>, <code>optimize_regular_stream_reml</code>, the common L-BFGS-B driver <code>_run_parameterized_stream_reml</code>, <code>StreamREMLControl</code>, the mgcv <code>newton()</code> completions and relative test.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/stream/nb_reml.py</code></td>
+<td><code>evaluate_nb_stream_reml</code>, <code>optimize_nb_stream_reml</code>: the same for NB with theta as a joint coordinate.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/stream/nb_theta.py</code></td>
+<td><code>conditional_theta_stream</code>: conditional theta Newton by replay, used inside streamed NB EFS fits.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/stream/efs.py</code></td>
+<td><code>fit_streamed_efs</code>: composes startup, provider and the shared EFS controller.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/stream/efs_provider.py</code></td>
+<td><code>RegularStreamEFSProvider</code>, <code>NBStreamEFSProvider</code>: <code>EFSFitProvider</code> implementations over a source.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/stream/efs_start.py</code></td>
+<td><code>prepare_stream_efs_start</code>, <code>prepare_stream_reml_start</code>: initial smoothing parameters and null coefficients by two replays.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/stream/kernels.py</code></td>
+<td>Per-batch jitted reductions for <code>fit_streamed_pirls</code>: <code>accumulate_working_statistics</code>, <code>positive_qr_working_rows</code>, <code>trial_deviance</code>, <code>saturated_loglik_reduction</code>, <code>solve_penalized_system</code>, <code>coefficient_stationarity</code>, <code>accepts_trial</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/stream/regular.py</code></td>
+<td><code>regular_trial_deviance</code>: the trial kernel of the regular controller.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/stream/nb_kernels.py</code></td>
+<td>NB batch working factors: <code>nb_working_batch</code>, <code>nb_positive_observed_retry</code>, <code>nb_working_statistics</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/family_execution.py</code></td>
+<td>Family-generic batch primitives and the lineage objects <code>FamilyExecutionContext</code>, <code>FamilyExecutionLineage</code>, <code>FamilyExecutionParameters</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/qr.py</code></td>
+<td>Jitted triangular actions on QR factors (<code>qr_root_inverse</code>, <code>qr_root_transpose_inverse</code>, <code>qr_hessian_inverse</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/signed_qr.py</code></td>
+<td><code>SignedQRCoefficientFactor</code>: actions and log-determinant of a signed factor.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/stream/reml.py</code></td>
+<td>Batch VJP kernels for the exact REML gradient: <code>regular_batch_statistics_vjp</code>, <code>regular_score_cotangents</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/stream/nb_reml.py</code></td>
+<td><code>nb_batch_statistics_vjp</code>: the NB batch derivative kernel.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/stream/nb_theta.py</code></td>
+<td><code>nb_conditional_theta_batch</code>, <code>nb_conditional_theta_step</code>: batch terms of the conditional theta objective.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/state.py</code></td>
+<td>Observation-independent fit state: <code>StreamFitState</code>, the coefficient-factor classes, <code>EFSOptimizerDiagnostics</code>.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<h3 id="host-drivers-and-batch-kernels">Host drivers and batch kernels<a class="headerlink" href="#host-drivers-and-batch-kernels" title="Permanent link">&para;</a></h3>
+<p>Every streamed driver is a host Python loop over source scans. Inside a scan it
+evaluates one batch's design with <code>PreparedModel.evaluate_fitting_batch</code>, moves
+the batch with <code>jax.device_put</code>, calls one jitted kernel that returns only
+coefficient-sized statistics (<code>p</code> or <code>p x p</code>), adds them to running totals and
+calls <code>jax.block_until_ready</code> so at most one batch is in flight. The kernels in
+<code>jaxgam/fitting/</code> do no file iteration; the drivers in <code>jaxgam/execution/</code> own
+iteration, step control and every cross-batch reduction. QR reductions are not
+JAX: <code>jaxgam/execution/qr.py</code> and <code>jaxgam/execution/stream/signed_qr.py</code> merge row blocks with SciPy
+(<code>linalg.qr</code> with pivoting, LAPACK <code>ormqr</code>) on the CPU, and the resulting
+coefficient-sized factors are moved to the device for the jitted triangular
+actions in <code>jaxgam/fitting/qr.py</code>.</p>
+<p>The streamed routes use <code>PreparedFittingMetadata.from_prepared</code>
+(<code>jaxgam/fitting/data.py</code>), not <code>FittingData</code>: the same penalty structure and
+<code>log|S+|</code> metadata, but no design matrix, response, weights or offset.</p>
+<h3 id="entry-and-route-choice">Entry and route choice<a class="headerlink" href="#entry-and-route-choice" title="Permanent link">&para;</a></h3>
+<p><code>GAM._fit_stream</code> rejects <code>linear_solver="pcg"</code>, data that is not a <code>RowSource</code>,
+separate <code>weights</code>/<code>offset</code> arrays, and any <code>result</code> other than <code>"prediction"</code>.
+It checks the family statically (<code>_check_stream_fixed_family</code>,
+<code>_check_stream_efs_family</code>) and requires <code>linear_solver="qr"</code> for exact REML and
+for EFS. It then opens <code>single_fit_fingerprints()</code> and calls
+<code>_fit_stream_routes</code>, which runs <code>prepare_model</code> and wraps the result in a
+<code>StreamDesign</code>. The route is then:</p>
+<table>
+<thead>
+<tr>
+<th>Condition</th>
+<th>Driver</th>
+<th><code>execution_route</code></th>
+<th><code>lambda_strategy</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>eligible <code>gaussian_compression=True</code> request</td>
+<td><code>_fit_stream_gaussian_qr</code></td>
+<td><code>stream_gaussian_qr</code></td>
+<td><code>newton_reml</code>, <code>lbfgs_reml</code> or <code>fixed</code></td>
+</tr>
+<tr>
+<td><code>optimizer="efs"</code>, <code>sp=None</code>, no penalties</td>
+<td><code>_fit_stream_parametric_bypass</code></td>
+<td><code>stream_parametric_qr</code></td>
+<td><code>newton_reml</code></td>
+</tr>
+<tr>
+<td><code>optimizer="efs"</code>, <code>sp=None</code></td>
+<td><code>fit_streamed_efs</code></td>
+<td><code>stream_efs_qr</code></td>
+<td><code>efs_reml</code></td>
+</tr>
+<tr>
+<td><code>sp=None</code>, no free parameter at all</td>
+<td>fixed regular or NB fit</td>
+<td><code>stream_exact_reml_qr</code></td>
+<td><code>exact_reml_no_parameters</code></td>
+</tr>
+<tr>
+<td><code>sp=None</code></td>
+<td><code>_fit_stream_exact_reml</code></td>
+<td><code>stream_exact_reml_qr</code></td>
+<td><code>exact_reml</code></td>
+</tr>
+<tr>
+<td><code>sp</code> given, NB</td>
+<td><code>_fit_stream_fixed_nb</code></td>
+<td><code>stream_qr</code></td>
+<td><code>fixed</code></td>
+</tr>
+<tr>
+<td><code>sp</code> given, other families, see the solver chart</td>
+<td><code>_fit_stream_fixed_regular</code> or <code>fit_streamed_pirls</code></td>
+<td><code>stream_qr</code> or <code>stream</code></td>
+<td><code>fixed</code></td>
+</tr>
+</tbody>
+</table>
+<pre class="mermaid"><code>flowchart TD
+    A["_fit_stream_routes"] --&gt; GQ{"eligible Gaussian QR request?"}
+    GQ -- yes --&gt; GQR["_fit_stream_gaussian_qr&lt;br/&gt;one replay, coefficient-space trials"]
+    GQ -- no --&gt; B{"sp supplied?"}
+    B -- "no, optimizer efs" --&gt; EFS["fit_streamed_efs&lt;br/&gt;qr only"]
+    B -- "no, newton" --&gt; EX["_fit_stream_exact_reml&lt;br/&gt;qr only"]
+    B -- yes --&gt; C{"NegativeBinomial?"}
+    C -- yes --&gt; NBF["_fit_stream_fixed_nb&lt;br/&gt;qr only"]
+    C -- no --&gt; D{"_stream_legacy_fisher_eligible?"}
+    D -- no --&gt; E{"linear_solver qr?"}
+    E -- no --&gt; R1["NotImplementedError"]
+    E -- yes --&gt; REG["_fit_stream_fixed_regular"]
+    D -- yes --&gt; F{"linear_solver qr and scale known?"}
+    F -- yes --&gt; REG
+    F -- no --&gt; G["fit_streamed_pirls"]
+    G --&gt; H{"solver_policy"}
+    H -- cholesky --&gt; CH["Cholesky of summed X'WX + S&lt;br/&gt;solve_penalized_system"]
+    H -- qr --&gt; PQ["positive QR&lt;br/&gt;qr_update, solve_augmented_qr"]
+    EX --&gt; INNER["inner fits"]
+    EFS --&gt; INNER
+    REG --&gt; INNER
+    NBF --&gt; INNER
+    INNER --&gt; I{"NegativeBinomial?"}
+    I -- yes --&gt; NBS["fit_nb_streamed_pirls&lt;br/&gt;signed QR on observed weights&lt;br/&gt;positive-observed retry"]
+    I -- no --&gt; J{"coefficient_system is observed?"}
+    J -- "yes, non-canonical link" --&gt; SQ["fit_regular_streamed_pirls&lt;br/&gt;signed QR, step-local Fisher retry"]
+    J -- "no, canonical link" --&gt; PF["fit_regular_streamed_pirls&lt;br/&gt;positive Fisher QR"]</code></pre>
+<p>Read it from the top. <code>_stream_legacy_fisher_eligible</code> holds when the family
+declares a Fisher coefficient system equal to observed information and a
+reported scale of <code>known_one</code> or <code>gaussian_fisher_edf_deviance</code>: among the
+built-in families that is Gaussian with identity link, Poisson with log and
+Binomial with logit. Only those can use <code>linear_solver="cholesky"</code>, and only with
+a fixed <code>sp</code>. Gaussian identity keeps <code>fit_streamed_pirls</code> under <code>"qr"</code> too;
+Poisson log and Binomial logit with <code>"qr"</code> go to the regular controller. A
+family's <code>coefficient_system</code> is <code>"fisher"</code> for canonical links and
+<code>"observed"</code> otherwise (<code>ExponentialFamily.execution_capabilities</code>). For an
+unknown-scale family with a fixed <code>sp</code> (Gamma, non-identity Gaussian),
+<code>_fit_stream_fixed_regular</code> runs <code>optimize_regular_stream_reml</code> with
+<code>pin_lambda=True</code>, so the log scale is still optimized; a fixed-<code>sp</code> NB with
+estimated theta likewise runs <code>optimize_nb_stream_reml</code> with <code>pin_lambda=True</code>.</p>
+<h3 id="scanning-lineage-and-fingerprints">Scanning, lineage and fingerprints<a class="headerlink" href="#scanning-lineage-and-fingerprints" title="Permanent link">&para;</a></h3>
+<p><code>_source_batches</code> in <code>jaxgam/execution/stream/pirls.py</code> is the one replay loop most
+drivers share. Before the scan it validates the <code>FamilyExecutionLineage</code> and
+compares <code>source.fingerprint()</code> with the fingerprint recorded at preparation;
+for each batch it re-validates the lineage, requires a response, rejects padded
+rows (<code>valid</code> all true) with <code>NotImplementedError</code>, and requires finite <code>y</code>,
+weights and offset and nonnegative weights (<code>ValueError</code>); after the scan it
+checks the fingerprint again and that the number of valid rows equals
+<code>prepared.n_obs</code> (<code>RuntimeError</code> otherwise). <code>_fitting_batches</code> adds the
+fitting-coordinate design of each batch and rejects non-finite design values.</p>
+<p><code>FamilyExecutionLineage.validate</code> (<code>jaxgam/fitting/family_execution.py</code>) fails
+closed when the source or basis fingerprint, the family or link name, the
+family's static configuration or its parameter snapshot changed since
+preparation. It runs before every cached device dispatch because a compiled
+executable can be reused without retracing, so trace-time checks alone would not
+see a mutation.</p>
+<p><code>single_fit_fingerprints()</code> (<code>jaxgam/data/source.py</code>) makes those repeated
+fingerprint calls cheap: inside the scope each in-memory source is hashed once,
+and once more when the scope ends, which raises
+<code>RuntimeError("RowSource changed during the fit")</code> if the data changed.</p>
+<h3 id="fixed-smoothing-pirls-fit_streamed_pirls">Fixed-smoothing PIRLS: <code>fit_streamed_pirls</code><a class="headerlink" href="#fixed-smoothing-pirls-fit_streamed_pirls" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>sequenceDiagram
+    participant Drv as fit_streamed_pirls
+    participant Scan as _working_factor_scan
+    participant Src as RowSource.scan
+    participant Kern as stream_kernels batch kernels
+    participant Solve as solve_penalized_system or solve_augmented_qr
+    participant Trial as _trial_scan
+    Drv-&gt;&gt;Drv: _preflight checks lineage, rank and family policy
+    loop each PIRLS iteration, at most max_iter
+        Drv-&gt;&gt;Scan: beta, rho
+        loop each batch
+            Scan-&gt;&gt;Src: next RowBatch
+            Src--&gt;&gt;Scan: columns, y, weight, offset
+            Scan-&gt;&gt;Kern: accumulate_working_statistics or positive_qr_working_rows
+            Kern--&gt;&gt;Scan: G, b, deviance, domain flag
+        end
+        Scan-&gt;&gt;Solve: summed statistics or merged QR state
+        Solve--&gt;&gt;Drv: proposal and coefficient factor
+        loop step halving, at most max_halvings
+            Drv-&gt;&gt;Trial: candidate beta
+            Trial-&gt;&gt;Kern: trial_deviance per batch
+            Kern--&gt;&gt;Trial: deviance, domain flag
+            Trial--&gt;&gt;Drv: summed deviance
+            Drv-&gt;&gt;Drv: accepts_trial
+        end
+        Drv-&gt;&gt;Drv: convergence test from iteration index 3
+    end
+    Drv-&gt;&gt;Scan: final working scan at accepted beta
+    Drv-&gt;&gt;Drv: EDF, execution summary scan, saturated likelihood scan
+    Drv--&gt;&gt;Drv: StreamFitState</code></pre>
+<p>Each inner loop box is one full replay of the source. One iteration is one
+working scan plus at least one trial scan; the final state costs a further
+working scan, an execution-summary scan and a saturated-likelihood scan.</p>
+<p>Details:</p>
+<ul>
+<li><strong>Systems.</strong> With <code>solver_policy="cholesky"</code>, <code>accumulate_working_statistics</code>
+  sums <code>G = X'WX</code>, <code>b = X'Wz</code>, the deviance and a domain flag, and
+  <code>solve_penalized_system</code> factors <code>G + S_lambda</code> with a plain Cholesky. A
+  non-finite factor or proposal raises <code>LinAlgError</code>: no jitter is ever added.
+  With <code>"qr"</code>, <code>positive_qr_working_rows</code> returns the weighted rows of each
+  batch, <code>qr_update</code> merges them into a <code>PositiveQRState</code>, and
+  <code>solve_augmented_qr</code> attaches the rho-scaled penalty roots (built once per fit
+  by <code>_qr_roots</code>).</li>
+<li><strong>Acceptance.</strong> <code>accepts_trial</code> applies the dense rule <code>accepted_penalized_step</code>:
+  finite, inside the family domain, and no more than <code>1e-7 |pdev|</code> above the
+  current penalized deviance (any valid trial on the first iteration). Up to 25
+  halvings toward the current coefficients; if none is accepted the loop stops
+  with <code>line_search_failed</code>.</li>
+<li><strong>Convergence.</strong> From iteration index 3, when the relative coefficient and
+  penalized-deviance changes are below <code>tol</code> (default <code>1e-7</code>), a working scan at
+  the accepted coefficients computes the normal-equation residual
+  <code>coefficient_stationarity</code>; the fit is converged when it is below <code>tol</code>.</li>
+<li><strong>Final state.</strong> EDF is <code>estimate_edf</code> (Cholesky) or <code>_qr_data_edf</code> (QR, from
+  the data factor, without forming <code>G H^-1</code>). The family's reduction policy
+  gives the reported scale (1, or Gaussian deviance over <code>n - edf</code>) and the score
+  scale (for Gaussian fixed <code>sp</code>, penalized deviance over the positive-weight
+  count minus the penalty null dimension).</li>
+</ul>
+<p>The public route sets only <code>batch_rows</code> and <code>solver_policy</code> of
+<code>StreamPIRLSControl</code>; <code>max_iter=100</code>, <code>tol=1e-7</code> and <code>max_halvings=25</code> are not
+reachable from <code>FitControl</code>.</p>
+<h3 id="fixed-smoothing-pirls-the-regular-and-nb-controllers">Fixed-smoothing PIRLS: the regular and NB controllers<a class="headerlink" href="#fixed-smoothing-pirls-the-regular-and-nb-controllers" title="Permanent link">&para;</a></h3>
+<p><code>fit_regular_streamed_pirls</code> (<code>jaxgam/execution/stream/regular.py</code>) ports the
+<code>gam.fit3</code> coefficient loop (<code>R/gam.fit3.r</code>) as the dense
+<code>efs_regular_pirls_loop</code> does, but by replay:</p>
+<ul>
+<li><strong>Start.</strong> A null anchor from <code>project_null_coefficients</code> (or an explicit
+  <code>null_coefficients</code>), and a start from <code>select_initial_working_state_cpu</code>,
+  which replays the source with up to 20 <code>0.9/0.1</code> shrinks toward the null
+  predictor until every row is valid.</li>
+<li><strong>Working scan.</strong> <code>regular_working_scan</code> replays one predictor and builds, per
+  batch, the Fisher system into a <code>PositiveQRState</code> and, for an observed
+  coefficient system, the signed Newton system into a <code>SignedQRState</code>
+  (<code>signed_qr_update</code>). Rows outside <code>gam.fit3</code>'s <code>good</code> set (zero weight or
+  zero <code>mu.eta</code>) are dropped before the QR.</li>
+<li><strong>Proposal.</strong> <code>solve_signed_qr</code> applies <code>pls_fit1</code>'s correction. If the signed
+  system is indefinite (<code>fisher_required</code>), the same step is re-solved on the
+  Fisher system, R's step-local Fisher retry, counted in <code>fisher_recoveries</code>.</li>
+<li><strong>Step control.</strong> A candidate is accepted when it is in the domain, finite,
+  and its penalized deviance exceeds the old value by at most
+  <code>10 (0.1 + |old pdev|) sqrt(eps)</code>; otherwise it is halved toward the current
+  coefficients, at most <code>max_halvings</code> times.</li>
+<li><strong>Convergence.</strong> <code>gam.fit3</code>'s test: penalized-deviance change below
+  <code>tol (|phi| + |pdev|)</code> and <code>max|2 residual|</code> within <code>tol (|pdev| + |phi|)</code>;
+  Gaussian identity (<code>single_step_pirls</code>) converges at its first accepted step.</li>
+<li><strong>Final solve.</strong> As in <code>gam.fit3</code>'s closing <code>gdi1</code> call, one more scan forms
+  the final systems and a last solve gives the reported coefficients, falling
+  back to the accepted ones if that candidate leaves the domain.
+  <code>RegularSourceScore</code> keeps the raw deviance, the solve penalty and the
+  incoming and reported scales apart.</li>
+</ul>
+<p><code>fit_nb_streamed_pirls</code> (<code>jaxgam/execution/stream/nb.py</code>) ports <code>gam.fit4</code>
+(<code>R/gam.fit4.r</code>): observed weights from the NB kernels, a signed QR solve,
+and when that is indefinite a re-scan with positive observed weights
+(<code>nb_positive_observed_retry</code>, counted in <code>positive_observed_recoveries</code>). When a
+retained start or estimated theta is present, recovery follows <code>gam.fit4</code>'s
+order: non-finite deviance, then domain, then divergence (at most 100 halvings,
+toward the null coefficients on the first iteration). With
+<code>estimate_theta=True</code> it calls <code>conditional_theta_stream</code> after every accepted
+coefficient step (see <a href="#streamed-nb-theta">Streamed NB theta</a>).</p>
+<p>Both controllers require <code>solver_policy="qr"</code>, never modify the caller's family
+object, and run their own workspace preflight before any scan.</p>
+<h3 id="the-qr-reductions">The QR reductions<a class="headerlink" href="#the-qr-reductions" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Positive QR</strong> (<code>jaxgam/execution/qr.py</code>). <code>qr_update</code> stacks the previous
+  triangular factor on a new block of nonnegative-weight rows and re-factors
+  with column pivoting; the state keeps <code>R</code>, <code>Q'z</code>, the residual tail and the
+  pivots, never the rows. <code>solve_augmented_qr</code> appends the actual
+  (lambda-scaled) penalty roots and solves. The structural rank is decided on
+  <code>balanced_roots</code>, the unscaled roots, so a tiny smoothing parameter cannot hide
+  an identifiable direction; a deficient balanced system needs an explicit
+  <code>identifiable_subspace</code>, while an ill-conditioned actual factor raises.
+  <code>_mgcv_r_cond</code> and <code>structural_rank</code> follow <code>pls_fit1</code>'s condition test.</li>
+<li><strong>Signed QR</strong> (<code>jaxgam/execution/stream/signed_qr.py</code>). For a system with some
+  negative weights, <code>SignedQRState</code> holds a QR of the absolute-weight rows, a QR
+  of the negative-weight rows and the right side <code>X'Wz</code>. <code>solve_signed_qr</code>
+  follows <code>pls_fit1</code>: factor the absolute system with the penalty roots, take the
+  SVD of the negative rows in that basis, and correct by <code>I - 2 Q_neg' Q_neg</code>. A
+  correction eigenvalue below <code>-100 eps</code> returns <code>fisher_required=True</code>; zero
+  eigenvalues are treated as pseudoinverse modes and make the result not
+  <code>score_admissible</code>.</li>
+</ul>
+<p>Which solver runs follows from the chart above: Cholesky only for
+<code>fit_streamed_pirls</code> under <code>"cholesky"</code>; positive QR for <code>fit_streamed_pirls</code>
+under <code>"qr"</code> and for Fisher (canonical) systems in the regular controller;
+signed QR for observed (non-canonical) regular systems and for NB.</p>
+<h3 id="exact-streamed-reml">Exact streamed REML<a class="headerlink" href="#exact-streamed-reml" title="Permanent link">&para;</a></h3>
+<p>With <code>sp=None</code> and the default Newton optimizer, <code>_fit_stream_exact_reml</code>
+optimizes the REML criterion over <code>[log_lambda, &lt;log_phi&gt;]</code> (regular families)
+or <code>[log_lambda, &lt;log_theta&gt;]</code> (NB with estimated theta) by SciPy L-BFGS-B with
+exact gradients. It is not the dense Newton loop.</p>
+<p><strong>Start.</strong> With penalties, <code>prepare_stream_reml_start</code> replays the source twice:
+once for the null coefficients (<code>get.null.coef</code>) and once for the weighted
+diagonal of mgcv's <code>initial.spg</code>. The log scale starts at the startup's
+<code>score_phi</code>, theta at the family's theta. A model with no penalty, no free scale
+and no theta is fitted once by the fixed-<code>sp</code> helpers and labelled
+<code>exact_reml_no_parameters</code>.</p>
+<p><strong>One trial.</strong> <code>evaluate_regular_stream_reml</code> computes the score and gradient at
+one exact parameter vector:</p>
+<ol>
+<li><code>fit_regular_streamed_pirls</code> reconverges the coefficients from the accepted
+   trial's coefficients (several scans). A non-converged or invalid inner fit
+   raises <code>RuntimeError</code>; it is never scored.</li>
+<li>Coefficient-space work: the observed and source factors give <code>H^-1</code>, both are
+   checked against the observed Hessian (residual below <code>1e-7</code>), and
+   <code>regular_score_cotangents</code> evaluates the score and the cotangents of its
+   coefficient-space terms.</li>
+<li>One more replay: <code>regular_batch_statistics_vjp</code> per batch gives that batch's
+   contribution to the coefficient cotangent and to the log-scale derivative.</li>
+<li>The adjoint <code>H^-1 beta_bar</code> (checked again) and <code>penalty_ops.parameter_vjp</code>
+   give the gradient in <code>log_lambda</code>, the implicit-function-theorem derivative
+   through the converged coefficients.</li>
+</ol>
+<p>So one trial costs the PIRLS scans plus one derivative scan, and keeps only
+coefficient-sized arrays. <code>evaluate_nb_stream_reml</code> does the same with
+<code>nb_batch_statistics_vjp</code> and theta as an explicit coordinate.</p>
+<p><strong>The optimizer.</strong> <code>optimize_regular_stream_reml</code> and <code>optimize_nb_stream_reml</code>
+share <code>_run_parameterized_stream_reml</code>.</p>
+<pre class="mermaid"><code>flowchart TD
+    A["optimize_regular_stream_reml or optimize_nb_stream_reml"] --&gt; B["clip free log_lambda to -40..40&lt;br/&gt;tighten inner tolerance"]
+    B --&gt; C{"retained optimizer workspace below budget?"}
+    C -- no --&gt; M1["MemoryError"]
+    C -- yes --&gt; D["_AcceptedParameterizedTrialObjective&lt;br/&gt;evaluate the initial trial"]
+    D --&gt; E["open a window: bounds within max_step = 5 of the accepted point"]
+    E --&gt; F["SciPy minimize, method L-BFGS-B&lt;br/&gt;each new point is one reconverged exact trial&lt;br/&gt;callback promotes the accepted candidate"]
+    F --&gt; G{"window stopped at its own edge or local gtol&lt;br/&gt;while the global projected gradient exceeds gtol?"}
+    G -- "yes, fewer than 20 windows" --&gt; E
+    G -- "yes, 20 windows" --&gt; WL["message: window limit reached"]
+    G -- no --&gt; H{"L-BFGS-B success and projected gradient &lt;= gtol?"}
+    WL --&gt; H
+    H -- yes --&gt; OK["converged"]
+    H -- no --&gt; I{"roundoff stop: relative reduction or ABNORMAL?"}
+    I -- no --&gt; NC["not converged, SciPy message kept"]
+    I -- yes --&gt; J{"which completion?"}
+    J -- "only log scale or log theta free" --&gt; K["_complete_pinned_regular_scale or _complete_pinned_nb_theta"]
+    J -- "1 to 4 free coordinates incl. a free log_lambda" --&gt; L["_complete_free_curvature_newton&lt;br/&gt;newton steps on finite-difference curvature"]
+    J -- neither --&gt; P
+    K --&gt; P["_classify_function_reduction&lt;br/&gt;mgcv newton relative test"]
+    L --&gt; P
+    P --&gt; R["converged flag and message on the accepted trial"]</code></pre>
+<p>Read from the top. Windows cap each move at the scale of <code>fast.REML.fit</code>'s
+<code>maxNstep=5</code> (an mgcv routine in <code>R/fast-REML.r</code>); each window is a fresh
+L-BFGS-B run with its own <code>max_iter</code> and <code>maxfun</code>, at most
+<code>MAX_SOURCE_STEP_WINDOWS = 20</code> of them. After a roundoff stop, one completion
+may continue the search by mgcv's <code>newton</code> rules (<code>R/gam.fit3.r</code>): steps of
+<code>-H^-1 g</code> capped at 5, accepted on decrease with quadratic-model error below
+0.8, at most three halvings, converged only with a positive-definite curvature
+model. The free-coordinate completion builds that curvature from <code>2m</code>
+reconverged central-difference gradient probes, so it is limited to four free
+coordinates. Finally <code>_classify_function_reduction</code> turns an L-BFGS-B
+relative-reduction exit into convergence only if mgcv's own <code>newton</code> test holds:
+projected gradient at most <code>5 * 1e-6 * score.scale</code> and score change at most
+<code>1e-6 * score.scale</code> (<code>mgcv_relative_convergence</code>).</p>
+<p>Settings: <code>StreamREMLControl</code> defaults are <code>max_iter=100</code>, <code>maxfun=500</code>,
+<code>maxcor=10</code>, <code>maxls=20</code>, <code>gtol=1e-6</code>, <code>ftol=1e-12</code>, <code>history_size=32</code>. The
+public route passes <code>ftol=0</code> for regular families and <code>gtol=1e-9, ftol=0</code> for NB,
+and <code>max_step=5.0</code>. Log smoothing parameters are bounded to <code>[-40, 40]</code>; log
+scale and log theta are unbounded; pinned coordinates are fixed bounds.</p>
+<p><strong>What it reports.</strong> <code>converged</code> and <code>convergence_info</code> (the SciPy message with
+the window count and any completion or relative-test note) come from the
+optimizer; there is no warning. <code>exact_optimizer_diagnostics</code> is a
+<code>StreamExactOptimizerDiagnostics</code> (<code>jaxgam/results.py</code>): L-BFGS-B <code>status</code>,
+evaluation and acceptance counts, <code>projected_gradient_inf</code>, the bounded accepted
+score history, startup scans and cumulative inner iterations.</p>
+<p>The objective keeps at most two trials alive, the accepted one and the current
+candidate (<code>_AcceptedParameterizedTrialObjective</code>), and never an outer Hessian
+or a list of trial points.</p>
+<p><code>evaluate_stream_reml</code> and <code>optimize_stream_reml</code> in the same module are an
+earlier canonical Poisson/Binomial-only version; nothing in <code>jaxgam/</code> outside
+<code>jaxgam/execution/stream/reml.py</code> calls them, only tests.</p>
+<h3 id="streamed-nb-theta">Streamed NB theta<a class="headerlink" href="#streamed-nb-theta" title="Permanent link">&para;</a></h3>
+<p>Theta is handled two ways on this route:</p>
+<ul>
+<li><strong>Exact REML and pinned fixed <code>sp</code>.</strong> <code>log_theta</code> is a joint L-BFGS-B
+  coordinate in <code>optimize_nb_stream_reml</code>; each trial fits coefficients at that
+  theta with <code>fit_nb_streamed_pirls(estimate_theta=False)</code>. The selected theta is
+  written into the family with <code>put_theta</code> by <code>_fit_stream_exact_reml</code> and
+  <code>_fit_stream_fixed_nb</code>.</li>
+<li><strong>EFS.</strong> <code>fit_nb_streamed_pirls(estimate_theta=True)</code> calls
+  <code>conditional_theta_stream</code> (<code>jaxgam/execution/stream/nb_theta.py</code>) after every
+  accepted coefficient step. It runs the one-parameter Newton of mgcv's
+  <code>estimate.theta</code> (as <code>gam.fit4</code> does under EFS) at fixed coefficients; every
+  objective and derivative evaluation is a replay that sums
+  <code>nb_conditional_theta_batch</code> over batches, and <code>nb_conditional_theta_step</code>
+  takes the step. <code>NBThetaStreamControl</code> sets tolerance <code>1e-7</code>, 100 iterations,
+  step at most 4 and 25 halvings. A failed solve keeps its last valid theta with
+  a non-zero status.</li>
+</ul>
+<p>With <code>optimizer="efs"</code> and no penalties, the parametric bypass fits with
+<code>estimate_theta=False</code>, so theta keeps its start value and is not reported.</p>
+<h3 id="streamed-fellner-schall">Streamed Fellner-Schall<a class="headerlink" href="#streamed-fellner-schall" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart TD
+    A["_fit_stream_routes, optimizer efs, sp None"] --&gt; B{"any penalty?"}
+    B -- no --&gt; BY["_fit_stream_parametric_bypass&lt;br/&gt;stream_parametric_qr"]
+    B -- yes --&gt; C["fit_streamed_efs"]
+    C --&gt; D{"startup and provider bounds within memory_budget_bytes?"}
+    D -- no --&gt; M["MemoryError"]
+    D -- yes --&gt; E["NBStreamEFSProvider.create or RegularStreamEFSProvider.create&lt;br/&gt;frozen family copy, PreparedFittingMetadata, prepare_efs_statistics"]
+    E --&gt; F["prepare_stream_efs_start&lt;br/&gt;two replays: get.null.coef and initial.spg"]
+    F --&gt; G["initial_request&lt;br/&gt;log_lambda + 2.5, null coefficients, incoming scale"]
+    G --&gt; H["_run_efs_known_scale or _run_efs_unknown_scale&lt;br/&gt;the dense EFS controller"]
+    H --&gt; I["provider call for one trial"]
+    I --&gt; J["fit_regular_streamed_pirls&lt;br/&gt;or fit_nb_streamed_pirls with conditional theta"]
+    J --&gt; K["attribution checks, efs_factor_statistics, scalar score"]
+    K --&gt; L["EFSFitState"]
+    L --&gt; H
+    H --&gt; N["StreamEFSExecution&lt;br/&gt;fit, metadata, reporting family copy, startup"]
+    N --&gt; O["GAMPredictionResult, stream_efs_qr"]</code></pre>
+<p>Read from the top; the loop between the controller and the provider is the
+dense EFS outer iteration of <a href="../fitting_dense/#the-dense-extended-fellner-schall-path">the dense page</a>,
+unchanged. Only the provider differs:</p>
+<ul>
+<li><code>_provider_parts</code> freezes a deep copy of the family, builds
+  <code>PreparedFittingMetadata</code> and the EFS statistics plan, and records an
+  <code>EFSControllerContext</code> with <code>reference_profile="mgcv-1.9-3-efsudr-streamed"</code>,
+  <code>trace_method="exact-streamed-fisher"</code> and the source and basis fingerprints.</li>
+<li>Each call re-validates lineage and fingerprint before and after the fit, runs
+  the coefficient controller with <code>EFSControl.pirls_max_iter</code> and
+  <code>pirls_tolerance</code>, and checks that the returned state belongs to the request
+  (rho, scale, and for NB the theta transition history); a mismatch raises
+  <code>RuntimeError</code>.</li>
+<li>Statistics come from <code>efs_factor_statistics</code> (<code>jaxgam/fitting/stream/efs_factor.py</code>),
+  which computes the same d, t and q as the dense <code>efs_statistics</code> but through
+  the fit's <code>fisher_coefficient_factor</code> actions, because a streamed fit has a QR
+  factor, not a dense Cholesky.</li>
+<li>The regular provider scores with <code>reml_criterion_from_penalized_deviance</code> at
+  the incoming scale and returns the fit's Fletcher scale as <code>update_phi</code>; the NB
+  provider uses the score the NB controller computed, at scale 1.</li>
+<li>The recovery anchor is the zero vector on every refit (regular:
+  <code>source_null_coefficients</code>; NB: <code>beta_old_init</code>), as mgcv's EFS dispatch does
+  not pass <code>G$null.coef</code> on.</li>
+</ul>
+<p>Supported families: Gaussian, Binomial, Poisson and Gamma with no theta, and NB
+with log, identity or sqrt link (<code>_check_stream_efs_family</code>).</p>
+<h3 id="streamed-gaussian-qr">Streamed Gaussian QR<a class="headerlink" href="#streamed-gaussian-qr" title="Permanent link">&para;</a></h3>
+<p>An eligible <code>gaussian_compression=True</code> request (exact Gaussian with identity
+link, Newton or fixed <code>sp</code>, prior weights within <code>[1e-10, 1e10]</code>, at least one
+penalty, no rank deficit) builds a <code>StreamGaussianQROuterProvider</code> with
+<code>build_stream_gaussian_qr_provider</code>. <code>prepare_streamed_frozen_gaussian_qr</code>
+replays the source once into the frozen QR; every smoothing trial then uses
+coefficient-size arrays, as on <a href="../fitting_dense/#the-gaussian-qr-route">the dense Gaussian QR route</a>,
+with Newton up to 50 penalties and L-BFGS-B above. Either solver setting is
+accepted. An over-budget QR workspace (<code>preflight_streamed_gaussian_qr_workspace</code>)
+raises <code>MemoryError</code> and does not fall back; an ineligible request records
+<code>execution_fallback_reason</code> and takes the ordinary route, except that with
+<code>sp=None</code>, Newton and <code>"cholesky"</code> there is no ordinary route, and the fit raises
+<code>NotImplementedError</code>.</p>
+<h3 id="observation-independent-state">Observation-independent state<a class="headerlink" href="#observation-independent-state" title="Permanent link">&para;</a></h3>
+<p><code>StreamFitState</code> (<code>jaxgam/fitting/state.py</code>) is everything a streamed fit
+returns: coefficients, <code>log_lambda</code>, deviance, penalized deviance, reported and
+score scales, saturated log-likelihood, EDF, <code>xtwx</code> and <code>xtwx_fisher</code>, the
+coefficient and Fisher coefficient factors, iteration and line-search
+diagnostics, <code>stationarity</code>, and the scan counts. It has no fitted values,
+working weights or responses; those stay in the <code>RowSource</code> and are recomputed by
+a later scan when needed (<code>test_stream_fit_state_contains_no_observation_aligned_fields</code>).</p>
+<p>A factor is one of three classes with the same action interface
+(<code>root_inverse</code>, <code>root_transpose_inverse</code>, <code>hessian_inverse</code>,
+<code>logdet_hessian</code>): <code>CholeskyCoefficientFactor</code> (<code>H = B' B</code>, <code>B = lower'</code>),
+<code>PivotedQRCoefficientFactor</code> (rank-aware, <code>B = R P'</code> embedded by <code>keep</code>), and
+<code>SignedQRCoefficientFactor</code> (an absolute QR factor plus the signed correction;
+<code>logdet_hessian</code> is minus infinity unless <code>score_admissible</code>). Phase 3 uses these
+actions for standard errors, so a QR factor never has to be turned into a
+lower-triangular matrix. The legacy properties <code>factor</code> and <code>fisher_factor</code>
+raise for QR factors.</p>
+<h3 id="scan-and-batch-accounting">Scan and batch accounting<a class="headerlink" href="#scan-and-batch-accounting" title="Permanent link">&para;</a></h3>
+<p><code>source_scans</code> and <code>batches_scanned</code> on the result never include the
+<code>prepare_model</code> setup scans. Otherwise they mean:</p>
+<ul>
+<li><code>fit_streamed_pirls</code>, fixed regular and fixed NB fits: the controller's total,
+  including the final summary and likelihood scans;</li>
+<li>fixed <code>sp</code> with an optimized scale or theta: the optimizer's cumulative count
+  over all trials;</li>
+<li>exact REML: startup scans plus the optimizer's cumulative count;</li>
+<li>Gaussian QR: the provider's single replay;</li>
+<li>streamed EFS: the final accepted fit only. The totals are in
+  <code>optimizer_diagnostics.provider_source_scans</code> and <code>startup_source_scans</code>.</li>
+</ul>
+<p><code>known_workspace_bytes</code> is the preflight value, the controller or optimizer
+ledger, the exact-REML startup/trial maximum, or the Gaussian QR estimate; it is
+<code>None</code> on the EFS route and the parametric bypass.</p>
+<h3 id="memory-preflights-and-errors">Memory preflights and errors<a class="headerlink" href="#memory-preflights-and-errors" title="Permanent link">&para;</a></h3>
+<p>Every streamed driver estimates the arrays it knows it will hold and raises the
+built-in <code>MemoryError</code> before scanning when the estimate exceeds
+<code>FitControl.memory_budget_bytes</code>. These are prospective ledgers, not allocator
+limits: source storage and native LAPACK, BLAS or XLA scratch are excluded (see
+the <code>RegularStreamWorkspace</code> docstring).</p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Where</th>
+<th>Charges</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>fixed and exact routes</td>
+<td><code>_preflight_stream_workspace</code> (<code>jaxgam/api.py</code>)</td>
+<td><code>12 p^2</code> (Cholesky) or <code>14 p^2</code> (QR) float64 plus batch buffers for the requested <code>batch_rows</code></td>
+</tr>
+<tr>
+<td>regular and NB controllers</td>
+<td><code>preflight_regular_stream_workspace</code></td>
+<td>batch design buffers, coefficient matrices, QR states, histories</td>
+</tr>
+<tr>
+<td>exact REML optimizer</td>
+<td><code>optimize_regular_stream_reml</code>, <code>optimize_nb_stream_reml</code></td>
+<td>retained trials, history, L-BFGS-B work, curvature completion</td>
+</tr>
+<tr>
+<td>exact REML startup</td>
+<td><code>_fit_stream_exact_reml</code></td>
+<td>startup workspace plus retained start vectors</td>
+</tr>
+<tr>
+<td>streamed EFS</td>
+<td><code>fit_streamed_efs</code>, <code>_provider_parts</code></td>
+<td>startup retention, provider metadata, prior fits, trace blocks, histories, conditional theta</td>
+</tr>
+<tr>
+<td>Gaussian QR</td>
+<td><code>preflight_streamed_gaussian_qr_workspace</code></td>
+<td>QR design, compression, score derivatives, outer Hessian or L-BFGS-B work</td>
+</tr>
+</tbody>
+</table>
+<p><code>_preflight_stream_workspace</code> charges the requested <code>batch_rows</code>, not the number
+of rows in the source, so a model with many coefficients can be rejected on a
+small source until <code>batch_rows</code> is lowered.</p>
+<p>Other failures raise rather than return a non-converged result: unpenalized
+rank deficiency (<code>LinAlgError</code> in <code>_preflight</code> and the EFS provider), a
+non-finite Cholesky factor or proposal (<code>LinAlgError</code>), current coefficients
+outside the family domain (<code>ValueError</code>), a non-finite final state
+(<code>FloatingPointError</code>), a changed source or lineage (<code>RuntimeError</code>), padded
+batches (<code>NotImplementedError</code>), and, under exact REML and the pinned
+scale/theta optimizers, any inner fit that does not converge (<code>RuntimeError</code>).
+A fixed-<code>sp</code> PIRLS that runs out of iterations or halvings returns
+<code>converged=False</code> with <code>convergence_info</code> "fixed sp streamed PIRLS did not
+converge".</p>
+<h2 id="key-types">Key types<a class="headerlink" href="#key-types" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>classDiagram
+    class StreamFitState {
+        +coefficients Array
+        +log_lambda Array
+        +deviance Array
+        +penalized_deviance Array
+        +scale Array
+        +score_scale Array
+        +saturated_loglik Array
+        +edf Array
+        +xtwx Array
+        +coefficient_factor CoefficientFactor
+        +fisher_coefficient_factor CoefficientFactor
+        +n_iter int
+        +converged bool
+        +line_search_failed bool
+        +stationarity float
+        +source_scans int
+        +batches_scanned int
+    }
+    class CholeskyCoefficientFactor {
+        +lower Array
+        +n_coef int
+        +hessian_inverse(rhs_original) Array
+        +logdet_hessian() Array
+    }
+    class PivotedQRCoefficientFactor {
+        +R Array
+        +pivots Array
+        +keep Array
+        +original_n_coef int
+        +rank int
+        +hessian_inverse(rhs_original) Array
+        +logdet_hessian() Array
+    }
+    class SignedQRCoefficientFactor {
+        +absolute_factor PivotedQRCoefficientFactor
+        +vectors Array
+        +correction Array
+        +score_admissible Array
+        +logdet_hessian() Array
+    }
+    class StreamPIRLSControl {
+        +batch_rows int
+        +max_iter int
+        +tol float
+        +max_halvings int
+        +solver_policy str
+    }
+    class RegularStreamResult {
+        +state StreamFitState
+        +fisher_recoveries int
+        +workspace RegularStreamWorkspace
+        +final_refit_accepted bool
+        +source_score RegularSourceScore
+        +source_coefficient_factor SignedQRCoefficientFactor
+    }
+    class RegularStreamREMLTrial {
+        +params Array
+        +score Array
+        +gradient Array
+        +fit_result RegularStreamResult
+        +source_scans int
+        +source_fingerprint str
+        +log_phi_curvature float
+    }
+    class RegularStreamREMLOptimization {
+        +trial RegularStreamREMLTrial
+        +converged bool
+        +message str
+        +status int
+        +n_iter int
+        +n_evaluations int
+        +cumulative_source_scans int
+        +projected_gradient_inf float
+        +required_bytes int
+    }
+    class StreamREMLControl {
+        +max_iter int
+        +maxfun int
+        +maxcor int
+        +maxls int
+        +gtol float
+        +ftol float
+        +history_size int
+    }
+    StreamFitState *-- CholeskyCoefficientFactor : Cholesky route
+    StreamFitState *-- PivotedQRCoefficientFactor : QR routes
+    StreamFitState *-- SignedQRCoefficientFactor : signed routes
+    SignedQRCoefficientFactor *-- PivotedQRCoefficientFactor
+    RegularStreamResult *-- StreamFitState
+    RegularStreamREMLTrial *-- RegularStreamResult
+    RegularStreamREMLOptimization *-- RegularStreamREMLTrial
+    RegularStreamREMLOptimization ..&gt; StreamREMLControl : limits from
+    StreamFitState ..&gt; StreamPIRLSControl : built under</code></pre>
+<p><code>CoefficientFactor</code> in <code>jaxgam/fitting/state.py</code> is the type alias for the union
+of the three factor classes. <code>NBStreamResult</code> and <code>NBStreamREMLTrial</code> mirror
+<code>RegularStreamResult</code> and <code>RegularStreamREMLTrial</code> for NB, adding the theta
+history and count metadata.</p>
+<pre class="mermaid"><code>classDiagram
+    class PositiveQRState {
+        +R ndarray
+        +qtz ndarray
+        +residual_tail float
+        +n_data_rows int
+        +pivots ndarray
+    }
+    class SignedQRState {
+        +absolute PositiveQRState
+        +negative PositiveQRState
+        +rhs ndarray
+        +direct_rhs bool
+    }
+    class QRFactorSolve {
+        +R ndarray
+        +pivots ndarray
+        +coefficients ndarray
+        +keep ndarray
+        +original_n_coef int
+    }
+    class SignedQRResult {
+        +absolute_factor QRFactorSolve
+        +correction ndarray
+        +coefficients ndarray
+        +fisher_required bool
+        +score_admissible bool
+    }
+    class FamilyExecutionLineage {
+        +source_fingerprint str
+        +basis_fingerprint str
+        +context FamilyExecutionContext
+        +parameters FamilyParameterSnapshot
+        +validate(prepared, family) None
+    }
+    class StreamExactOptimizerDiagnostics {
+        +status int
+        +n_evaluations int
+        +n_accepted int
+        +projected_gradient_inf float
+        +accepted_score_history tuple
+        +startup_source_scans int
+        +cumulative_inner_iterations int
+    }
+    class EFSOptimizerDiagnostics {
+        +reference_profile str
+        +trace_method str
+        +stop_reason str
+        +outer_iterations int
+        +inner_iterations int
+        +theta_iterations int
+        +accepted_score_history tuple
+        +provider_source_scans int
+        +startup_source_scans int
+    }
+    SignedQRState *-- PositiveQRState : absolute and negative
+    SignedQRResult *-- QRFactorSolve
+    QRFactorSolve ..&gt; PositiveQRState : solve_augmented_qr</code></pre>
+<p><code>PositiveQRState</code>, <code>SignedQRState</code>, <code>QRFactorSolve</code> and <code>SignedQRResult</code> are
+host NumPy values (<code>jaxgam/execution/qr.py</code>, <code>jaxgam/execution/stream/signed_qr.py</code>); their arrays are
+made read-only on construction. <code>StreamExactOptimizerDiagnostics</code> is attached to
+exact-REML results, <code>EFSOptimizerDiagnostics</code> to streamed EFS results.</p>
+<h2 id="rules-and-invariants">Rules and invariants<a class="headerlink" href="#rules-and-invariants" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>No row-aligned state.</strong> Nothing that outlives a scan may be observation
+  sized: not the design, not <code>eta</code>, <code>mu</code> or working weights, not a count-prefix
+  table. Ledgers and tests check this
+  (<code>tests/test_execution/test_stream.py</code>
+  <code>test_stream_fit_state_contains_no_observation_aligned_fields</code>,
+  <code>test_qr_retained_fit_state_is_coefficient_sized_as_source_grows</code>).</li>
+<li><strong>Kernels see one batch.</strong> Batch kernels in <code>jaxgam/fitting/</code> take one
+  materialized batch and return coefficient-sized values; source iteration stays
+  in <code>jaxgam/execution/</code> so no reverse-mode trace can capture source rows
+  (module docstring of <code>jaxgam/fitting/stream/reml.py</code>).</li>
+<li><strong>Validate before every dispatch.</strong> Call <code>FamilyExecutionLineage.validate</code>
+  before each jitted call and compare fingerprints before and after each scan
+  (<code>test_scanner_rejects_runtime_source_basis_and_family_mutation</code>,
+  <code>tests/test_execution/test_stream_api.py</code>
+  <code>test_streamed_fit_raises_when_its_source_changes_during_the_fit</code>).</li>
+<li><strong>No hidden jitter.</strong> The streamed Cholesky and QR solves never regularize;
+  a failure raises (<code>test_final_cholesky_offdiagonal_nonfinite_is_rejected</code>).</li>
+<li><strong>A failed line search is not convergence</strong>
+  (<code>test_failed_line_search_is_not_convergence</code>); an iteration-limited exact
+  optimizer is not converged
+  (<code>tests/test_execution/test_regular_reml.py</code>
+  <code>test_regular_stream_reml_optimizer_all_32_cells_report_iteration_limit</code>);
+  neither is an EFS outer limit
+  (<code>tests/test_execution/test_efs_stream.py</code>
+  <code>test_outer_iteration_limit_is_not_reported_as_convergence</code>).</li>
+<li><strong>Exact gradients are exact.</strong> The regular adjoint gradient is compared with
+  pinned mgcv derivatives and with refitted finite differences for all 32
+  family/link cells (<code>test_regular_source_gradient_matches_all_32_pinned_gdi_cells</code>,
+  <code>test_regular_source_gradient_matches_all_32_refitted_finite_differences</code>).</li>
+<li><strong>Windows reopen only from accepted trials</strong>
+  (<code>test_regular_stream_reml_step_windows_reopen_from_exact_accepted_trial</code>,
+  <code>test_regular_stream_reml_window_cap_stops_truthfully</code>).</li>
+<li><strong>Results do not depend on batching.</strong> Fixed-<code>sp</code> fits are invariant to
+  <code>batch_rows</code> and to the setup partition
+  (<code>test_public_fixed_sp_stream_fit_is_invariant_to_fit_control_batch_rows</code>,
+  <code>test_public_stream_fits_are_invariant_to_setup_partition</code>).</li>
+<li><strong>Scan counts are real.</strong> Reported counts match the source's actual <code>scan</code>
+  calls (<code>test_qr_source_scan_accounting_matches_replayed_source_calls</code>).</li>
+<li>R parity for the streamed family and link inventory is in
+  <code>tests/test_validation_matrix.py</code> (for example
+  <code>test_public_streamed_efs_regular_family_link_inventory</code>).</li>
+</ul>
+<h2 id="pitfalls">Pitfalls<a class="headerlink" href="#pitfalls" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Default solver.</strong> <code>FitControl(execution="stream")</code> defaults to
+  <code>linear_solver="cholesky"</code>, which supports only fixed <code>sp</code> and only the three
+  canonical families above. Estimating smoothing parameters needs
+  <code>linear_solver="qr"</code> (or an eligible Gaussian QR request).</li>
+<li><strong>"newton" means L-BFGS-B here.</strong> The default optimizer on this route is
+  L-BFGS-B with exact gradients and mgcv <code>newton</code> completions; only streamed
+  Gaussian QR with at most 50 penalties runs the dense <code>NewtonOptimizer</code>.</li>
+<li><strong>A fixed <code>sp</code> can still optimize.</strong> Gamma, non-identity Gaussian and
+  estimated-theta NB optimize the scale or theta with lambda pinned;
+  <code>lambda_strategy</code> stays <code>"fixed"</code> and <code>convergence_info</code> is an optimizer
+  message.</li>
+<li><strong>EFS scan counts.</strong> The result's <code>source_scans</code> on the EFS route covers only
+  the final fit; use <code>optimizer_diagnostics</code> for the cost of the whole fit.</li>
+<li><strong>Preflight uses <code>batch_rows</code>.</strong> A large <code>p</code> with the default
+  <code>batch_rows=65_536</code> can exceed the budget on any source size.</li>
+<li><strong>Inner failures raise under exact REML.</strong> Code that wraps the optimizer must
+  expect <code>RuntimeError</code>, not a <code>converged=False</code> result.</li>
+<li><strong>Padding.</strong> Kernels can mask padded rows, but the host rejects padded
+  batches; a source must return only real rows.</li>
+<li><strong>Stale docstrings.</strong> Some module docstrings in <code>jaxgam/execution/</code> still say
+  their code "does not enable public streaming" or is internal until a later PR
+  (<code>jaxgam/execution/stream/pirls.py</code>, <code>jaxgam/execution/stream/nb.py</code>,
+  <code>jaxgam/execution/stream/regular.py</code>); the routes are public
+  through <code>FitControl</code>.</li>
+</ul>
+<h2 id="where-to-change-things">Where to change things<a class="headerlink" href="#where-to-change-things" title="Permanent link">&para;</a></h2>
+<ul>
+<li>To add a family to the streamed fixed-<code>sp</code> route, give it the execution
+  capabilities and <code>stream_reduction_policy</code> that <code>_check_stream_fixed_family</code>
+  requires (see <a href="../families_links_smooths/">extension points</a>); no driver
+  dispatches on family names except the NB checks.</li>
+<li>To change fixed-<code>sp</code> step control, edit <code>fit_streamed_pirls</code>
+  (<code>jaxgam/execution/stream/pirls.py</code>), <code>fit_regular_streamed_pirls</code> or
+  <code>fit_nb_streamed_pirls</code>; the per-batch arithmetic lives in
+  <code>jaxgam/fitting/stream/kernels.py</code>, <code>jaxgam/fitting/stream/regular.py</code> and
+  <code>jaxgam/fitting/stream/nb_kernels.py</code>.</li>
+<li>To change how a block of rows enters a QR, edit <code>qr_update</code> or
+  <code>signed_qr_update</code>; to change rank or indefiniteness decisions, edit
+  <code>solve_augmented_qr</code> and <code>solve_signed_qr</code>.</li>
+<li>To change the exact REML gradient, edit <code>evaluate_regular_stream_reml</code> and the
+  kernels in <code>jaxgam/fitting/stream/reml.py</code> (or <code>evaluate_nb_stream_reml</code> and
+  <code>jaxgam/fitting/stream/nb_reml.py</code>).</li>
+<li>To change optimizer limits or windows, edit <code>StreamREMLControl</code>,
+  <code>MAX_SOURCE_STEP_WINDOWS</code> and <code>_run_parameterized_stream_reml</code>; the values the
+  public route passes are set in <code>_fit_stream_exact_reml</code>, <code>_fit_stream_fixed_regular</code>
+  and <code>_fit_stream_fixed_nb</code> (<code>jaxgam/api.py</code>).</li>
+<li>To change streamed EFS, edit the providers in
+  <code>jaxgam/execution/stream/efs_provider.py</code>; the outer policy is shared with the
+  dense route in <code>jaxgam/execution/efs.py</code>.</li>
+<li>To change a memory estimate, edit the ledger that owns it (table above) and its
+  test in <code>tests/test_execution/</code>.</li>
+</ul>
+<p>A proposed refactor would replace the near-duplicate scans and per-route
+controllers with shared ones; see <a href="../../unify_fit/design/">the unified fitting design</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,2546 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../">
+      
+      
+        <link rel="next" href="../setup/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Lifecycle of a fit - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#lifecycle-of-a-fit" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Lifecycle of a fit
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#construction-gam__init__" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Construction: GAM.__init__
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-fit-does-before-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What fit does before routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-dense-route-inline-in-fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The dense route, inline in fit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-streamed-route-_fit_stream-and-_fit_stream_routes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The streamed route: _fit_stream and _fit_stream_routes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-discretized-route-_fit_discrete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The discretized route: _fit_discrete
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-operator-route-_fit_operator-and-_fit_operator_efs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The operator route: _fit_operator and _fit_operator_efs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-weights-and-the-offset-travel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How weights and the offset travel
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-each-route-builds-its-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How each route builds its result
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#execution_route-labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        execution_route labels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#execution_fallback_reason-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        execution_fallback_reason values
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#construction-gam__init__" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Construction: GAM.__init__
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-fit-does-before-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What fit does before routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-dense-route-inline-in-fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The dense route, inline in fit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-streamed-route-_fit_stream-and-_fit_stream_routes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The streamed route: _fit_stream and _fit_stream_routes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-discretized-route-_fit_discrete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The discretized route: _fit_discrete
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-operator-route-_fit_operator-and-_fit_operator_efs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The operator route: _fit_operator and _fit_operator_efs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-weights-and-the-offset-travel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How weights and the offset travel
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-each-route-builds-its-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How each route builds its result
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#execution_route-labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        execution_route labels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#execution_fallback_reason-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        execution_fallback_reason values
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="lifecycle-of-a-fit">Lifecycle of a fit<a class="headerlink" href="#lifecycle-of-a-fit" title="Permanent link">&para;</a></h1>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>This page follows one <code>GAM(...).fit(...)</code> call through <code>jaxgam/api.py</code>: the
+checks made when the <code>GAM</code> is constructed, the checks <code>fit</code> makes, how it picks
+a route and a sub-route, which setup and fitting modules each route calls, how
+prior weights and the offset travel, how each route builds its result, and
+every <code>execution_route</code> label and <code>execution_fallback_reason</code> the code can
+report. The algorithms behind each route are on the Phase 2 pages.</p>
+<h2 id="where-the-code-is">Where the code is<a class="headerlink" href="#where-the-code-is" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/api.py</code></td>
+<td><code>GAM</code>, <code>GAM.fit</code>, the <code>_fit_*</code> methods and module-level route functions, <code>_check_scope_guards</code>, <code>_resolve_device</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/control.py</code></td>
+<td><code>FitControl</code> and its nested controls; validation of field combinations in <code>__post_init__</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/families/registry.py</code></td>
+<td><code>get_family</code>, which turns <code>GAM(family=)</code> into a family instance.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/parser.py</code></td>
+<td><code>parse_formula</code>, called on every route.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/design.py</code></td>
+<td><code>ModelSetup.build</code>, dense Phase 1.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/prepare.py</code>, <code>jaxgam/formula/design_provider.py</code></td>
+<td><code>prepare_model</code> and <code>StreamDesign</code>, streamed Phase 1.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/operator/prepare.py</code></td>
+<td><code>prepare_operator_model</code>, operator Phase 1.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/data.py</code></td>
+<td><code>FittingData.from_setup</code> (dense) and <code>PreparedFittingMetadata.from_prepared</code> (streamed), the Phase 1 to 2 hand-off.</td>
+</tr>
+<tr>
+<td><code>jaxgam/data/source.py</code></td>
+<td><code>RowSource</code>, <code>single_fit_fingerprints</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/results.py</code></td>
+<td>The result constructors each route ends in.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<h3 id="construction-gam__init__">Construction: <code>GAM.__init__</code><a class="headerlink" href="#construction-gam__init__" title="Permanent link">&para;</a></h3>
+<p><code>GAM(formula, family="gaussian", method="REML", sp=None, control=None, **kwargs)</code>
+first calls <code>_check_scope_guards(method, kwargs)</code>, then stores <code>formula</code>,
+<code>family</code>, <code>method.upper()</code>, <code>sp</code>, <code>device</code> (from <code>kwargs</code>), <code>optimizer</code>
+(<code>kwargs.get("optimizer") or "newton"</code>) and <code>control</code> (<code>FitControl()</code> when
+<code>None</code>). The extra keywords accepted are the set <code>_ACCEPTED_KWARGS</code>:
+<code>device</code>, <code>backend</code>, <code>optimizer</code>, <code>select</code>, <code>gamma</code>, <code>knots</code>.</p>
+<p><code>_check_scope_guards</code> runs these checks in order:</p>
+<table>
+<thead>
+<tr>
+<th>Condition</th>
+<th>Exception</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>any keyword outside <code>_ACCEPTED_KWARGS</code></td>
+<td><code>TypeError</code> naming the unexpected keywords and the accepted arguments</td>
+</tr>
+<tr>
+<td><code>method.upper() == "ML"</code></td>
+<td><code>NotImplementedError</code> (ML needs mgcv's range-space determinant, <code>MLpenalty1</code> in <code>src/gdi.c</code>)</td>
+</tr>
+<tr>
+<td>any other method except <code>"REML"</code></td>
+<td><code>ValueError</code></td>
+</tr>
+<tr>
+<td><code>backend</code> not <code>None</code> or <code>"jax"</code></td>
+<td><code>NotImplementedError</code></td>
+</tr>
+<tr>
+<td><code>device</code> not <code>None</code>, <code>"cpu"</code> or <code>"gpu"</code></td>
+<td><code>ValueError</code></td>
+</tr>
+<tr>
+<td><code>optimizer</code> not <code>None</code> and not a <code>str</code></td>
+<td><code>ValueError</code></td>
+</tr>
+<tr>
+<td><code>optimizer</code> a string other than <code>"newton"</code> or <code>"efs"</code></td>
+<td><code>NotImplementedError</code></td>
+</tr>
+<tr>
+<td><code>select</code> truthy</td>
+<td><code>NotImplementedError</code></td>
+</tr>
+<tr>
+<td><code>gamma != 1.0</code></td>
+<td><code>NotImplementedError</code></td>
+</tr>
+<tr>
+<td><code>knots is not None</code></td>
+<td><code>NotImplementedError</code></td>
+</tr>
+</tbody>
+</table>
+<p>After the guards, <code>__init__</code> raises <code>TypeError</code> if <code>control</code> is neither a
+<code>FitControl</code> nor <code>None</code>. Nothing else is validated here: an unknown family
+name, a malformed formula or a wrong-length <code>sp</code> fails only in <code>fit</code>.
+<code>FitControl</code> itself has already rejected inconsistent fields when it was
+built (for example <code>execution="discrete"</code> without <code>discretization</code>, or
+<code>smoothing_strategy="working_model_reml"</code> on another route), with
+<code>ValueError</code> or <code>TypeError</code>. <code>tests/test_api/test_gam.py</code> and
+<code>tests/test_control.py</code> cover these checks.</p>
+<h3 id="what-fit-does-before-routing">What <code>fit</code> does before routing<a class="headerlink" href="#what-fit-does-before-routing" title="Permanent link">&para;</a></h3>
+<p><code>fit(data, weights=None, offset=None, *, result="full")</code>:</p>
+<ol>
+<li>Rejects a <code>result</code> other than <code>"full"</code>, <code>"inference"</code> or <code>"prediction"</code>
+   with <code>ValueError</code>.</li>
+<li>Calls <code>get_family(self.family)</code>. A name is looked up in the family
+   registry (<code>KeyError</code> if unknown) and returns a cached shared instance; an
+   instance is used as given.</li>
+<li>If the family has <code>n_theta &gt; 0</code> (an estimated negative binomial theta), it
+   is deep-copied, so the fit can update theta without mutating the
+   registry's instance or the caller's object.</li>
+<li>Dispatches on <code>self.control.execution</code>, in this order: <code>"operator"</code> to
+   <code>_fit_operator</code>, <code>"stream"</code> to <code>_fit_stream</code>, <code>"discrete"</code> to
+   <code>_fit_discrete</code>; anything else (only <code>"dense"</code> can reach here) continues
+   inline in <code>fit</code>.</li>
+</ol>
+<pre class="mermaid"><code>flowchart TD
+    fit["GAM.fit"] --&gt; result_check{"result in full, inference, prediction"}
+    result_check --&gt;|"no"| result_error["ValueError"]
+    result_check --&gt;|"yes"| get_family["get_family, deepcopy if n_theta above 0"]
+    get_family --&gt; execution{"control.execution"}
+    execution --&gt;|"operator"| _fit_operator["_fit_operator"]
+    execution --&gt;|"stream"| _fit_stream["_fit_stream"]
+    execution --&gt;|"discrete"| _fit_discrete["_fit_discrete"]
+    execution --&gt;|"dense"| row_check{"data is a RowSource"}
+    row_check --&gt;|"yes"| row_error["TypeError"]
+    row_check --&gt;|"no"| solver_check{"linear_solver is cholesky"}
+    solver_check --&gt;|"no"| solver_error["NotImplementedError"]
+    solver_check --&gt;|"yes"| setup["parse_formula, ModelSetup.build,&lt;br/&gt;_resolve_device, FittingData.from_setup"]
+    setup --&gt; gaussian_compression{"gaussian_compression"}
+    gaussian_compression --&gt;|"false"| sp_check
+    gaussian_compression --&gt;|"true"| build_dense_gaussian_qr_provider["build_dense_gaussian_qr_provider&lt;br/&gt;unless optimizer efs with sp None"]
+    build_dense_gaussian_qr_provider --&gt;|"provider or fallback reason"| sp_check{"sp is not None"}
+    sp_check --&gt;|"yes"| _fit_fixed_sp["_fit_fixed_sp&lt;br/&gt;lambda_strategy fixed"]
+    sp_check --&gt;|"no"| penalty_check{"fd.n_penalties == 0"}
+    penalty_check --&gt;|"yes"| newton_plain["newton_optimize&lt;br/&gt;newton_reml"]
+    penalty_check --&gt;|"no"| optimizer_check{"optimizer == efs"}
+    optimizer_check --&gt;|"yes"| dense_efs["dense_efs_known_scale or&lt;br/&gt;dense_efs_unknown_scale, efs_reml"]
+    optimizer_check --&gt;|"no"| use_gaussian_qr_lbfgs{"use_gaussian_qr_lbfgs"}
+    use_gaussian_qr_lbfgs --&gt;|"yes"| optimize_gaussian_qr_lbfgs["optimize_gaussian_qr_lbfgs&lt;br/&gt;lbfgs_reml"]
+    use_gaussian_qr_lbfgs --&gt;|"no"| newton_optimize["newton_optimize&lt;br/&gt;newton_reml"]
+    _fit_fixed_sp --&gt; _from_fit["_warn_factor_regularization,&lt;br/&gt;GAMResults._from_fit"]
+    newton_plain --&gt; _from_fit
+    dense_efs --&gt; _from_fit
+    optimize_gaussian_qr_lbfgs --&gt; _from_fit
+    newton_optimize --&gt; _from_fit</code></pre>
+<p>Read from the top. The three row-source routes leave <code>fit</code> at the first
+branch; the dense route runs to the bottom. <code>use_gaussian_qr_lbfgs</code> is only
+consulted when a Gaussian QR provider was built (otherwise it is skipped and
+Newton runs); it is true above 50 penalties
+(<code>GAUSSIAN_LBFGS_PENALTY_THRESHOLD</code> in <code>jaxgam/execution/gaussian_qr/preparation.py</code>).</p>
+<h3 id="the-dense-route-inline-in-fit">The dense route, inline in <code>fit</code><a class="headerlink" href="#the-dense-route-inline-in-fit" title="Permanent link">&para;</a></h3>
+<p>The dense route has no <code>_fit_dense</code> method; it is the tail of <code>GAM.fit</code>.</p>
+<ol>
+<li><code>data</code> must not be a <code>RowSource</code> (<code>TypeError</code>), and
+   <code>control.linear_solver</code> must be <code>"cholesky"</code> (<code>NotImplementedError</code>
+   naming the route that solver belongs to).</li>
+<li>Phase 1: <code>parse_formula(self.formula)</code> then
+   <code>ModelSetup.build(spec, data, weights, offset)</code>.</li>
+<li>Phase 1 to 2: <code>_resolve_device(self.device)</code> (<code>None</code> keeps JAX's default
+   device; <code>"gpu"</code> without a GPU backend raises <code>RuntimeError</code>), then
+   <code>FittingData.from_setup(setup, family_obj, device=jax_device)</code>, which
+   transfers the arrays with <code>to_jax</code>.</li>
+<li>Gaussian QR request. With <code>control.gaussian_compression</code>:
+   if <code>optimizer == "efs"</code> and <code>sp is None</code> the request is recorded as unmet;
+   otherwise <code>build_dense_gaussian_qr_provider(fd)</code>
+   (<code>jaxgam/execution/gaussian_qr/optimizer.py</code>) either returns a score provider
+   and sets <code>execution_route = "gaussian_qr"</code>, or raises
+   <code>GaussianQRIneligible</code>, whose message becomes <code>execution_fallback_reason</code>
+   while the ordinary dense fit runs.</li>
+<li>Phase 2, in this order of precedence:</li>
+<li><code>sp</code> given: <code>_fit_fixed_sp(fd, sp, method, score_provider=...)</code>,
+     <code>lambda_strategy = "fixed"</code>. It validates <code>sp</code> with
+     <code>_fixed_log_smoothing_parameters</code> (<code>ValueError</code> for a wrong count or a
+     non-positive or non-finite value). Families with estimated theta or
+     unknown scale still run <code>newton_optimize</code> with <code>pin_lambda=True</code>, so
+     theta or the scale is estimated at the fixed smoothing parameters, as in
+     mgcv's <code>gam.outer</code> (<code>R/mgcv.r</code>); known-scale families run one PIRLS
+     (<code>source_pirls</code> or <code>pirls_loop</code>) and evaluate <code>REMLCriterion</code> once. A
+     Gaussian QR provider with more than 50 penalties sends a fixed-<code>sp</code> fit
+     to <code>optimize_gaussian_qr_lbfgs</code> with <code>pin_lambda=True</code>.</li>
+<li>no penalties: <code>newton_optimize(fd, method)</code>, whose purely parametric
+     shortcut runs one inner fit; <code>lambda_strategy = "newton_reml"</code>. This
+     branch wins over <code>optimizer="efs"</code>.</li>
+<li><code>optimizer == "efs"</code>: family checks (below), then
+     <code>dense_efs_known_scale</code> or <code>dense_efs_unknown_scale</code>
+     (<code>jaxgam/execution/efs.py</code>) started from <code>efs_initial_log_lambda</code> and,
+     for unknown scale, <code>efs_initial_log_scale</code>; <code>lambda_strategy = "efs_reml"</code>.</li>
+<li>otherwise Newton: <code>newton_optimize(fd, method, score_provider=...)</code>,
+     <code>lambda_strategy = "newton_reml"</code>, or <code>optimize_gaussian_qr_lbfgs</code> and
+     <code>"lbfgs_reml"</code> when a QR provider exists and there are more than 50
+     penalties.</li>
+<li>After an estimated-sp EFS fit with estimated theta, the selected theta is
+   written back with <code>family_obj.put_theta</code>. (Newton synchronizes theta
+   itself when it builds its result.)</li>
+<li><code>_warn_factor_regularization(fit_result)</code> issues a <code>RuntimeWarning</code> if
+   the final penalized Hessian needed a diagonal jitter in its Cholesky
+   factor.</li>
+<li>Phase 2 to 3: <code>GAMResults._from_fit(..., result_mode=result, ...)</code> builds
+   <code>GAMResults</code>, <code>GAMInferenceResult</code> or <code>GAMPredictionResult</code>.</li>
+</ol>
+<p>Dense EFS refusals: an estimated-theta negative binomial with identity or
+sqrt link whose zero-coefficient means are invalid for the offset raises
+<code>ValueError</code>; a family or link outside <code>_known_scale_family_supported</code> or
+<code>_unknown_scale_family_supported</code> raises <code>NotImplementedError</code>.</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant GAM as GAM.fit
+    participant parse_formula as parse_formula
+    participant ModelSetup as ModelSetup.build
+    participant FittingData as FittingData.from_setup
+    participant NewtonOptimizer as NewtonOptimizer.run
+    participant REMLCriterion as REMLCriterion
+    participant GAMResults as GAMResults._from_fit
+    GAM-&gt;&gt;parse_formula: formula string
+    parse_formula--&gt;&gt;GAM: FormulaSpec
+    GAM-&gt;&gt;ModelSetup: spec, data, weights, offset
+    ModelSetup--&gt;&gt;GAM: ModelSetup with X, y, weights, penalties, coef_map
+    GAM-&gt;&gt;FittingData: setup, family, device
+    FittingData--&gt;&gt;GAM: FittingData on the JAX device via to_jax
+    GAM-&gt;&gt;NewtonOptimizer: newton_optimize builds NewtonOptimizer and calls run
+    NewtonOptimizer-&gt;&gt;REMLCriterion: initial PIRLS fit, then score, gradient and Hessian
+    loop outer Newton iterations, at most max_iter
+        NewtonOptimizer-&gt;&gt;NewtonOptimizer: _safe_newton_step
+        NewtonOptimizer-&gt;&gt;NewtonOptimizer: _step_halve calls _fit_and_score, jitted PIRLS plus score
+        NewtonOptimizer-&gt;&gt;REMLCriterion: _make_criterion and _check_convergence
+    end
+    NewtonOptimizer--&gt;&gt;GAM: NewtonResult from _build_result
+    GAM-&gt;&gt;GAM: _warn_factor_regularization
+    GAM-&gt;&gt;GAMResults: fit_result, setup, spec, data, family, fd, result_mode
+    GAMResults-&gt;&gt;GAMResults: to_numpy, Vp, per-smooth EDF and edf1, null deviance
+    GAMResults--&gt;&gt;GAM: GAMResults, GAMInferenceResult or GAMPredictionResult</code></pre>
+<p>Each arrow into <code>NewtonOptimizer</code> is host Python; the jitted work is inside
+<code>_fit_and_score</code> (one fused XLA program for the penalty, the PIRLS loop and
+the criterion score) and inside the gradient and Hessian evaluation.
+<code>_step_halve_gaussian</code> replaces <code>_step_halve</code> for Gaussian identity fits.</p>
+<h3 id="the-streamed-route-_fit_stream-and-_fit_stream_routes">The streamed route: <code>_fit_stream</code> and <code>_fit_stream_routes</code><a class="headerlink" href="#the-streamed-route-_fit_stream-and-_fit_stream_routes" title="Permanent link">&para;</a></h3>
+<p><code>_fit_stream</code> checks, in order: <code>linear_solver == "pcg"</code> (<code>ValueError</code>),
+<code>data</code> not a <code>RowSource</code> (<code>TypeError</code>), <code>weights</code> or <code>offset</code> passed
+(<code>ValueError</code>), <code>result != "prediction"</code> (<code>NotImplementedError</code>). It then
+classifies the fit:</p>
+<ul>
+<li><code>estimated_efs</code>: <code>optimizer == "efs"</code> and <code>sp is None</code>;</li>
+<li><code>estimated_exact</code>: <code>optimizer == "newton"</code> and <code>sp is None</code>;</li>
+<li>fixed: <code>sp</code> given.</li>
+</ul>
+<p><code>_gaussian_qr_request_fallback</code> returns a reason when a Gaussian QR request
+cannot apply (EFS selection, or not exactly <code>Gaussian</code> with <code>IdentityLink</code>);
+otherwise the fit is a Gaussian QR candidate. Family and solver checks follow:
+estimated EFS needs <code>linear_solver="qr"</code> and passes <code>_check_stream_efs_family</code>;
+estimated exact REML needs <code>"qr"</code> unless it is a Gaussian QR candidate, and
+passes <code>_check_stream_fixed_family(family, "qr")</code>; a fixed fit passes
+<code>_check_stream_fixed_family(family, linear_solver)</code>. All raise
+<code>NotImplementedError</code>. The rest runs inside <code>single_fit_fingerprints()</code>, so
+an in-memory source is hashed once at the start and once at the end, and a
+change raises <code>RuntimeError</code>.</p>
+<p><code>_fit_stream_routes</code> does Phase 1 with <code>prepare_model(spec, data, family=...,
+batch_rows=..., maximum_bytes=...)</code> and wraps the result in
+<code>StreamDesign(prepared, data)</code>. Then:</p>
+<pre class="mermaid"><code>flowchart TD
+    prepare_model["prepare_model, StreamDesign"] --&gt; candidate{"Gaussian QR candidate"}
+    candidate --&gt;|"yes"| weights_check{"weights within 1e-10 to 1e10"}
+    weights_check --&gt;|"no"| reason_weights["fallback reason, continue"]
+    weights_check --&gt;|"yes"| preflight_streamed_gaussian_qr_workspace["preflight_streamed_gaussian_qr_workspace&lt;br/&gt;MemoryError if over budget"]
+    candidate --&gt;|"no"| efs_check
+    reason_weights --&gt; efs_check
+    preflight_streamed_gaussian_qr_workspace --&gt; efs_check{"estimated_efs"}
+    efs_check --&gt;|"yes, no penalties"| _fit_stream_parametric_bypass["_fit_stream_parametric_bypass&lt;br/&gt;stream_parametric_qr"]
+    efs_check --&gt;|"yes"| fit_streamed_efs["fit_streamed_efs&lt;br/&gt;stream_efs_qr"]
+    efs_check --&gt;|"no"| qr_ready{"QR workspace preflighted"}
+    qr_ready --&gt;|"yes"| build_stream_gaussian_qr_provider["build_stream_gaussian_qr_provider"]
+    build_stream_gaussian_qr_provider --&gt;|"provider"| _fit_stream_gaussian_qr["_fit_stream_gaussian_qr&lt;br/&gt;stream_gaussian_qr"]
+    build_stream_gaussian_qr_provider --&gt;|"GaussianQRIneligible"| exact_solver
+    qr_ready --&gt;|"no"| exact_solver{"estimated_exact without qr solver"}
+    exact_solver --&gt;|"yes"| exact_error["NotImplementedError"]
+    exact_solver --&gt;|"no"| _preflight_stream_workspace["_preflight_stream_workspace&lt;br/&gt;MemoryError if over budget"]
+    _preflight_stream_workspace --&gt; exact_check{"estimated_exact"}
+    exact_check --&gt;|"yes"| _fit_stream_exact_reml["_fit_stream_exact_reml&lt;br/&gt;stream_exact_reml_qr"]
+    exact_check --&gt;|"no, NegativeBinomial"| _fit_stream_fixed_nb["_fit_stream_fixed_nb&lt;br/&gt;stream_qr"]
+    exact_check --&gt;|"no, QR-only family or qr with known scale"| _fit_stream_fixed_regular["_fit_stream_fixed_regular&lt;br/&gt;stream_qr"]
+    exact_check --&gt;|"no, otherwise"| fit_streamed_pirls["fit_streamed_pirls&lt;br/&gt;stream or stream_qr"]</code></pre>
+<p>Read from the top; each leaf shows the function that fits and the
+<code>execution_route</code> it reports. "QR-only family" means
+<code>_stream_legacy_fisher_eligible(family)</code> is false. The last leaf reports
+<code>"stream_qr"</code> when <code>linear_solver == "qr"</code> and <code>"stream"</code> otherwise.</p>
+<p>What each streamed leaf calls:</p>
+<ul>
+<li><code>fit_streamed_pirls</code> (<code>jaxgam/execution/stream/pirls.py</code>): fixed-sp streamed
+  PIRLS with a Cholesky or QR solve.</li>
+<li><code>_fit_stream_fixed_regular</code>: known scale uses <code>fit_regular_streamed_pirls</code>
+  (<code>jaxgam/execution/stream/regular.py</code>); unknown scale uses
+  <code>optimize_regular_stream_reml</code> (<code>jaxgam/execution/stream/reml.py</code>) with the
+  smoothing parameters pinned and the log scale free.</li>
+<li><code>_fit_stream_fixed_nb</code>: fixed theta uses <code>fit_nb_streamed_pirls</code>
+  (<code>jaxgam/execution/stream/nb.py</code>); estimated theta uses
+  <code>optimize_nb_stream_reml</code> (<code>jaxgam/execution/stream/nb_reml.py</code>) with the
+  smoothing parameters pinned, then <code>put_theta</code>.</li>
+<li><code>_fit_stream_exact_reml</code>: two startup scans in
+  <code>prepare_stream_reml_start</code> (<code>jaxgam/execution/stream/efs_start.py</code>) when
+  there are penalties, then <code>optimize_nb_stream_reml</code> or
+  <code>optimize_regular_stream_reml</code> over log smoothing parameters plus log
+  theta or log scale. With no penalty, known scale and no theta it delegates
+  to the fixed-sp functions and relabels the result
+  (<code>lambda_strategy = "exact_reml_no_parameters"</code>).</li>
+<li><code>fit_streamed_efs</code> (<code>jaxgam/execution/stream/efs.py</code>) with <code>control.efs</code>.</li>
+<li><code>_fit_stream_parametric_bypass</code>: one streamed coefficient fit
+  (<code>fit_nb_streamed_pirls</code> or <code>fit_regular_streamed_pirls</code>), plus one
+  replay for the saturated likelihood when the scale is unknown;
+  <code>lambda_strategy = "newton_reml"</code>.</li>
+<li><code>_fit_stream_gaussian_qr</code>: <code>newton_optimize</code> with the QR score provider, or
+  <code>optimize_gaussian_qr_lbfgs</code> above 50 penalties; <code>pin_lambda</code> when <code>sp</code> is
+  given.</li>
+</ul>
+<p>Every streamed leaf ends in <code>GAMPredictionResult._from_stream_fit</code>, called
+with the row-free <code>StreamFitState</code>, the <code>PreparedModel</code>, the
+<code>PreparedFittingMetadata</code> and, for optimizer routes, a <code>selected_fit</code> that
+carries the outer score and convergence: built by <code>_selected_stream_fit</code>, or
+the accepted fit of the EFS execution on <code>stream_efs_qr</code>.
+<code>_with_execution_fallback_reason</code> then records any unmet Gaussian QR request.</p>
+<h3 id="the-discretized-route-_fit_discrete">The discretized route: <code>_fit_discrete</code><a class="headerlink" href="#the-discretized-route-_fit_discrete" title="Permanent link">&para;</a></h3>
+<p><code>_fit_discrete</code> checks, in order: <code>data</code> not a <code>RowSource</code> (<code>TypeError</code>);
+<code>weights</code> or <code>offset</code> passed (<code>ValueError</code>); <code>result != "prediction"</code>,
+<code>linear_solver != "cholesky"</code>, <code>sp is None</code> without
+<code>smoothing_strategy="working_model_reml"</code>, <code>sp is None</code> with
+<code>optimizer != "newton"</code>, an <code>ExtendedFamily</code> without the
+<code>extended_performance_iteration</code> capability, and any family that is neither
+Gaussian with its canonical link nor declares <code>regular_performance_iteration</code>
+or <code>extended_performance_iteration</code> (all <code>NotImplementedError</code>). It then
+parses the formula, resolves the device and, inside <code>single_fit_fingerprints()</code>,
+calls <code>fit_discrete_gaussian</code> (Gaussian identity) or <code>fit_discrete_regular</code>
+(every other admitted family), and builds the result with
+<code>GAMPredictionResult._from_discrete</code>. The route never reads <code>optimizer</code>
+when <code>sp</code> is given, and ignores <code>gaussian_compression</code> except to report it.</p>
+<p>Phase 1 for this route is called from the driver:
+<code>_prepared_discrete</code> in <code>jaxgam/execution/discrete/gaussian.py</code> runs
+<code>build_continuous_discrete_setup</code> (which scans the source to build the
+compact frame and runs <code>ModelSetup.build</code> on it), <code>build_discretization_metadata</code>,
+<code>build_request_compression</code> (only for <code>prediction_policy="mgcv_predict_bamd"</code>)
+and <code>build_continuous_discrete_design</code> (no source scan), and releases the
+compact selectors when the fit ends.</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant GAM as GAM._fit_discrete
+    participant single_fit_fingerprints as single_fit_fingerprints
+    participant fit_discrete_gaussian as fit_discrete_gaussian
+    participant build_continuous_discrete_setup as build_continuous_discrete_setup
+    participant RowSource as RowSource
+    participant discrete_ops as fitting/discrete/ops.py kernels
+    participant fit_gaussian_working_model_statistics as fit_gaussian_working_model_statistics
+    participant GAMPredictionResult as GAMPredictionResult._from_discrete
+    GAM-&gt;&gt;GAM: route checks, parse_formula, _resolve_device
+    GAM-&gt;&gt;single_fit_fingerprints: enter, first digest of the source is kept
+    GAM-&gt;&gt;fit_discrete_gaussian: spec, source, sp, control, device
+    fit_discrete_gaussian-&gt;&gt;build_continuous_discrete_setup: via _prepared_discrete
+    build_continuous_discrete_setup-&gt;&gt;RowSource: setup scans, scan with batch_rows
+    build_continuous_discrete_setup--&gt;&gt;fit_discrete_gaussian: compact setup, ModelSetup.build on compact rows
+    fit_discrete_gaussian-&gt;&gt;fit_discrete_gaussian: metadata, indexed design, _solver_plan, _check_fit_budget
+    fit_discrete_gaussian-&gt;&gt;discrete_ops: to_device_discrete_design
+    loop fit scan 1, one batch at a time
+        fit_discrete_gaussian-&gt;&gt;RowSource: scan with batch_rows
+        fit_discrete_gaussian-&gt;&gt;discrete_ops: discrete_xwxd and discrete_xwyd add to XtWX and XtWy
+    end
+    alt sp is None
+        fit_discrete_gaussian-&gt;&gt;fit_gaussian_working_model_statistics: Sl.fitChol proposals on frozen statistics
+    else sp given
+        fit_discrete_gaussian-&gt;&gt;fit_discrete_gaussian: host Cholesky solve
+    end
+    loop fit scan 2, one batch at a time
+        fit_discrete_gaussian-&gt;&gt;RowSource: scan with batch_rows
+        fit_discrete_gaussian-&gt;&gt;discrete_ops: discrete_xbd gives fitted values for the residual deviance
+    end
+    fit_discrete_gaussian--&gt;&gt;GAM: DiscreteFit, row-free
+    GAM-&gt;&gt;GAMPredictionResult: fit_state, family, formula, method, control, sp
+    GAMPredictionResult--&gt;&gt;GAM: execution_route discrete
+    GAM-&gt;&gt;single_fit_fingerprints: exit, source hashed again, RuntimeError if changed
+    GAM-&gt;&gt;GAM: _with_execution_fallback_reason</code></pre>
+<p>Read top to bottom: setup scans happen before any fit scan, and
+<code>source_scans</code> on the result counts only the two fit scans. For the other
+families <code>fit_discrete_regular</code> (<code>jaxgam/execution/discrete/regular.py</code>)
+replaces the middle part with the performance iteration of <code>bgam.fitd</code>
+(<code>R/bam.r</code>): every outer iteration rescans the source to form working
+weights and takes one <code>Sl.fitChol</code> proposal (<code>R/fast-REML.r</code>), and an
+estimated negative binomial theta adds scans of its own.</p>
+<h3 id="the-operator-route-_fit_operator-and-_fit_operator_efs">The operator route: <code>_fit_operator</code> and <code>_fit_operator_efs</code><a class="headerlink" href="#the-operator-route-_fit_operator-and-_fit_operator_efs" title="Permanent link">&para;</a></h3>
+<p><code>_fit_operator</code> checks, in order: <code>linear_solver != "pcg"</code> (<code>ValueError</code>);
+<code>result != "prediction"</code>, <code>uncertainty != "none"</code>, <code>sp is None</code> without
+<code>optimizer="efs"</code>, an estimated theta, more than one theta, <code>device</code> other
+than <code>None</code> or <code>"cpu"</code> (all <code>NotImplementedError</code>); <code>data</code> not a <code>RowSource</code>
+(<code>TypeError</code>); <code>weights</code> or <code>offset</code> passed (<code>ValueError</code>). With <code>sp=None</code>
+and <code>optimizer="efs"</code> it hands over to <code>_fit_operator_efs</code>. Otherwise it
+validates <code>sp</code> (count, real values, positive and finite: <code>ValueError</code>; a
+16-bytes-per-value check against the budget: <code>MemoryError</code>), calls
+<code>prepare_operator_model</code> with an <code>OperatorPreparationControl</code> built from
+the smaller of <code>batch_rows</code> and the source's row count
+(<code>_operator_fit_batch_rows</code>), <code>memory_budget_bytes</code> and
+<code>OperatorControl.max_modest_coefficients</code>, rechecks the <code>sp</code> count against
+<code>model.penalties.n_penalties</code>, fits with <code>fit_operator_fixed_sp</code>
+(<code>jaxgam/execution/operator/fit.py</code>) and builds the result with
+<code>GAMPredictionResult._from_operator_fit</code>.</p>
+<p><code>_fit_operator_efs</code> admits only a canonical <code>Poisson</code> family and <code>batch_rows</code>
+inside <code>CALIBRATED_OPERATOR_EFS_DOMAIN</code> before any scan, then prepares the
+model with one eighth of the memory budget, checks the prepared shape
+against the calibrated domain (one indexed random effect, at most
+<code>CALIBRATED_OPERATOR_EFS_MAX_MODEST</code> modest coefficients), builds the start
+with <code>prepare_indexed_operator_efs_start</code>, and runs
+<code>run_operator_efs_known_scale</code> over a <code>SourceOperatorEFSFitProvider</code>
+(<code>jaxgam/execution/operator/efs_controller.py</code>). Outside the domain it
+raises <code>NotImplementedError</code>; a result that cannot fit the remaining budget
+raises <code>MemoryError</code>. The result is <code>_from_operator_fit</code> on the accepted
+fit, then <code>dataclasses.replace</code> with the selected score, its error bound,
+scale, <code>edf_total</code>, convergence fields and <code>lambda_strategy = "efs_reml"</code>.
+The operator route does not open a <code>single_fit_fingerprints</code> scope; its
+preparation and fit verify replay themselves.</p>
+<h3 id="how-weights-and-the-offset-travel">How weights and the offset travel<a class="headerlink" href="#how-weights-and-the-offset-travel" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Where they come from</th>
+<th>Where they go</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>dense</td>
+<td><code>fit(weights=, offset=)</code>, each of shape <code>(n,)</code>. <code>ModelSetup.build</code> defaults weights to ones, rejects a wrong shape, negative or non-finite weights, all-zero weights and a non-finite offset with <code>ValueError</code>.</td>
+<td><code>setup.weights</code> and <code>setup.offset</code>, transferred to the device as <code>fd.wt</code> and <code>fd.offset</code>; used again in <code>_from_fit</code> for the null deviance, and <code>_offset_was_nonzero(setup)</code> tells the predictor to warn when new data come without an offset.</td>
+</tr>
+<tr>
+<td>stream</td>
+<td><code>RowBatch.weight</code> and <code>RowBatch.offset</code> of each scanned batch; <code>fit</code> refuses separate arrays.</td>
+<td>Reduced per batch by the drivers. <code>prepare_model</code> records their range in <code>prepared.fitting.response</code>, which decides Gaussian QR weight eligibility and the predictor's <code>offset_was_nonzero</code>.</td>
+</tr>
+<tr>
+<td>discrete</td>
+<td><code>RowBatch.weight</code> and <code>RowBatch.offset</code>. <code>declared_row_vectors</code> reads the source's <code>has_explicit_weights</code> and <code>has_explicit_offset</code>; an undeclared attribute counts as supplied, which changes the seeded compact-frame padding as supplied vectors do in <code>bam</code>.</td>
+<td>Accumulated into the indexed statistics in every fit scan; <code>DiscreteFit.offset_was_nonzero</code> reaches the predictor.</td>
+</tr>
+<tr>
+<td>operator</td>
+<td><code>RowBatch.weight</code> and <code>RowBatch.offset</code>.</td>
+<td>Moved to the device per batch in <code>jaxgam/execution/operator/fit.py</code>; the fit reports <code>offset_was_nonzero</code>. Operator EFS additionally requires unit weights and a zero offset.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="how-each-route-builds-its-result">How each route builds its result<a class="headerlink" href="#how-each-route-builds-its-result" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Constructor</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>dense</td>
+<td><code>GAMResults._from_fit</code></td>
+<td><code>result_mode</code> picks <code>GAMResults</code>, <code>GAMInferenceResult</code> or <code>GAMPredictionResult</code> from the same fit.</td>
+</tr>
+<tr>
+<td>stream</td>
+<td><code>GAMPredictionResult._from_stream_fit</code></td>
+<td>Recomputes the REML score from the stream state unless a <code>selected_fit</code> supplies it.</td>
+</tr>
+<tr>
+<td>discrete</td>
+<td><code>GAMPredictionResult._from_discrete</code></td>
+<td>Records <code>prediction_policy</code> and the bounded <code>discretization</code> metadata.</td>
+</tr>
+<tr>
+<td>operator</td>
+<td><code>GAMPredictionResult._from_operator_fit</code></td>
+<td>Fixed sp: <code>score=None</code>, <code>edf_total=None</code>, <code>scale=None</code> for unknown-scale families.</td>
+</tr>
+</tbody>
+</table>
+<p><a href="../results_and_prediction/">Phase 3: results and prediction</a> describes what
+each constructor keeps.</p>
+<h3 id="execution_route-labels"><code>execution_route</code> labels<a class="headerlink" href="#execution_route-labels" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Label</th>
+<th>Set in</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dense</code></td>
+<td><code>GAM.fit</code>; also the field default on <code>_FitDiagnostics</code> and <code>GAMPredictionResult</code></td>
+<td>ordinary dense fit</td>
+</tr>
+<tr>
+<td><code>gaussian_qr</code></td>
+<td><code>GAM.fit</code></td>
+<td>dense fit through a Gaussian QR score provider</td>
+</tr>
+<tr>
+<td><code>stream</code></td>
+<td><code>_fit_stream_routes</code> (and the default of <code>_from_stream_fit</code>)</td>
+<td><code>fit_streamed_pirls</code> with the Cholesky solver</td>
+</tr>
+<tr>
+<td><code>stream_qr</code></td>
+<td><code>_fit_stream_routes</code>, <code>_fit_stream_fixed_regular</code>, <code>_fit_stream_fixed_nb</code></td>
+<td>fixed-sp streamed fit with the QR solver</td>
+</tr>
+<tr>
+<td><code>stream_gaussian_qr</code></td>
+<td><code>_fit_stream_gaussian_qr</code></td>
+<td>streamed Gaussian QR route</td>
+</tr>
+<tr>
+<td><code>stream_exact_reml_qr</code></td>
+<td><code>_fit_stream_exact_reml</code> (both branches)</td>
+<td>exact streamed REML</td>
+</tr>
+<tr>
+<td><code>stream_efs_qr</code></td>
+<td><code>_fit_stream_routes</code></td>
+<td>streamed EFS</td>
+</tr>
+<tr>
+<td><code>stream_parametric_qr</code></td>
+<td><code>_fit_stream_parametric_bypass</code></td>
+<td><code>optimizer="efs"</code> on a model with no penalties</td>
+</tr>
+<tr>
+<td><code>discrete</code></td>
+<td><code>GAMPredictionResult._from_discrete</code></td>
+<td>discretized route</td>
+</tr>
+<tr>
+<td><code>operator</code></td>
+<td><code>GAMPredictionResult._from_operator_fit</code>, <code>_fit_operator_efs</code></td>
+<td>operator route</td>
+</tr>
+</tbody>
+</table>
+<p><code>lambda_strategy</code> takes the values <code>fixed</code>, <code>newton_reml</code>, <code>lbfgs_reml</code>,
+<code>efs_reml</code>, <code>exact_reml</code>, <code>exact_reml_no_parameters</code> (all set in
+<code>jaxgam/api.py</code>) and <code>working_model_reml</code> (from the discrete fit state).
+<code>execution_path</code> is <code>"jax"</code> except on the discretized route, where
+<code>_from_discrete</code> reports <code>jax_actions_numpy_solve</code>,
+<code>jax_actions_working_model_numpy_postestimation</code> or
+<code>jax_actions_performance_iteration_numpy_postestimation</code>.</p>
+<h3 id="execution_fallback_reason-values"><code>execution_fallback_reason</code> values<a class="headerlink" href="#execution_fallback_reason-values" title="Permanent link">&para;</a></h3>
+<p>The field is set only for a Gaussian QR request that did not apply; the fit
+then runs on the route it would have taken without the request.</p>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>Set in</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"Gaussian QR compression requires Newton smoothing selection."</td>
+<td><code>GAM.fit</code> (dense) and <code>_gaussian_qr_request_fallback</code> (stream)</td>
+</tr>
+<tr>
+<td>"Gaussian QR requires the exact Gaussian family with identity link"</td>
+<td><code>_gaussian_qr_request_fallback</code> (stream); also a <code>GaussianQRIneligible</code> message</td>
+</tr>
+<tr>
+<td>"Gaussian QR currently requires unclipped finite positive weights"</td>
+<td><code>_fit_stream_routes</code>; also a <code>GaussianQRIneligible</code> message</td>
+</tr>
+<tr>
+<td>the message of a caught <code>GaussianQRIneligible</code></td>
+<td><code>GAM.fit</code> (dense, from <code>build_dense_gaussian_qr_provider</code>) and <code>_fit_stream_routes</code> (from <code>build_stream_gaussian_qr_provider</code>). Messages include "Gaussian QR smoothing optimization requires at least one penalty", "Gaussian QR currently requires a full identifiable coefficient map" and "Gaussian QR requires finite dense fitting data" (<code>jaxgam/execution/gaussian_qr/optimizer.py</code>, <code>jaxgam/execution/gaussian_qr/preparation.py</code>).</td>
+</tr>
+<tr>
+<td>"Gaussian QR compression requires execution 'dense' or 'stream'."</td>
+<td><code>_discrete_gaussian_qr_request_fallback</code></td>
+</tr>
+</tbody>
+</table>
+<p>The operator route never reads <code>gaussian_compression</code>, so its results always
+carry <code>None</code>.</p>
+<h2 id="key-types">Key types<a class="headerlink" href="#key-types" title="Permanent link">&para;</a></h2>
+<p>The <code>_fit_*</code> functions, all in <code>jaxgam/api.py</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Chosen when</th>
+<th>Setup it calls</th>
+<th>Fitting it calls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GAM.fit</code> (dense tail)</td>
+<td><code>execution="dense"</code></td>
+<td><code>parse_formula</code>, <code>ModelSetup.build</code>, <code>FittingData.from_setup</code></td>
+<td><code>_fit_fixed_sp</code>, <code>newton_optimize</code>, <code>dense_efs_known_scale</code>, <code>dense_efs_unknown_scale</code>, <code>optimize_gaussian_qr_lbfgs</code></td>
+</tr>
+<tr>
+<td><code>_fit_fixed_sp</code></td>
+<td>dense with <code>sp</code> given</td>
+<td>none</td>
+<td><code>newton_optimize</code> (pinned), <code>source_pirls</code> or <code>pirls_loop</code>, <code>REMLCriterion</code>, <code>optimize_gaussian_qr_lbfgs</code></td>
+</tr>
+<tr>
+<td><code>GAM._fit_stream</code></td>
+<td><code>execution="stream"</code></td>
+<td>none (checks only)</td>
+<td><code>_fit_stream_routes</code></td>
+</tr>
+<tr>
+<td><code>GAM._fit_stream_routes</code></td>
+<td>always from <code>_fit_stream</code></td>
+<td><code>parse_formula</code>, <code>prepare_model</code>, <code>StreamDesign</code>, <code>PreparedFittingMetadata.from_prepared</code></td>
+<td>the leaves below, or <code>fit_streamed_pirls</code> and <code>fit_streamed_efs</code> directly</td>
+</tr>
+<tr>
+<td><code>_fit_stream_gaussian_qr</code></td>
+<td>stream, Gaussian QR provider built</td>
+<td>none</td>
+<td><code>newton_optimize</code> or <code>optimize_gaussian_qr_lbfgs</code> with the provider</td>
+</tr>
+<tr>
+<td><code>_fit_stream_fixed_regular</code></td>
+<td>stream, fixed sp, QR-only family or QR with known scale</td>
+<td>none</td>
+<td><code>fit_regular_streamed_pirls</code> or <code>optimize_regular_stream_reml</code></td>
+</tr>
+<tr>
+<td><code>_fit_stream_fixed_nb</code></td>
+<td>stream, fixed sp, <code>NegativeBinomial</code></td>
+<td>none</td>
+<td><code>fit_nb_streamed_pirls</code> or <code>optimize_nb_stream_reml</code></td>
+</tr>
+<tr>
+<td><code>_fit_stream_exact_reml</code></td>
+<td>stream, <code>sp=None</code>, <code>optimizer="newton"</code>, no Gaussian QR</td>
+<td><code>prepare_stream_reml_start</code></td>
+<td><code>optimize_regular_stream_reml</code> or <code>optimize_nb_stream_reml</code></td>
+</tr>
+<tr>
+<td><code>_fit_stream_parametric_bypass</code></td>
+<td>stream, <code>optimizer="efs"</code>, no penalties</td>
+<td>none</td>
+<td><code>fit_regular_streamed_pirls</code> or <code>fit_nb_streamed_pirls</code></td>
+</tr>
+<tr>
+<td><code>GAM._fit_discrete</code></td>
+<td><code>execution="discrete"</code></td>
+<td><code>parse_formula</code> (the rest in the driver)</td>
+<td><code>fit_discrete_gaussian</code> or <code>fit_discrete_regular</code></td>
+</tr>
+<tr>
+<td><code>GAM._fit_operator</code></td>
+<td><code>execution="operator"</code></td>
+<td><code>parse_formula</code>, <code>prepare_operator_model</code></td>
+<td><code>fit_operator_fixed_sp</code></td>
+</tr>
+<tr>
+<td><code>GAM._fit_operator_efs</code></td>
+<td>operator, <code>sp=None</code>, <code>optimizer="efs"</code></td>
+<td><code>prepare_operator_model</code>, <code>prepare_indexed_operator_efs_start</code></td>
+<td><code>run_operator_efs_known_scale</code></td>
+</tr>
+</tbody>
+</table>
+<pre class="mermaid"><code>classDiagram
+    class GAM {
+        +formula str
+        +family object
+        +method str
+        +sp object
+        +device str
+        +optimizer str
+        +control FitControl
+        +fit(data, weights, offset, result) object
+        -_fit_operator(data, weights, offset, result, family) GAMPredictionResult
+        -_fit_operator_efs(source, family) GAMPredictionResult
+        -_fit_stream(data, weights, offset, result, family) GAMPredictionResult
+        -_fit_stream_routes(data, family) GAMPredictionResult
+        -_fit_discrete(data, weights, offset, result, family) GAMPredictionResult
+    }
+    class NewtonResult {
+        +log_lambda Array
+        +smoothing_params Array
+        +converged bool
+        +n_iter int
+        +score Array
+        +edf Array
+        +scale Array
+        +pirls_result PIRLSResult
+        +convergence_info str
+        +theta float
+    }
+    class FittingData {
+        +n_penalties int
+        +from_setup(setup, family, device) FittingData
+        +S_lambda(log_lambda) Array
+    }
+    class PreparedFittingMetadata {
+        +from_prepared(prepared, family, device) PreparedFittingMetadata
+    }
+    class DiscreteFit {
+        +coefficients ndarray
+        +smoothing_strategy str
+        +predict_spec PredictSpec
+    }
+    GAM ..&gt; FittingData : dense setup hand-off
+    GAM ..&gt; PreparedFittingMetadata : stream metadata
+    GAM ..&gt; NewtonResult : dense and stream fits
+    GAM ..&gt; DiscreteFit : discrete fits</code></pre>
+<p><code>NewtonResult</code> (<code>jaxgam/fitting/newton.py</code>) is the optimizer-neutral fit
+record the dense route hands to <code>GAMResults._from_fit</code>; the streamed
+optimizer routes build one with <code>_selected_stream_fit</code> to carry the outer
+score. <code>DiscreteFit</code> (<code>jaxgam/execution/discrete/gaussian.py</code>) is the row-free state
+of a discretized fit. The class diagram shows only the members that this page
+discusses.</p>
+<h2 id="rules-and-invariants">Rules and invariants<a class="headerlink" href="#rules-and-invariants" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Route checks run before data access.</strong> Every row-source route rejects a
+  wrong solver, a wrong <code>result</code> and separate weights or offset before it
+  parses the formula or scans the source; <code>tests/test_execution/test_stream_api.py</code>,
+  <code>tests/test_execution/test_discrete_routes.py</code> and
+  <code>tests/test_execution/test_operator_routes.py</code> assert these refusals, and
+  <code>tests/test_inference/test_operator_geometry.py</code> checks that the operator
+  refusals precede any source access.</li>
+<li><strong>The registry family is never mutated.</strong> Families with estimated theta are
+  deep-copied in <code>fit</code>; result builders snapshot the family again
+  (<code>tests/test_result_mode.py</code>,
+  <code>test_from_fit_owns_independent_family_snapshots_with_final_theta</code>).</li>
+<li><strong>A supplied <code>sp</code> is reported verbatim.</strong> All constructors pass the caller's
+  <code>sp</code> through <code>_report_smoothing_params</code> (<code>tests/test_supplied_smoothing_params.py</code>).</li>
+<li><strong>An unmet Gaussian QR request never changes the fit.</strong> The fit takes the
+  route it would take without the request and records why
+  (<code>tests/test_execution/test_gaussian_stream_routes.py</code>,
+  <code>tests/test_execution/test_gaussian_optimizer.py</code>,
+  <code>test_discrete_gaussian_qr_request_keeps_the_discrete_fit_bitwise</code> in
+  <code>tests/test_execution/test_discrete_routes.py</code>).</li>
+<li><strong>Other routes do not change the dense result.</strong>
+  <code>test_operator_control_leaves_existing_routes_bitwise_unchanged</code> in
+  <code>tests/test_execution/test_operator_routes.py</code> and
+  <code>test_published_routes_never_enter_the_discrete_route</code> in
+  <code>tests/test_execution/test_discrete_routes.py</code> guard the dispatch.</li>
+<li><strong>One fingerprint scope per fit.</strong> The stream and discrete routes wrap the
+  whole fit in <code>single_fit_fingerprints()</code>; nested stages join it.</li>
+</ul>
+<h2 id="pitfalls">Pitfalls<a class="headerlink" href="#pitfalls" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>fit</code> defaults to <code>result="full"</code>, which every row-source route refuses:
+  examples for those routes must pass <code>result="prediction"</code>.</li>
+<li><code>sp</code> with <code>optimizer="efs"</code> runs the fixed-sp path on every route; the
+  optimizer only matters when <code>sp is None</code>. On the discrete route
+  <code>optimizer="efs"</code> is refused only when <code>sp is None</code>.</li>
+<li>A fixed <code>sp</code> does not always mean "no optimization" on the dense route:
+  Gaussian, Gamma and estimated-theta negative binomial fits still run
+  <code>newton_optimize</code> with <code>pin_lambda=True</code> to estimate scale or theta, and
+  report its <code>n_iter</code>.</li>
+<li>Estimated streamed REML without <code>linear_solver="qr"</code> passes the first
+  check when Gaussian QR was requested, and fails later with
+  <code>NotImplementedError</code> only if the QR route turns out to be ineligible.</li>
+<li><code>_preflight_stream_workspace</code> charges the requested <code>batch_rows</code>, not the
+  source's row count, so a small source can fail the preflight at the
+  default <code>batch_rows</code> with a large coefficient count.</li>
+</ul>
+<h2 id="where-to-change-things">Where to change things<a class="headerlink" href="#where-to-change-things" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>To do this</th>
+<th>Edit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Accept a new <code>GAM</code> keyword</td>
+<td><code>_ACCEPTED_KWARGS</code> and <code>_check_scope_guards</code> in <code>jaxgam/api.py</code>; store it in <code>GAM.__init__</code></td>
+</tr>
+<tr>
+<td>Add a field to <code>FitControl</code></td>
+<td><code>jaxgam/control.py</code> (field and <code>__post_init__</code> rule), then its reader in the relevant <code>_fit_*</code> function</td>
+</tr>
+<tr>
+<td>Add a streamed sub-route</td>
+<td><code>_fit_stream</code> (classification and checks) and <code>_fit_stream_routes</code> (dispatch); give it a new <code>execution_route</code> label and add it to the table above</td>
+</tr>
+<tr>
+<td>Change dense smoothing selection</td>
+<td>the dense tail of <code>GAM.fit</code> and <code>_fit_fixed_sp</code></td>
+</tr>
+<tr>
+<td>Change what a route refuses</td>
+<td>the check list at the top of its <code>_fit_*</code> method; keep refusals before any source scan</td>
+</tr>
+<tr>
+<td>Change result construction</td>
+<td>the constructor named in the table above, in <code>jaxgam/results.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>A planned refactor will replace the per-route methods in <code>jaxgam/api.py</code>
+with a shared fitting engine; see
+<a href="../../unify_fit/design/">the unified fitting design</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

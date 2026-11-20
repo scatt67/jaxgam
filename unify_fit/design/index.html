@@ -1,0 +1,1884 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Unified Fitting Engine: Design Document - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#unified-fitting-engine-design-document" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Unified Fitting Engine: Design Document
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-problem-statement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Problem statement
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Problem statement">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-what-is-not-the-problem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.1 What is not the problem
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-current-state-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Current state (measured)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Current state (measured)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-parallel-implementations-of-the-same-procedure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 Parallel implementations of the same procedure
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-near-duplicate-scans" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 Near-duplicate scans
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-observed-drift-between-ports" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3 Observed drift between ports
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-root-cause" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4 Root cause
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-decision-keep-gam-bam-features-are-strategies-not-a-replacement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Decision: keep GAM; BAM features are strategies, not a replacement
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-goals-and-non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Goals and non-goals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-target-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Target architecture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Target architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-core-interfaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Core interfaces
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-how-each-existing-route-maps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 How each existing route maps
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-where-the-variation-lives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 Where the variation lives
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-numerical-fidelity-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Numerical-fidelity rules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-guardrails" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Guardrails
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Risks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-open-questions-resolve-in-phase-0" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Open questions (resolve in Phase 0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="unified-fitting-engine-design-document">Unified Fitting Engine: Design Document<a class="headerlink" href="#unified-fitting-engine-design-document" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> proposed, not started. Its precondition is met: the scaling and EFS work was merged into <code>main</code> on 2026-11-20 as pull request #87 (commit <code>e919938</code>). The PR labels used below (PR9, PR11, PR12, EFS6, PR13) are those of the scaling plan in <a href="../../scale_jaxgam/jaxgam_scaling_implementation_plan/"><code>docs/scale_jaxgam/</code></a>; all of them are part of that merge. One preparatory step is done: on 2026-11-20 the modules of <code>fitting/</code>, <code>execution/</code> and <code>formula/</code> were grouped into sub-packages by route (§9, question 5), with no change to their contents. Paths in this document use that layout; the file and line counts in §2 were taken before it and are unchanged by it.</p>
+<p>For a description of the code as it is today, which this design starts from, see the <a href="../../architecture/">architecture pages</a>.</p>
+<p><strong>Plan:</strong> <a href="../implementation_plan/">implementation_plan.md</a>.</p>
+<p><strong>Scope:</strong> internal architecture of <code>jaxgam/fitting/</code>, <code>jaxgam/execution/</code> and the routing in <code>jaxgam/api.py</code>. The public <code>GAM(...).fit(...)</code> API, the numerical results and every R-parity tolerance stay unchanged.</p>
+<hr />
+<h2 id="1-problem-statement">1. Problem statement<a class="headerlink" href="#1-problem-statement" title="Permanent link">&para;</a></h2>
+<p>JaxGAM now fits the same mgcv model in several ways:
+- dense <code>gam()</code>;
+- streamed exact REML;
+- dense and streamed extended Fellner–Schall (EFS);
+- the Gaussian frozen-QR route;
+- the discrete working model (<code>bam</code>/<code>bgam.fitd</code>);
+- operator/Krylov fits with operator EFS and bulk uncertainty.</p>
+<p>Each mode was added as a <strong>vertical slice</strong>, with its own inner PIRLS loop, its own outer controller, its own score evaluator and its own <code>api.py</code> route. The new slice usually started as a copy of the previous one and was then specialised. The same mgcv procedures are therefore implemented several times, in both <code>execution/</code> and <code>fitting/</code>.</p>
+<p>That is a correctness risk as well as a maintenance cost. Every R comparison is STRICT, so two ports of one R routine must agree with R <em>and with each other</em>, down to operation order. They already drift: see §2.3.</p>
+<h3 id="11-what-is-not-the-problem">1.1 What is <em>not</em> the problem<a class="headerlink" href="#11-what-is-not-the-problem" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>The <code>fitting/</code> vs <code>execution/</code> split itself.</strong> It is prescribed by the scaling plan: pure JIT kernels go in <code>fitting/</code>, host control flow and I/O in <code>execution/</code>. It is the only structural marker of AGENTS.md's load-bearing Phase-2 rule, and it should stay.</li>
+<li><strong>The family capability contract</strong> (<code>FamilyExecutionLineage</code>, <code>fisher_equals_observed_for_score</code>, <code>row_separable</code>, …). It is the right abstraction, though it is not yet used everywhere.</li>
+<li><strong>The EFS provider interface.</strong> <code>execution/efs_provider.py</code> (<code>EFSFitProvider</code>, <code>EFSFitRequest</code>, <code>EFSControllerContext</code>) already lets dense and streamed EFS share one controller. That is the pattern this design generalises.</li>
+</ul>
+<hr />
+<h2 id="2-current-state-measured">2. Current state (measured)<a class="headerlink" href="#2-current-state-measured" title="Permanent link">&para;</a></h2>
+<p>Measurements were taken on 2026-10-24 from frozen exports of each line:</p>
+<table>
+<thead>
+<tr>
+<th>Line</th>
+<th>Commit</th>
+<th><code>execution/</code></th>
+<th><code>fitting/</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Published stack top, #68</td>
+<td><code>4352d87</code></td>
+<td>16 files / 9,994 lines</td>
+<td>22 files / 10,518 lines</td>
+</tr>
+<tr>
+<td>PR9 composed</td>
+<td><code>f3256a8</code></td>
+<td>18 / 11,198</td>
+<td>24 / 11,039</td>
+</tr>
+<tr>
+<td>PR11</td>
+<td><code>40b7615</code> (old base)</td>
+<td>8 / 4,289</td>
+<td>17 / 8,980</td>
+</tr>
+<tr>
+<td>PR12+EFS6</td>
+<td><code>03bbc7e</code></td>
+<td>28 / 14,499</td>
+<td>27 / 11,403</td>
+</tr>
+<tr>
+<td>PR13</td>
+<td><code>dcd88d5</code></td>
+<td>21 / 11,769</td>
+<td>26 / 11,343</td>
+</tr>
+</tbody>
+</table>
+<p>Measured again on <code>main</code> after the merge (commit <code>e919938</code>, 2026-11-20): <code>execution/</code> has 36 files / 21,653 lines and <code>fitting/</code> has 33 files / 15,446 lines. The duplicate scans of §2.2 have not been re-run on that commit; do that in Phase 0.</p>
+<h3 id="21-parallel-implementations-of-the-same-procedure">2.1 Parallel implementations of the same procedure<a class="headerlink" href="#21-parallel-implementations-of-the-same-procedure" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>mgcv procedure</th>
+<th>JaxGAM implementations</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PIRLS step control (<code>gam.fit3</code>/<code>gam.fit4</code> step halving, divergence and domain recovery)</td>
+<td><code>fitting/pirls.py</code> (dense; 1,765 lines incl. an EFS-specific beta step); <code>fitting/efs_regular_pirls.py</code> (EFS regular, 635); <code>execution/stream/pirls.py</code> (streamed canonical); <code>execution/stream/regular.py</code> (streamed signed); <code>execution/stream/nb.py</code> (streamed NB); <code>execution/operator/fit.py</code> (operator, PR12); <code>execution/discrete/gaussian.py</code>/<code>working_model.py</code> (discrete, PR11)</td>
+</tr>
+<tr>
+<td>Outer smoothing-parameter controller</td>
+<td><code>fitting/newton.py::NewtonOptimizer</code> (dense, host loop inside <code>fitting/</code>); <code>execution/stream/reml.py::optimize_stream_reml</code> and <code>optimize_regular_stream_reml</code>; <code>execution/stream/nb_reml.py::optimize_nb_stream_reml</code>; <code>execution/gaussian_qr/optimizer.py::optimize_gaussian_qr_lbfgs</code> (PR9); <code>execution/efs.py::_run_efs_known_scale</code> and <code>_run_efs_unknown_scale</code>; <code>execution/operator/efs_controller.py::_run_operator_efs</code> (EFS6); <code>execution/discrete/working_model.py::advance_gaussian_working_model</code> (PR11)</td>
+</tr>
+<tr>
+<td>REML/score assembly</td>
+<td><code>fitting/reml.py</code> (dense); <code>fitting/stream/reml.py</code>; <code>fitting/stream/nb_reml.py</code>; <code>fitting/gaussian_qr/kernel.py</code> (PR9); <code>fitting/discrete/working_model.py</code> (PR11, <code>Sl.fitChol</code>); <code>fitting/operator/efs_score.py</code> + <code>execution/operator/score.py</code> (EFS6)</td>
+</tr>
+<tr>
+<td><code>efsudr</code> raw update</td>
+<td><code>fitting/efs.py::efs_raw_update</code> (JAX); <code>execution/operator/efs_controller.py::_raw_ratio</code> + <code>_trial_rho</code> (NumPy)</td>
+</tr>
+<tr>
+<td>NB theta</td>
+<td><code>fitting/efs_theta.py</code> (conditional Newton); <code>fitting/stream/nb_theta.py</code> + <code>execution/stream/nb_theta.py</code> (streamed); joint-REML theta in <code>execution/stream/nb_reml.py</code>; PR11 milestone B will add <code>estimate.theta</code></td>
+</tr>
+<tr>
+<td>Saturated log-likelihood reduction</td>
+<td><code>fitting/family_execution.py::batch_saturated_loglikelihood</code>; <code>fitting/stream/kernels.py::saturated_loglik_reduction</code></td>
+</tr>
+<tr>
+<td>Route preflight</td>
+<td><code>execution/stream/reml.py::_preflight_regular_reml</code>; <code>execution/stream/nb_reml.py::_preflight_nb_reml</code>; <code>execution/stream/pirls.py::_preflight</code>; plus <code>api.py</code> <code>_check_stream_*</code> helpers</td>
+</tr>
+<tr>
+<td>Public routing</td>
+<td><code>api.py</code>: <code>_fit_stream</code>, <code>_fit_stream_gaussian_qr</code>, <code>_fit_stream_fixed_regular</code>, <code>_fit_stream_fixed_nb</code>, <code>_fit_stream_exact_reml</code>, <code>_fit_stream_parametric_bypass</code>, <code>_fit_operator</code>, <code>_fit_operator_efs</code>, <code>_fit_discrete</code>, <code>_fit_fixed_sp</code>; about 1,400 lines across lines; six <code>execution_route</code> labels</td>
+</tr>
+</tbody>
+</table>
+<h3 id="22-near-duplicate-scans">2.2 Near-duplicate scans<a class="headerlink" href="#22-near-duplicate-scans" title="Permanent link">&para;</a></h3>
+<p>Two scans were run, both over functions with at least 15 body lines.
+- <strong>Token scan:</strong> token 5-gram Jaccard, which finds copy-paste.
+- <strong>Structural scan:</strong> normalised-AST <code>SequenceMatcher</code> ratio, which finds "same algorithm, renamed".</p>
+<p>Representative results:</p>
+<table>
+<thead>
+<tr>
+<th>Pair</th>
+<th>Structural</th>
+<th>Token</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fitting/efs_theta.py::_conditional_theta_nll_jit</code> ↔ <code>fitting/stream/nb_theta.py::objective</code></td>
+<td>0.98</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>fitting/efs_regular_pirls.py::midpoint</code> ↔ <code>fitting/pirls.py::midpoint</code></td>
+<td>0.98</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>execution/stream/nb_reml.py::evaluate</code> ↔ <code>execution/stream/reml.py::evaluate</code></td>
+<td>0.97</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>execution/stream/nb.py::scan_at</code> ↔ <code>execution/stream/regular.py::scan_at</code></td>
+<td>0.96</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>execution/efs.py::_run_efs_known_scale</code> (175 L) ↔ <code>_run_efs_unknown_scale</code> (192 L)</td>
+<td>0.86</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>execution/stream/reml.py::optimize_regular_stream_reml</code> ↔ <code>execution/stream/nb_reml.py::optimize_nb_stream_reml</code></td>
+<td>0.72</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>execution/stream/reml.py::evaluate_regular_stream_reml</code> (195 L) ↔ <code>execution/stream/nb_reml.py::evaluate_nb_stream_reml</code> (193 L)</td>
+<td>0.80</td>
+<td>0.36</td>
+</tr>
+<tr>
+<td><code>fitting/family_execution.py::batch_saturated_loglikelihood</code> ↔ <code>fitting/stream/kernels.py::saturated_loglik_reduction</code></td>
+<td>0.80</td>
+<td>0.42</td>
+</tr>
+<tr>
+<td><code>execution/operator/efs_controller.py::_indexed_poisson_score_bound</code> ↔ <code>_indexed_gaussian_score_bound</code></td>
+<td>—</td>
+<td>0.68</td>
+</tr>
+<tr>
+<td><code>execution/operator/efs_controller.py::_run_operator_efs</code> (284 L) ↔ <code>execution/efs.py::_run_efs_known_scale</code></td>
+<td>0.42</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>fitting/efs_regular_pirls.py::_efs_regular_pirls_loop_jit</code> ↔ <code>fitting/pirls.py::_pirls_loop_jit</code></td>
+<td>0.12</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>Exact helper copies: <code>_factor_inverse_residual</code> is identical in <code>execution/stream/reml.py</code> and <code>execution/stream/nb_reml.py</code>; <code>_link_name</code> is near-identical in <code>execution/stream/nb.py</code> and <code>fitting/stream/nb_reml.py</code>.</p>
+<p>The low PIRLS and operator-EFS ratios matter. Most of the duplication is <strong>algorithmic</strong>, not textual: the same R procedure is re-derived with different names and data access. A copy-paste linter alone will not find it.</p>
+<h3 id="23-observed-drift-between-ports">2.3 Observed drift between ports<a class="headerlink" href="#23-observed-drift-between-ports" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>efsudr</code> ratio order.</strong> <code>fitting/efs.py::efs_raw_update</code> computes <code>phi * numerator / max(0, q)</code>. <code>execution/operator/efs_controller.py::_raw_ratio</code> computes <code>numerator / max(0, q) * phi</code>. Both claim pinned <code>efsudr</code> order, and they can differ in the last bit.</li>
+<li><strong>Family allowlists.</strong> Between 36 and 43 <code>isinstance(family, (Gaussian|Poisson|…))</code> checks in <code>execution/</code> and <code>fitting/</code> per line, instead of capability queries; on <code>main</code> after the merge there are 46. The family capability contract exists so that such allowlists are not needed.</li>
+<li><strong>Host control flow in <code>fitting/</code>.</strong> <code>fitting/newton.py::NewtonOptimizer</code> (<code>while</code> loops with <code>bool(jnp.isfinite(...))</code> host pulls) and <code>fitting/data.py::FittingData.from_setup</code> (NumPy preparation) break the "<code>fitting/</code> is JIT-only" rule. The scaling plan's audit already noted this. At the time of the October measurement nothing in <code>fitting/</code> imported <code>execution/</code> or host SciPy. On <code>main</code> after the merge there is one such import: <code>fitting/data.py::_structural_penalty_roots</code> imports <code>structural_rank</code> from <code>execution/qr.py</code> inside the function, to avoid a circular import. Phase 2 should remove it.</li>
+<li><strong>Misleading pairs.</strong> <code>fitting/reml.py</code> is the dense criterion. <code>execution/stream/reml.py</code> is the <em>streamed</em> driver and does not use it; its kernels are in <code>fitting/stream/reml.py</code>. The same holds for <code>execution/stream/nb_reml.py</code> ↔ <code>fitting/stream/nb_reml.py</code>.</li>
+</ul>
+<h3 id="24-root-cause">2.4 Root cause<a class="headerlink" href="#24-root-cause" title="Permanent link">&para;</a></h3>
+<p>There is no shared interface between "how data is accessed" and "which mgcv algorithm runs on it". EFS has one (<code>EFSFitProvider</code>), and that is why dense and streamed EFS share a controller. Everything else couples:
+- data access (in-memory X, RowSource batches, discrete tables, operators);
+- coefficient solving (Cholesky, positive QR, signed QR, PCG, <code>Sl.fitChol</code>);
+- the inner loop;
+- the outer optimizer.</p>
+<p>All four are coupled in each route.</p>
+<hr />
+<h2 id="3-decision-keep-gam-bam-features-are-strategies-not-a-replacement">3. Decision: keep <code>GAM</code>; BAM features are strategies, not a replacement<a class="headerlink" href="#3-decision-keep-gam-bam-features-are-strategies-not-a-replacement" title="Permanent link">&para;</a></h2>
+<p>Deprecating the dense <code>gam()</code> path in favour of a BAM-only design was considered and <strong>rejected</strong>:</p>
+<ol>
+<li><strong>Different estimator.</strong> <code>bam</code>'s performance iteration re-estimates smoothing parameters on a working model at each IRLS step. For non-Gaussian families its fixed point differs from <code>gam</code>'s Laplace-REML optimum, and it is not guaranteed to converge. Only Gaussian/identity is equivalent.</li>
+<li><strong>Discretization is an approximation.</strong> <code>bam(discrete=TRUE)</code> changes the fitted model.</li>
+<li><strong>The correctness contract is <code>gam</code> parity.</strong> AGENTS.md, the validation matrix and all published PRs validate against pinned <code>gam</code> at STRICT.</li>
+<li><strong>mgcv keeps both deliberately:</strong> <code>gam</code> is exact and usually faster at moderate n; <code>bam</code> is for data that does not fit.</li>
+</ol>
+<p>BAM's distinctive pieces remain opt-in strategies on the shared engine: performance iteration (<code>smoothing_strategy="working_model_reml"</code>), fREML working-model criterion, and discretization (<code>execution="discrete"</code>).</p>
+<hr />
+<h2 id="4-goals-and-non-goals">4. Goals and non-goals<a class="headerlink" href="#4-goals-and-non-goals" title="Permanent link">&para;</a></h2>
+<p><strong>Goals</strong></p>
+<ol>
+<li><strong>One implementation per mgcv procedure:</strong></li>
+<li>PIRLS step control;</li>
+<li>each outer optimizer (<code>newton</code>, exact L-BFGS-B plus <code>newton()</code> completion, <code>efsudr</code>, <code>bgam.fitd</code>);</li>
+<li>REML score assembly from sufficient statistics;</li>
+<li>the <code>efsudr</code> update;</li>
+<li>each NB theta strategy;</li>
+<li>the saturated log-likelihood.</li>
+<li><strong>Data access behind one provider interface.</strong> Dense becomes the in-memory provider, not a separate stack.</li>
+<li><strong>Capability-driven routing.</strong> Families, providers and solvers declare capabilities, and the router derives a <code>FitPlan</code>. No family-name allowlists.</li>
+<li><strong>An honest boundary.</strong> <code>fitting/</code> holds only pure JIT kernels; host loops live in <code>execution/</code>. Both are enforced by tests.</li>
+<li><strong>Bit-identical numerics.</strong> Every unification is proven by before/after equality of fit outputs, not by tolerance.</li>
+<li><strong>Guardrails</strong> (architecture tests plus duplicate-code lint) so the duplication does not come back.</li>
+</ol>
+<p><strong>Non-goals</strong></p>
+<ul>
+<li>No public API change. <code>GAM</code>, <code>FitControl</code>, result types and <code>execution_route</code> labels are preserved. The labels become derived from the <code>FitPlan</code>.</li>
+<li>No numerical change. Tolerances, oracle tests and digest-bound allowances are untouched. Where two current ports disagree (§2.3), the plan picks the one that matches pinned R and proves every affected STRICT gate still passes. That is the only permitted output change, and it must be documented per case.</li>
+<li>No new features, families, solvers or performance work.</li>
+<li>No change to Phase 1 (setup) or Phase 3 (post-estimation), beyond consuming a unified result builder.</li>
+</ul>
+<hr />
+<h2 id="5-target-architecture">5. Target architecture<a class="headerlink" href="#5-target-architecture" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>jaxgam/api.py                  GAM facade: validate → plan → execute → build result
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>jaxgam/execution/routing.py    capability matching → FitPlan(provider, solver, inner, optimizer, uncertainty)
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>jaxgam/execution/optimizers/   host controllers, one per mgcv outer algorithm
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    newton.py                    gam.outer/newton(); exact or finite-difference curvature from the provider
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    exact_lbfgs.py               bounded L-BFGS-B + shared newton() completion (pinned and free)
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    efs.py                       efsudr, incl. scale and theta options and uncertain score comparisons
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    performance_iteration.py     bgam.fitd (working-model Sl.fitChol steps, estimate.theta nuisance)
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    completion.py                shared newton() acceptance (today's _newton_model_rejection and friends)
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>jaxgam/execution/inner/        one PIRLS host driver; nuisance (theta/scale) strategies
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    pirls.py                     the step-control policy, parameterised by provider + solver + system
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    theta.py                     joint-REML, conditional (estimate.theta) and EFS in-PIRLS theta
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>jaxgam/execution/providers/    data access; each implements FitProvider
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    in_memory.py                 today's dense X/FittingData path
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    stream.py                    RowSource batches (regular and NB), replay/lineage checks
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    gaussian_qr.py               frozen Gaussian QR statistics (PR9)
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    discrete.py                  compressed tables / discrete operators (PR11)
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    operator.py                  matvec/Krylov providers, arrowhead/indexed (PR12/EFS6)
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>jaxgam/execution/solvers/      coefficient-system solvers behind CoefficientSolver
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    cholesky.py  qr.py  signed_qr.py  pcg.py  working_model.py (Sl.fitChol, pinned DPSTRF)
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>jaxgam/execution/uncertainty/  selected and bulk variance (PR13), Fisher/observed factors
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>jaxgam/fitting/                pure JAX kernels only (no host loops, no I/O, no SciPy)
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    family/ (link/variance/deviance/derivative kernels), pirls_step.py, penalty_ops.py,
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>    reml_terms.py (score from sufficient statistics), efs_update.py, linalg actions (qr/signed_qr),
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>    the route kernels: stream/, discrete/, operator/, gaussian_qr/
+</code></pre></div>
+<p>Today <code>execution/</code> and <code>fitting/</code> are grouped by route, not by role: <code>execution/stream/</code>, <code>execution/discrete/</code>, <code>execution/operator/</code> and <code>execution/gaussian_qr/</code> each hold one route's drivers, and <code>fitting/</code> has the same four folders for its kernels. Each provider above is carved out of the matching route folder; the optimizers, the inner driver and the solvers are what the route folders have in common.</p>
+<p><strong>Dependency rule:</strong> <code>api → routing → optimizers → inner → providers/solvers → fitting</code>. Nothing in <code>fitting/</code> imports <code>execution/</code>. Providers and solvers never import optimizers. Phase-1 modules never import JAX (already enforced).</p>
+<h3 id="51-core-interfaces">5.1 Core interfaces<a class="headerlink" href="#51-core-interfaces" title="Permanent link">&para;</a></h3>
+<p>These are typed <code>Protocol</code>s and frozen dataclasses, following existing JaxGAM style. The names are indicative; the existing <code>EFSFitProvider</code> is the seed.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">FitProvider</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="n">capabilities</span><span class="p">:</span> <span class="n">ProviderCapabilities</span>  <span class="c1"># exact_gradient, exact_hessian, hessian_vector,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>                                        <span class="c1"># approximate_score (with error bound), replayable,</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>                                        <span class="c1"># memory model, supported solver kinds</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">start</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">request</span><span class="p">:</span> <span class="n">StartRequest</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FitState</span><span class="p">:</span> <span class="o">...</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">fit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">request</span><span class="p">:</span> <span class="n">FitRequest</span><span class="p">,</span> <span class="n">warm</span><span class="p">:</span> <span class="n">FitState</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FitState</span><span class="p">:</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">        </span><span class="sd">"""Reconverged coefficients at (rho, theta, phi) via the plan's inner loop and solver."""</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">score</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">:</span> <span class="n">FitState</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ScoreTerms</span><span class="p">:</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">        </span><span class="sd">"""Exact score terms, or an estimate plus an error bound."""</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">gradient</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">:</span> <span class="n">FitState</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span> <span class="o">...</span>  <span class="c1"># adjoint / exact derivative</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">curvature</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">:</span> <span class="n">FitState</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Curvature</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>  <span class="c1"># exact Hessian, HVP, or None</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">efs_statistics</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">:</span> <span class="n">FitState</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">EFSStatistics</span><span class="p">:</span> <span class="o">...</span>  <span class="c1"># d, t, q (+ bounds)</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">work</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">WorkCounters</span><span class="p">:</span> <span class="o">...</span>  <span class="c1"># scans, batches, PIRLS passes, refits, timings</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="k">class</span><span class="w"> </span><span class="nc">CoefficientSolver</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    <span class="n">kind</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"cholesky"</span><span class="p">,</span> <span class="s2">"qr"</span><span class="p">,</span> <span class="s2">"signed_qr"</span><span class="p">,</span> <span class="s2">"pcg"</span><span class="p">,</span> <span class="s2">"working_model"</span><span class="p">]</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">factor</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">system</span><span class="p">:</span> <span class="n">WorkingSystem</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Factor</span><span class="p">:</span> <span class="o">...</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">solve</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">factor</span><span class="p">:</span> <span class="n">Factor</span><span class="p">,</span> <span class="n">rhs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="o">...</span><span class="p">:</span> <span class="o">...</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">log_determinant</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">factor</span><span class="p">:</span> <span class="n">Factor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="o">...</span><span class="p">:</span> <span class="o">...</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">traces</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">factor</span><span class="p">:</span> <span class="n">Factor</span><span class="p">,</span> <span class="n">penalties</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="o">...</span><span class="p">:</span> <span class="o">...</span>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="k">class</span><span class="w"> </span><span class="nc">Optimizer</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">provider</span><span class="p">:</span> <span class="n">FitProvider</span><span class="p">,</span> <span class="n">start</span><span class="p">:</span> <span class="n">FitState</span><span class="p">,</span>
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>            <span class="n">control</span><span class="p">:</span> <span class="n">OptimizerControl</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">OptimizationResult</span><span class="p">:</span> <span class="o">...</span>
+</code></pre></div>
+<ul>
+<li><strong><code>FitState</code></strong> is observation-independent: β, ρ, θ, φ, factors, the fit fingerprint and lineage. Providers own row access.</li>
+<li><strong><code>OptimizationResult</code></strong> carries truthful convergence, the stop reason, completion diagnostics and the work counters.</li>
+<li><strong>One result builder</strong> maps <code>(FitPlan, OptimizationResult, provider diagnostics)</code> to <code>GAMResults</code>, <code>GAMInferenceResult</code> or <code>GAMPredictionResult</code>.</li>
+</ul>
+<h3 id="52-how-each-existing-route-maps">5.2 How each existing route maps<a class="headerlink" href="#52-how-each-existing-route-maps" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Today</th>
+<th><code>FitPlan</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>dense <code>gam()</code> REML</td>
+<td>in-memory provider + cholesky solver + PIRLS (Fisher/observed system per family capability) + newton optimizer (exact AD Hessian)</td>
+</tr>
+<tr>
+<td>streamed fixed sp</td>
+<td>stream provider + qr/signed_qr solver + PIRLS + no optimizer (or the pinned-scale/theta completion only)</td>
+</tr>
+<tr>
+<td>streamed exact REML (#68)</td>
+<td>stream provider + qr/signed_qr + PIRLS + exact_lbfgs (+ completion)</td>
+</tr>
+<tr>
+<td>Gaussian frozen QR (PR9)</td>
+<td>gaussian_qr provider + qr + no PIRLS (closed form) + newton/exact_lbfgs</td>
+</tr>
+<tr>
+<td>dense or streamed EFS</td>
+<td>in-memory or stream provider + PIRLS (EFS system) + efs optimizer</td>
+</tr>
+<tr>
+<td>discrete working model (PR11)</td>
+<td>discrete provider + working_model solver + performance_iteration optimizer</td>
+</tr>
+<tr>
+<td>operator fixed sp / operator EFS (PR12/EFS6)</td>
+<td>operator provider + pcg solver + PIRLS + efs optimizer (score comparison may return "uncertain")</td>
+</tr>
+<tr>
+<td>bulk uncertainty (PR13)</td>
+<td>uncertainty module consuming the final <code>FitState</code> + provider factor/trace actions</td>
+</tr>
+</tbody>
+</table>
+<h3 id="53-where-the-variation-lives">5.3 Where the variation lives<a class="headerlink" href="#53-where-the-variation-lives" title="Permanent link">&para;</a></h3>
+<p>Each difference between routes moves to exactly one place:</p>
+<ul>
+<li><strong>Coefficient system</strong> (Fisher vs observed vs signed): a <code>WorkingSystem</code> strategy chosen from family capabilities. This removes the parallel PIRLS loops; <code>efs_regular_pirls</code> becomes PIRLS plus the EFS system and <code>gam.fit3</code> scoring option.</li>
+<li><strong>Scale and theta handling:</strong> optimizer options (EFS known/unknown scale become one loop) and <code>inner/theta.py</code> strategies (joint REML, conditional <code>estimate.theta</code>, EFS in-PIRLS theta).</li>
+<li><strong>Exact vs approximate scores:</strong> <code>ScoreTerms</code> carries an optional error bound. Optimizers use a three-way comparison (better / worse / uncertain). This is what the operator EFS controller does today in its own copy.</li>
+<li><strong>Curvature availability:</strong> the provider capability. The newton optimizer uses the exact Hessian (in-memory AD), HVPs, or central differences of exact gradients (as the free completion in #68 already does).</li>
+<li><strong>Family/link support:</strong> capabilities only. Unsupported combinations are rejected by the router with the same messages as today.</li>
+</ul>
+<hr />
+<h2 id="6-numerical-fidelity-rules">6. Numerical-fidelity rules<a class="headerlink" href="#6-numerical-fidelity-rules" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Operation order is part of the contract.</strong> A unified kernel must reproduce the exact floating-point sequence of the implementation it replaces. Where routes legitimately differ in order (e.g. <code>gam.fit3</code> vs <code>gam.fit4</code> scoring), the difference becomes an explicit, named strategy, not an accident.</li>
+<li><strong>Bit-identity first.</strong> Every unification PR runs the fingerprint harness (plan Phase 0) before and after. All fitted fields of the validation matrix and the execution tests must be <strong>bitwise identical</strong>, on host and on pinned Linux. Any intended exception (§2.3 drift) is listed per case with its R comparison, and must keep every STRICT gate.</li>
+<li><strong>No tolerance edits.</strong> <code>tests/tolerances.py</code>, digest-bound allowances and oracle tests are not modified. A failing gate means the refactor is wrong.</li>
+<li><strong>R references stay typed rpy2.</strong> No new oracles are needed; existing gates are the regression net.</li>
+</ol>
+<hr />
+<h2 id="7-guardrails">7. Guardrails<a class="headerlink" href="#7-guardrails" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Architecture test</strong> (<code>tests/test_architecture.py</code>). It checks:</li>
+<li><code>fitting/</code> never imports <code>execution/</code>, host <code>scipy</code>, <code>sqlite3</code> or file I/O;</li>
+<li>Phase-1 packages never import JAX;</li>
+<li>providers and solvers never import optimizers;</li>
+<li>no <code>isinstance(&lt;family&gt;, &lt;concrete family&gt;)</code> in <code>execution/</code> or <code>fitting/</code> outside a short reviewed allowlist (target: empty).</li>
+<li><strong>Duplicate-code lint.</strong> A <code>make lint</code> step runs a duplicate detector, pylint <code>duplicate-code</code> or <code>jscpd</code>, chosen in Phase 0. It starts in report-only mode against a committed baseline and becomes blocking in the final phase.</li>
+<li><strong>Review checklist</strong> (in <code>docs/unify_fit/</code> and the PR template): a new execution mode implements <code>FitProvider</code>, or a solver or strategy, and must not add a controller or PIRLS loop.</li>
+<li><strong>AGENTS.md:</strong> propose wording for the user to apply, covering the layers, the dependency rule and "extend via providers". Agents do not edit AGENTS.md themselves.</li>
+</ul>
+<hr />
+<h2 id="8-risks">8. Risks<a class="headerlink" href="#8-risks" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Behaviour change in the validated v1.0 dense path</td>
+<td>Do the dense → in-memory-provider step last, behind bitwise fingerprints and the full validation matrix</td>
+</tr>
+<tr>
+<td>Hidden operation-order dependence breaks STRICT parity</td>
+<td>Fingerprint harness at every step; one unification per PR; keep the old path behind an internal switch until the fingerprint matches, then delete it in the same PR series</td>
+</tr>
+<tr>
+<td>JIT recompilation or performance regressions from extra indirection</td>
+<td>Keep kernels monomorphic and jitted at the same boundaries; record compile counts and §8 benchmark timings before and after; abstractions live on the host side</td>
+</tr>
+<tr>
+<td>Large churn conflicts with other work</td>
+<td>Start only after all current lines are published; the unification series is the only active work</td>
+</tr>
+<tr>
+<td>Over-abstraction</td>
+<td>Interfaces are extracted from the existing EFS provider and real routes, not designed speculatively; each protocol method has at least two implementations</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="9-open-questions-resolve-in-phase-0">9. Open questions (resolve in Phase 0)<a class="headerlink" href="#9-open-questions-resolve-in-phase-0" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Duplicate-detector tool:</strong> pylint <code>duplicate-code</code> (already Python tooling) or <code>jscpd</code> (token-based, faster). Confirm the threshold and baseline format.</li>
+<li><strong><code>FittingData</code>:</strong> should it become the in-memory provider's internal state, or stay as a shared Phase-1→2 transfer type? Decide from its current call sites.</li>
+<li><strong>Retiring <code>optimize_stream_reml</code> (canonical known-scale):</strong> retire it outright, or keep it as a mode of <code>exact_lbfgs</code>. Its regime is a strict subset of <code>optimize_regular_stream_reml</code>.</li>
+<li><strong>The two §2.3 port disagreements:</strong> which order matches pinned <code>efsudr</code>? Verify against <code>R/gam.fit4.r</code> 1.9-3 before unifying.</li>
+<li><strong>Sub-packages by route first?</strong> (raised 2026-11-20; <strong>decided and done the same day</strong>) <code>fitting/</code>, <code>execution/</code> and <code>formula/</code> were grouped into sub-packages by route (<code>stream/</code>, <code>discrete/</code>, <code>operator/</code> and, in the first two, <code>gaussian_qr/</code>) in one move-only change; dense and shared modules stay at the top of each package. It replaced the renames that plan Phase 2 item 1 listed, removed the module names that existed in both packages without being a pair, and makes each route folder the starting point of the matching provider in §5.</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

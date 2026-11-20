@@ -1,0 +1,2463 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../fitting_discrete/">
+      
+      
+        <link rel="next" href="../results_and_prediction/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>The operator fit - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#phase-2-the-operator-fit" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              The operator fit
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#entry-and-refusals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entry and refusals
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prepared-geometry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prepared geometry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#matrix-free-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Matrix-free actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-frozen-system-and-its-certificate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The frozen system and its certificate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#preconditioned-conjugate-gradients" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Preconditioned conjugate gradients
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-fixed-smoothing-coefficient-driver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The fixed-smoothing coefficient driver
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-arrowhead-exact-algebra" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The arrowhead exact algebra
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-operator-fellner-schall-controller" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The operator Fellner-Schall controller
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#uncertainty" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Uncertainty
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#memory-bounds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory bounds
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#entry-and-refusals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entry and refusals
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prepared-geometry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prepared geometry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#matrix-free-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Matrix-free actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-frozen-system-and-its-certificate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The frozen system and its certificate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#preconditioned-conjugate-gradients" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Preconditioned conjugate gradients
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-fixed-smoothing-coefficient-driver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The fixed-smoothing coefficient driver
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-arrowhead-exact-algebra" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The arrowhead exact algebra
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-operator-fellner-schall-controller" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The operator Fellner-Schall controller
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#uncertainty" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Uncertainty
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#memory-bounds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory bounds
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="phase-2-the-operator-fit">Phase 2: the operator fit<a class="headerlink" href="#phase-2-the-operator-fit" title="Permanent link">&para;</a></h1>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>This page covers <code>FitControl(execution="operator", linear_solver="pcg")</code>:
+matrix-free fitting for models whose random effects have too many levels for
+a dense or discretized design. It describes how preparation bounds the model,
+the matrix-free actions, the frozen system and its positive-definiteness
+certificate, preconditioned conjugate gradients (PCG), the fixed-smoothing
+coefficient driver, the operator Fellner-Schall (EFS) controller with its score
+error bounds, score assembly, and the bulk link-scale variance. Routing into
+the route is in <a href="../fit_lifecycle/">the fit lifecycle</a>; the dense EFS it is
+compared with is in <a href="../fitting_dense/">the dense fit</a>.</p>
+<h2 id="where-the-code-is">Where the code is<a class="headerlink" href="#where-the-code-is" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/api.py</code> (<code>GAM._fit_operator</code>, <code>GAM._fit_operator_efs</code>)</td>
+<td>Route entry: refusals, <code>sp</code> checks, preparation, fixed-sp fit or the EFS admission and budget split, result construction.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/operator/prepare.py</code></td>
+<td>Phase 1: <code>prepare_operator_model</code>, <code>PreparedOperatorModel</code>, <code>IndexedRandomEffect</code>, <code>FactorEncoding</code>, <code>OperatorBatch</code>, and <code>_CheckedSource</code> (bounded, replay-hashed scans).</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/operator/modest.py</code></td>
+<td>Phase 1: rowless preparation of capped cubic, <code>by</code> and tensor terms (<code>prepare_modest_cubic_by</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/operator/radial.py</code></td>
+<td>Phase 1: rowless thin-plate and Gaussian-process setup with mgcv's knot harvesting (<code>prepare_radial_smooth</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/operator/workspace.py</code></td>
+<td>Phase 1: prospective evaluator workspace bounds for modest prediction (<code>predict_spec_evaluator_workspace_bound</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/inference/operator_geometry.py</code></td>
+<td>Phase 3: <code>OperatorPredictionGeometry</code>, the retained prediction encoding (modest rows plus symbolic random effects).</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/operator/actions.py</code></td>
+<td>JIT batch actions: <code>matvec_batch</code>, <code>rmatvec_batch</code>, <code>normal_matvec_batch</code>, donated accumulators, <code>penalty_matvec</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/operator/family.py</code></td>
+<td>JIT family rows: observed (Newton) curvature and working response from AD of the deviance (<code>operator_family_rows</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/operator/iterative.py</code></td>
+<td>JIT PCG recurrences and status codes (<code>initialize_pcg</code>, <code>advance_pcg</code>, <code>verify_pcg</code>); a resident <code>lax.while_loop</code> solver.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/operator/preconditioners.py</code></td>
+<td>Diagonal, small-block and coarse inverse preconditioners (<code>prepare_preconditioner</code>, <code>apply_preconditioner</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/system.py</code></td>
+<td><code>FrozenScanSystem</code> (certified <code>X'WX + S</code> replayed from the source), <code>PCGControl</code>, <code>solve_host_pcg</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/fit.py</code></td>
+<td>Fixed-sp observed Newton driver <code>fit_operator_fixed_sp</code>, <code>FrozenOperatorWorkingState</code>, source null start, <code>OperatorFitDiagnostics</code>, <code>OperatorFitResult</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/arrowhead.py</code></td>
+<td>Exact Schur algebra for one modest block plus one indexed identity block (<code>ExactArrowheadFactorization</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/efs_controller.py</code></td>
+<td>Operator EFS policy (<code>_run_operator_efs</code>), calibrated domain, score envelopes and their admission, <code>SourceOperatorEFSFitProvider</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/efs_provider.py</code></td>
+<td>Matched-state components at one fit: score rows, penalty determinant, observed log-determinant, Fisher traces, EDF (<code>MatchedOperatorEFSProvider</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/efs_start.py</code></td>
+<td>Source <code>initial.spg</code> start for one indexed identity penalty (<code>prepare_indexed_operator_efs_start</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/efs_trace.py</code></td>
+<td>Fisher traces <code>tr(H_F^-1 S_j)</code> and quadratics: structured, coordinate-solve and stochastic providers.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/logdet.py</code></td>
+<td><code>log det(H)</code>: structured diagonal, structured arrowhead, or stochastic Lanczos quadrature (<code>FrozenOperatorLogDet</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/penalty_determinant.py</code></td>
+<td>Local <code>log|S|+</code> and its log-sp gradient without a p-by-p array (<code>LocalOperatorPenaltyDeterminant</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/score_rows.py</code></td>
+<td>One replay of direct deviance, <code>family$ls</code> and penalty quadratic at a frozen state (<code>MatchedOperatorScoreReducer</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/score.py</code></td>
+<td>Score assembly (<code>assemble_operator_score</code>) and the bounded three-way comparison (<code>compare_operator_scores</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/operator/efs_score.py</code></td>
+<td>JIT scalar REML formula <code>operator_reml_score</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/variance.py</code></td>
+<td>Exact selected-row Fisher variances by one solve per row (<code>SelectedOperatorVariance</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/bulk_variance.py</code></td>
+<td>Monte Carlo bulk Fisher variance and its chi-square calibration (<code>BulkOperatorVariance</code>).</td>
+</tr>
+</tbody>
+</table>
+<p>The PCG solver and the preconditioners are documented in code as new
+algorithms, not mgcv ports. The Newton loop and the PCG driver are host Python
+loops in <code>jaxgam/execution/</code>; only per-batch kernels and PCG recurrences are
+JIT-compiled. <code>solve_resident_pcg</code>, the <code>lax.while_loop</code> solver in
+<code>jaxgam/fitting/operator/iterative.py</code>, has no caller outside that module. The
+The modules of <code>jaxgam/formula/operator/</code> import no JAX.</p>
+<p>A planned refactor will move this route onto a shared engine; see
+<a href="../../unify_fit/design/">the unified fit design</a>.</p>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<h3 id="entry-and-refusals">Entry and refusals<a class="headerlink" href="#entry-and-refusals" title="Permanent link">&para;</a></h3>
+<p><code>GAM._fit_operator</code> refuses, before any source access: <code>linear_solver</code> other
+than <code>"pcg"</code>; <code>result</code> other than <code>"prediction"</code>; <code>uncertainty</code> other than
+<code>"none"</code>; <code>sp=None</code> unless <code>optimizer="efs"</code>; an estimated theta (use
+<code>NegativeBinomial(theta, fixed=True)</code>) or more than one theta; a <code>device</code> other
+than <code>None</code> or <code>"cpu"</code>. The data must be a <code>RowSource</code> that owns weights and
+offset. With <code>sp=None</code> and <code>optimizer="efs"</code> it calls <code>_fit_operator_efs</code>;
+otherwise it validates <code>sp</code> (length, real, positive, finite; a quick length
+check before preparation when every smooth is a plain <code>s()</code> without <code>by</code>, and
+the exact check against <code>penalties.n_penalties</code> after it), prepares the
+model, and calls <code>fit_operator_fixed_sp</code>. A formula with no penalty still
+needs <code>sp=[]</code>.</p>
+<h3 id="prepared-geometry">Prepared geometry<a class="headerlink" href="#prepared-geometry" title="Permanent link">&para;</a></h3>
+<p><code>prepare_operator_model(spec, source, control=OperatorPreparationControl(...))</code>
+splits the model into two parts and never builds an n-by-p matrix, a dense
+random-effect design or a p-by-p penalty:</p>
+<ul>
+<li><strong>Indexed random effects</strong> (<code>s(..., bs="re")</code>): an <code>IndexedRandomEffect</code>
+  holds the term's factors (<code>FactorEncoding</code>, a frozen level tuple and lookup)
+  and numeric variables. <code>evaluate(columns)</code> returns one level id and one
+  amplitude per row: the id is the mixed-radix product of the factor codes,
+  numeric variables multiply the amplitude (random slopes), and an unknown level
+  or a non-finite amplitude contributes zero. The width is the product of the
+  level counts. The penalty is one <code>IdentityPenalty(width, scale)</code> per term,
+  with <code>scale</code> the squared largest absolute amplitude seen in training.
+  Levels are a categorical's declared categories (unused ones included),
+  otherwise the sorted observed values; a missing training level is an error.</li>
+<li><strong>Modest block</strong>: intercept, numeric parametric terms and <code>s</code>/<code>te</code>/<code>ti</code>
+  smooths with <code>cr</code>, <code>cs</code>, <code>cc</code>, <code>tp</code>, <code>ts</code>, <code>gp</code> bases (with numeric or factor
+  <code>by</code>). Its raw width is capped by <code>OperatorControl.max_modest_coefficients</code>
+  (default 64) before anything is built. Plain cubic terms go through the
+  ordinary <code>prepare_model</code>; any <code>by</code>, tensor or radial term goes through
+  <code>prepare_modest_cubic_by</code>, which calls <code>prepare_radial_smooth</code> for
+  <code>tp</code>/<code>ts</code>/<code>gp</code> (knots harvested from bounded scans, mgcv's sampler run
+  locally). A modest penalty block is copied into the global
+  <code>PenaltyStructure</code> at its global columns.</li>
+</ul>
+<p>Every scan runs through <code>_CheckedSource</code>, which checks positions, validity,
+finite response, weights and offset, the column schema, and pickles and
+SHA-256-hashes every row to prove identical replay (<code>source_replay_digest</code>),
+charging each row's bound before serializing it. Memory is checked by
+<code>_check_budget</code> at each stage; failures are <code>MemoryError</code> before allocation.
+The result <code>PreparedOperatorModel</code> records <code>metadata_bound_bytes</code>,
+<code>preparation_peak_bound_bytes</code> and preparation scan counts, and
+<code>evaluate_batch</code> turns a <code>RowBatch</code> into an <code>OperatorBatch</code> (modest rows plus
+<code>(ids, amplitudes, start, size)</code> per indexed term) under
+<code>batch_workspace_bound</code>.</p>
+<pre class="mermaid"><code>flowchart TD
+    Start["prepare_operator_model"] --&gt; Terms{"every term re, cr/cs/cc,&lt;br/&gt;tp/ts/gp or numeric?"}
+    Terms --&gt;|"no"| Refuse["NotImplementedError"]
+    Terms --&gt;|"yes"| Width{"modest raw width within&lt;br/&gt;max_modest_coefficients?"}
+    Width --&gt;|"no"| Cap["MemoryError"]
+    Width --&gt;|"yes"| Budget["_check_budget&lt;br/&gt;modest and symbolic bounds"]
+    Budget --&gt; Checked["_CheckedSource&lt;br/&gt;fingerprint and replay digest"]
+    Checked --&gt; Scan["scan: discover re levels,&lt;br/&gt;max amplitude per term"]
+    Scan --&gt; Enc["FactorEncoding per factor"]
+    Enc --&gt; Kind{"any by, tensor or radial term?"}
+    Kind --&gt;|"no"| Plain["prepare_model on modest terms"]
+    Kind --&gt;|"yes"| ModestBy["prepare_modest_cubic_by"]
+    ModestBy --&gt; Radial["prepare_radial_smooth&lt;br/&gt;for tp, ts, gp"]
+    Plain --&gt; Place["place modest columns and&lt;br/&gt;IndexedRandomEffect blocks"]
+    Radial --&gt; Place
+    Place --&gt; Pen["IdentityPenalty per re term&lt;br/&gt;plus modest penalty blocks"]
+    Pen --&gt; Verify{"fingerprint unchanged?"}
+    Verify --&gt;|"yes"| Model["PreparedOperatorModel"]
+    Verify --&gt;|"no"| Changed["RuntimeError"]</code></pre>
+<p>Every scan in this flow is a <code>_CheckedSource</code> scan; the replay digest from the
+first complete scan is checked by every later scan in preparation and in the
+fit.</p>
+<h3 id="matrix-free-actions">Matrix-free actions<a class="headerlink" href="#matrix-free-actions" title="Permanent link">&para;</a></h3>
+<p><code>to_device_operator_batch</code> validates one <code>OperatorBatch</code> (finite modest values,
+ids in range, non-overlapping coefficient intervals), charges its transfer,
+and makes a <code>DeviceOperatorBatch</code> with <code>DeviceIndexedRows</code>. The kernels in
+<code>jaxgam/fitting/operator/actions.py</code> follow <code>Xbd</code>/<code>XWyd</code>'s gather/reduce contract in
+public coordinates:</p>
+<ul>
+<li><code>matvec_batch</code>: <code>modest_values @ v[modest_columns]</code> plus, per indexed term,
+  <code>amplitudes * v[start + ids]</code>.</li>
+<li><code>rmatvec_batch</code>: scatter-add of <code>modest_values.T @ u</code> and of
+  <code>amplitudes * u</code> into <code>start + ids</code>.</li>
+<li><code>normal_matvec_batch</code> and <code>accumulate_normal_matvec_batch</code>: <code>X'W X v</code>, the
+  latter adding into a donated p-vector across host batches so no extra
+  p-vector is allocated per batch; <code>accumulate_rmatvec_batch</code> likewise for
+  right-hand sides and gradients.</li>
+<li><code>penalty_matvec</code>: <code>S_lambda v</code> from local penalty blocks
+  (<code>penalty_ops.apply</code>, mgcv's <code>Sl.Sb</code> pattern).</li>
+</ul>
+<p><code>operator_family_rows</code> (<code>jaxgam/fitting/operator/family.py</code>) evaluates one
+batch's family rows at <code>eta</code>: it takes the first and second derivatives of the
+row deviance with JAX AD, giving <code>half_gradient = D'/2</code>, the observed curvature
+<code>observed_weight = D''/2</code>, and the working response
+<code>W (eta - offset) - D'/2</code> (the form pinned <code>gam.fit4</code> uses, which avoids
+dividing by zero curvature). There is no Fisher substitution or curvature
+clipping; it requires the family capabilities <code>row_separable</code>,
+<code>observed_information</code>, <code>direct_deviance</code> and <code>differentiable_deviance</code>.</p>
+<h3 id="the-frozen-system-and-its-certificate">The frozen system and its certificate<a class="headerlink" href="#the-frozen-system-and-its-certificate" title="Permanent link">&para;</a></h3>
+<p><code>FrozenScanSystem(model, source, log_sp, curvature_from_rows=..., memory_budget_bytes=..., use_coarse=...)</code>
+represents <code>H = X'WX + S_lambda</code> at one frozen curvature. Construction:</p>
+<ol>
+<li>Checks the construction bound (<code>65p + 288K^2 + 32pK</code> and further terms,
+   where K is the modest width) and copies and freezes the modest metadata and
+   penalties.</li>
+<li>Weights the penalties with the C library <code>exp</code>. Each modest penalty must be
+   positive semidefinite (<code>ValueError</code> otherwise); every other block must be a
+   full-rank <code>IdentityPenalty</code> (<code>NotImplementedError</code> otherwise, though
+   preparation never builds one).</li>
+<li>One certificate scan accumulates the modest Gram matrix (also split into
+   positive- and negative-curvature parts), the assembled diagonal, indexed
+   off-diagonal bounds, the indexed-to-modest coupling (p by K), and a
+   SHA-256 digest of the row curvature.</li>
+<li>Certifies positive definiteness without forming H:</li>
+<li>With no negative rows: <code>S_modest + G / (1 + t)</code> must have a Cholesky
+     factor, where <code>t</code> is the trace of the indexed Gram relative to the
+     indexed penalty (an upper bound on its spectral radius).</li>
+<li>With negative rows and no indexed effect: <code>S_modest + G</code> itself must
+     have a Cholesky factor.</li>
+<li>With negative rows and indexed effects: first a Schur-complement test
+     that replaces the indexed block by a lower bound on its diagonal
+     (diagonal minus the off-diagonal bound), when that bound is positive;
+     otherwise a leverage test (total negative-row
+     leverage below one in a block lower-bound metric); otherwise a low-rank
+     certificate for at most <code>_MAX_SIGNED_DOWNDATE_RANK = 8</code> independent
+     negative directions; otherwise <code>LinAlgError("Actual signed system has no
+     sufficient Schur SPD certificate.")</code>.</li>
+<li>The data curvature must be positive definite on the modest penalty's null
+     directions (<code>LinAlgError</code> otherwise).
+   The certificate is sufficient, not necessary: a refusal does not prove H is
+   indefinite (<code>tests/test_execution/test_operator.py</code>,
+   <code>test_signed_certificate_cap_is_not_a_claim_of_indefiniteness</code>).</li>
+<li>Builds the preconditioner (below), compiles the normal-action and penalty
+   kernels, reads their measured scratch, and checks the action peak bound.</li>
+</ol>
+<p><code>matvec(v)</code> is one complete checked source scan: start from <code>S_lambda v</code>, add
+each batch's <code>X'WXv</code>, and verify that the curvature digest is unchanged. Each
+matvec, right-hand side and objective is therefore one full scan.</p>
+<p><code>has_exact_diagonal</code> (one indexed effect and nothing else) and
+<code>has_exact_arrowhead</code> (one modest block of at most 64 columns coupled to one
+indexed identity block) mark the structured shapes for which the
+log-determinant and traces are computed exactly.</p>
+<h3 id="preconditioned-conjugate-gradients">Preconditioned conjugate gradients<a class="headerlink" href="#preconditioned-conjugate-gradients" title="Permanent link">&para;</a></h3>
+<p><code>prepare_preconditioner</code> builds an <code>InversePreconditioner</code>: the reciprocal of
+the assembled diagonal for every coordinate, a Cholesky-factored
+<code>SmallBlockInverse</code> for the modest columns (<code>G + S_modest</code>), and with
+<code>OperatorControl.use_coarse=True</code> an additive <code>CoarseInverse</code> on the modest
+penalty-null directions. Large blocks retain only the diagonal; the
+construction bound is <code>17p</code> plus the capped block terms.</p>
+<p><code>solve_host_pcg</code> (reached through <code>FrozenScanSystem.solve</code>) charges 14 float64
+p-vectors plus the measured scratch of its four compiled kernels before
+allocating, then iterates on the host with JIT steps from
+<code>jaxgam/fitting/operator/iterative.py</code>. The threshold is
+<code>max(atol, rtol * ||rhs||)</code>. A recursive residual below the threshold only
+moves the state to <code>VERIFY_RESIDUAL</code>; convergence (<code>CONVERGED</code>) needs a fresh
+true residual <code>rhs - H x</code> from another matvec, and a failed verification
+restarts CG without resetting the iteration count. Other statuses are
+<code>MAX_ITERATIONS</code>, <code>NONFINITE</code> and <code>NONPOSITIVE_CURVATURE</code>. Every matvec is
+counted in <code>HostPCGResult.matvec_count</code>.</p>
+<h3 id="the-fixed-smoothing-coefficient-driver">The fixed-smoothing coefficient driver<a class="headerlink" href="#the-fixed-smoothing-coefficient-driver" title="Permanent link">&para;</a></h3>
+<p><code>fit_operator_fixed_sp</code> is a host observed-Newton loop:</p>
+<ol>
+<li><strong>Budget.</strong> <code>fit_bound</code> (metadata, family snapshot, <code>80p</code> for retained
+   vectors, extra terms for no-intercept layouts, <code>128 * max_iterations</code>) plus a
+   row bound plus the measured scratch of the compiled family, forward and
+   adjoint kernels must fit <code>memory_budget_bytes</code>; the remainder is the frozen
+   system's budget.</li>
+<li><strong>Start.</strong> <code>_initial_null_beta</code> ports mgcv's <code>get.null.coef</code> for layouts it
+   can prove: with an intercept, the intercept alone at
+   <code>link(mean(initialized y))</code>; for no-intercept layouts, bounded source QR
+   projections, some of which refuse with <code>NotImplementedError</code>. Unknown-scale
+   families also reduce a null scale, used in the convergence test and
+   reported as <code>initial_null_scale</code>.</li>
+<li><strong>Each iteration</strong> builds a <code>FrozenOperatorWorkingState</code> (iteration one at
+   the family's <code>mustart</code>, later at the current beta), a <code>FrozenScanSystem</code> with
+   its observed curvature, the right-hand side <code>X'(W(eta - offset) - D'/2)</code> by
+   <code>_reduce_rhs</code>, and solves <code>H beta_new = rhs</code> by PCG. A failed PCG ends the
+   loop with <code>converged=False</code> and the last accepted state.</li>
+<li><strong>Gaussian identity</strong> (<code>single_step_pirls</code>) is solved once and refined
+   against its true residual up to <code>_STRICTLY_ADDITIVE_REFINEMENTS = 3</code> times,
+   then accepted.</li>
+<li><strong>Step halving</strong>: while the penalized deviance <code>_reduce_objective</code>
+   (direct row deviance plus <code>beta'S beta</code>, infinite outside the domain)
+   exceeds the previous value plus a small allowance, halve toward the previous
+   beta; after 100 halvings <code>RuntimeError</code>.</li>
+<li><strong>Convergence</strong>: relative objective change below <code>OperatorControl.tolerance</code>
+   and <code>2 max|X'D'/2 + S beta| &lt;= tolerance * (|objective| + null scale)</code>. At
+   <code>max_iterations</code> the result is returned with <code>converged=False</code>.</li>
+</ol>
+<pre class="mermaid"><code>sequenceDiagram
+    participant API as GAM._fit_operator
+    participant Prep as prepare_operator_model
+    participant Fit as fit_operator_fixed_sp
+    participant Sys as FrozenScanSystem
+    participant PCG as solve_host_pcg
+    participant Src as RowSource
+    participant Res as GAMPredictionResult
+    API-&gt;&gt;Prep: spec, source, OperatorPreparationControl
+    Prep-&gt;&gt;Src: checked scans
+    Prep--&gt;&gt;API: PreparedOperatorModel
+    API-&gt;&gt;Fit: model, source, family, sp, OperatorControl
+    Fit-&gt;&gt;Src: _initial_null_beta scans
+    loop until converged or max_iterations
+        Fit-&gt;&gt;Sys: construct with observed curvature
+        Sys-&gt;&gt;Src: certificate scan
+        Fit-&gt;&gt;Src: _reduce_rhs scan
+        Fit-&gt;&gt;Sys: solve rhs
+        Sys-&gt;&gt;PCG: matvec, preconditioner, PCGControl
+        loop PCG iterations and true-residual checks
+            PCG-&gt;&gt;Sys: matvec
+            Sys-&gt;&gt;Src: one checked scan
+        end
+        PCG--&gt;&gt;Fit: HostPCGResult
+        Fit-&gt;&gt;Src: _reduce_objective scans with halving
+        Fit-&gt;&gt;Src: _reduce_rhs gradient scan
+    end
+    Fit--&gt;&gt;API: OperatorFitResult
+    API-&gt;&gt;Res: _from_operator_fit</code></pre>
+<p>Every arrow into the source is a complete, replay-checked scan, so the scan
+count per Newton iteration is roughly one certificate, one right-hand side, one
+per PCG matvec, at least one objective and one gradient.</p>
+<p><code>OperatorFitResult</code> carries coefficients, <code>log_lambda</code>, the model, the family
+snapshot, deviance, <code>converged</code>, <code>n_iter</code>, <code>convergence_info</code> and
+<code>OperatorFitDiagnostics</code>: source counters, <code>initialization_scans</code>,
+<code>rhs_scans</code>, <code>objective_scans</code>, <code>certificate_scans</code>, <code>certificate_actions</code>,
+<code>krylov_actions</code>, <code>krylov_iterations</code>, <code>completed_solves</code> (Newton solves only),
+<code>peak_bound_bytes</code>, the three measured kernel temporaries,
+<code>accepted_objectives</code>, <code>inner_status</code> (the last PCG status),
+<code>final_gradient_norm</code>, <code>initial_null_scale</code>, the <code>preparation_*</code> counts,
+<code>efs_indeterminate_comparisons</code>, and preconditioner sizes reported apart from
+the peak. There is no PCG residual norm in the fit diagnostics.</p>
+<p><code>GAMPredictionResult._from_operator_fit</code> keeps an
+<code>OperatorPredictionGeometry</code> in the predictor, <code>score=None</code>,
+<code>edf_total=None</code>, no covariance, <code>scale=1.0</code> for known-scale families and
+<code>None</code> otherwise, <code>lambda_strategy="fixed"</code>, <code>execution_route="operator"</code>,
+and fit-only <code>source_scans</code> and <code>batches_scanned</code>.</p>
+<h3 id="the-arrowhead-exact-algebra">The arrowhead exact algebra<a class="headerlink" href="#the-arrowhead-exact-algebra" title="Permanent link">&para;</a></h3>
+<p>For <code>H = [[A, B'], [B, D]]</code> with a positive diagonal indexed block D,
+<code>ExactArrowheadFactorization.from_system</code> replays one checked scan to recover
+the coupling B (<code>FrozenScanSystem.exact_arrowhead_coupling</code>, which also checks
+the curvature digest), forms the modest Schur complement <code>A - B' D^-1 B</code> and
+factors it. It gives <code>log_determinant</code>, <code>inverse_diagonal</code>, <code>modest_inverse</code>,
+and spectral lower and condition estimates in <code>O(pK + K^2)</code> storage. Its
+floating result is conditional on the assembled H; it is not by itself a score
+error bound.</p>
+<h3 id="the-operator-fellner-schall-controller">The operator Fellner-Schall controller<a class="headerlink" href="#the-operator-fellner-schall-controller" title="Permanent link">&para;</a></h3>
+<p><code>_fit_operator_efs</code> admits only:</p>
+<ul>
+<li>Poisson with the log link;</li>
+<li><code>batch_rows</code> from 64 to 65536 (checked before any scan);</li>
+<li>after preparation, exactly one indexed effect with <code>257 &lt;= L &lt;= 4096</code>
+  levels and <code>L &lt;= n_obs &lt;= 16 L</code> (<code>CALIBRATED_OPERATOR_EFS_DOMAIN.admits</code>),
+  plus at most <code>CALIBRATED_OPERATOR_EFS_MAX_MODEST = 4</code> modest columns, and no
+  other coefficients;</li>
+<li>from the start provider, a factor-only effect with an identity penalty and
+  unit weights and zero offset (<code>NotImplementedError</code> otherwise).</li>
+</ul>
+<p>It splits <code>memory_budget_bytes</code>: one eighth for preparation and the start, a
+quarter for each refit, half for the score components, and the rest less a
+result reserve as the aggregate budget. <code>prepare_indexed_operator_efs_start</code>
+replays the <code>initial.spg</code> working diagonal and balances one smoothing
+parameter by factors of 10. <code>SourceOperatorEFSFitProvider</code> refits with
+<code>fit_operator_fixed_sp</code> and evaluates states with
+<code>MatchedOperatorEFSProvider</code>; <code>run_operator_efs_known_scale</code> runs
+<code>_run_operator_efs</code>, which follows pinned <code>efsudr</code> (mgcv <code>R/gam.fit4.r</code>) for
+known scale.</p>
+<p><strong>Matched components</strong> (<code>MatchedOperatorEFSProvider.evaluate</code>, all at one
+beta, theta and rho, bound by <code>operator_efs_fit_fingerprint</code>):</p>
+<ul>
+<li>score rows: <code>MatchedOperatorScoreReducer.reduce</code>, one replay giving penalized
+  deviance, the saturated log-likelihood term and diagnostics such as
+  <code>unit_weights</code>, <code>zero_offset</code>, <code>maximum_response</code>, <code>maximum_row_l1_norm</code>;</li>
+<li><code>log|S|+</code> and its gradient: <code>LocalOperatorPenaltyDeterminant</code>, with the range
+  fixed by the unscaled local penalties;</li>
+<li><code>log det H</code> on an observed-curvature system: <code>exact_structured_diagonal</code>
+  (decimal logarithms with a rounding bound), <code>exact_structured_arrowhead</code>, or
+  otherwise the stochastic <code>estimate</code> (Rademacher probes and Lanczos);</li>
+<li>Fisher traces <code>tr(H_F^-1 S_j)</code> and quadratics <code>beta'S_j beta</code> on a second
+  system with Fisher curvature (<code>FrozenOperatorWorkingState.fisher_curvature</code>):
+  structured for the diagonal and arrowhead shapes, else coordinate solves
+  capped at 256 coordinates (<code>ExactOperatorPenaltyStatistics</code>);</li>
+<li>EDF <code>p - sum_j lambda_j tr(H_F^-1 S_j)</code>.</li>
+</ul>
+<p><code>assemble_operator_score</code> combines them with <code>operator_reml_score</code>:
+<code>pdev / (2 phi) - ls + (log|H| - log|S|+) / 2 - M_p log(2 pi phi) / 2</code>, where
+M_p is the penalty null dimension. The observed log-determinant is used, not
+the Fisher one. For every shape <code>GAM.fit</code> admits, the determinant and traces are
+structured, so no probes or Lanczos run; the <code>OperatorLogDetControl(probes=4,
+lanczos_depth=4)</code> passed by <code>_fit_operator_efs</code> only sizes the output
+reservation.</p>
+<p><strong>Score bounds.</strong> <code>admitted_operator_efs_score_bound</code> returns a bound and a
+method label, <code>"indexed_poisson_empirical_v2"</code>,
+<code>"arrowhead_poisson_empirical_v2"</code> (or <code>"indexed_gaussian_empirical_v2"</code>, whose
+Gaussian runner <code>run_operator_efs_gaussian_scale</code> <code>GAM.fit</code> cannot reach), or
+<code>(None, "unavailable")</code>. Each bound is the total of an <code>OperatorScoreEnvelope</code>:</p>
+<ul>
+<li><code>arithmetic</code>: <code>32 * eps * (n + p) * M</code> (plus <code>K^2</code> for the arrowhead), where
+  <code>M</code> sums the score's term magnitudes;</li>
+<li><code>coefficient</code>: the effect of the final coefficient residual, from the final
+  gradient and the identity-penalty floor (indexed) or the Schur spectral lower
+  estimate (arrowhead);</li>
+<li><code>determinant</code>: the structured log-determinant's rounding bound.</li>
+</ul>
+<p>A state is admitted only inside the calibrated domain and with: unit weights,
+zero offset, Poisson responses at most 32, converged PCG, <code>tolerance &lt;= 1e-7</code>,
+<code>cg_rtol &lt;= 1e-10</code>, <code>cg_atol &lt;= 1e-12</code>, final gradient at most 1e-5, all
+<code>|beta| &lt;= 20</code>, and conditioning gates (diagonal condition ratio at most 1e4
+and minimum diagonal at least 1e-6 for the indexed shape; spectral lower
+estimate at least 1e-3 and condition at most 1e5 for the arrowhead). The three
+control thresholds equal the <code>OperatorControl</code> defaults, so loosening any one
+leaves every comparison undecided. The code calls these empirical envelopes,
+not certificates.</p>
+<p><strong>Comparison.</strong> <code>compare_operator_scores</code> requires identical probes and
+strategy. With both bounds present and radius <code>r = bound_old + bound_trial</code>, the
+trial is an <code>improvement</code> if <code>diff + r &lt; 0</code>, <code>worsening</code> if <code>diff - r &gt; 0</code>,
+<code>equal</code> only if both <code>diff</code> and <code>r</code> are zero, and otherwise <code>indeterminate</code>; a
+missing bound is always <code>indeterminate</code>. The paired standard error is reported
+but never decides. Only a <code>stochastic_lanczos</code> score is refined (probes and
+depth doubled up to 256 and 128); structured scores return <code>indeterminate</code>
+directly.</p>
+<p><strong>One outer iteration</strong> of <code>_run_operator_efs</code>:</p>
+<pre class="mermaid"><code>flowchart TD
+    Ratio["_raw_ratio and _trial_rho&lt;br/&gt;efsudr update times multiplier"] --&gt;|"FloatingPointError"| Invalid["stop invalid_update"]
+    Ratio --&gt; Refit["provider.fit at trial rho"]
+    Refit --&gt;|"not converged"| Inner["stop inner_failure"]
+    Refit --&gt; Eval["provider.evaluate&lt;br/&gt;components and admitted bound"]
+    Eval --&gt; Cmp{"compare_operator_scores"}
+    Cmp --&gt;|"indeterminate"| Indet["stop indeterminate_score&lt;br/&gt;keep accepted state"]
+    Cmp --&gt;|"improvement or equal"| Small{"max step below 0.05?"}
+    Small --&gt;|"no"| Accept["accept trial"]
+    Small --&gt;|"yes"| Ext["refit at doubled multiplier"]
+    Ext --&gt; ExtCmp{"extension compare"}
+    ExtCmp --&gt;|"improvement"| AcceptExt["accept extension&lt;br/&gt;multiplier doubled"]
+    ExtCmp --&gt;|"otherwise"| Accept
+    Cmp --&gt;|"worsening"| Mult{"multiplier above 1?"}
+    Mult --&gt;|"yes"| Halve["halve multiplier, refit, compare"]
+    Halve --&gt;|"indeterminate, multiplier above 1"| Indet
+    Halve --&gt; Mult
+    Mult --&gt;|"no"| AcceptMin["accept minimum-multiplier step"]
+    Accept --&gt; Stop{"stop tests"}
+    AcceptExt --&gt; Stop
+    AcceptMin --&gt; Stop
+    Stop --&gt;|"iteration above 3, step below 0.05,&lt;br/&gt;score window within tolerance"| Window["stop score_window"]
+    Stop --&gt;|"deviance change below&lt;br/&gt;100 pirls_tolerance"| Dev["stop deviance_change"]
+    Stop --&gt;|"neither"| Ratio</code></pre>
+<p><code>_raw_ratio</code> is <code>efsudr</code>'s <code>max(0, exp(-rho) d - t) / max(0, q) * phi</code> (1 when
+both numerator and <code>q</code> are zero, <code>1e6</code> when non-finite), and <code>_trial_rho</code>
+clips at <code>EFSControl.log_lambda_max</code>. The first fit is at the start plus 2.5
+on the log scale; if it does not converge the controller raises
+<code>RuntimeError</code>. An undecided extension is declined and counted. The score
+window (<code>_score_window_certified</code>) needs the last four accepted scores and
+bounds, with every adjacent change plus both bounds below
+<code>EFSControl.score_tolerance</code>. <code>score_window</code> and <code>deviance_change</code> are
+converged outcomes, except that convergence on the last allowed outer iteration
+is relabelled <code>iteration_limit</code>; <code>indeterminate_score</code>, <code>iteration_limit</code>,
+<code>inner_failure</code> and <code>invalid_update</code> are not converged. No exception or warning
+is raised for an indeterminate stop: the result has <code>converged=False</code>,
+<code>convergence_info</code> set to the stop reason and
+<code>operator_diagnostics.efs_indeterminate_comparisons</code>.</p>
+<p>The EFS result adds <code>score</code>, <code>score_error_bound</code>, <code>score_bound_method</code>,
+<code>edf_total</code>, <code>scale</code> and <code>score_scale</code> (1.0), <code>lambda_strategy="efs_reml"</code>,
+<code>n_iter</code> as outer iterations, cumulative <code>source_scans</code>, and
+<code>known_workspace_bytes</code>. Its <code>operator_diagnostics</code> describe only the accepted
+state's refit.</p>
+<p><strong>Calibration.</strong> The domain and envelope constants were measured with
+<code>scripts/benchmark_operator_efs_calibration.py</code> (<code>make
+benchmark-operator-efs-calibration</code>) against an independent 50-digit decimal
+REML reference (<code>tests/operator_efs_calibration.py</code>). The tests in
+<code>tests/test_execution/test_operator_efs_calibrated.py</code> check that at domain
+boundaries the matched-state score error stays inside the admitted bound, that
+just outside the domain (or past a conditioning gate) the bound is refused, and
+that the domain constants are the recorded ones; complete operator EFS fits
+are compared with dense EFS. <code>tests/test_validation_matrix.py</code> compares
+operator EFS for <code>y~x+s(g,bs='re')</code> with pinned R at STRICT, using tightened
+EFS and operator controls.</p>
+<h3 id="uncertainty">Uncertainty<a class="headerlink" href="#uncertainty" title="Permanent link">&para;</a></h3>
+<p>Operator fits retain no covariance: <code>predict(se_fit=True)</code> raises and
+<code>materialize_covariance</code> has no provider. The uncertainty path is
+<code>GAMPredictionResult.bulk_link_variance(training_source, calibration_data, *,
+probes, seed, memory_budget_bytes, control=None, scale=None,
+max_calibration_standard_errors=5.0)</code>, which returns a
+<code>(BulkOperatorVariance, BulkVarianceCalibration)</code> pair:</p>
+<ol>
+<li>It requires a converged operator result, unchanged family and theta, and the
+   original training source (row count and fingerprint). Known-scale families
+   use their scale; others need <code>scale=</code>.</li>
+<li>It re-runs <code>prepare_operator_model</code> on the training source (the replay
+   digest must match), builds a <code>FrozenScanSystem</code> with Fisher curvature at the
+   fitted coefficients and smoothing parameters, using half the budget, and
+   <code>PCGControl()</code> defaults (<code>rtol=1e-10</code>, <code>atol=0</code>, 1000 iterations) unless
+   <code>control</code> is passed. <code>FitControl.operator</code> is not consulted.</li>
+<li><code>BulkOperatorVariance.build</code> draws <code>probes</code> (at least 2) right-hand sides
+   <code>b = X'W^(1/2) z + S^(1/2) q</code> (one scan each, local penalty blocks factored
+   with null spaces preserved by <code>_penalty_noise</code>) and solves <code>H u = b</code> for
+   each, keeping a probes-by-p sketch. Since <code>E[(x'u)^2] = x'H^-1 x</code>, the
+   variance of a row is <code>scale * mean((x'u)^2)</code> with a Monte Carlo standard
+   error. A failed probe solve raises <code>BulkVarianceSolveError</code>; no partial
+   sketch is kept.</li>
+<li><code>calibrate(calibration_data)</code> solves exactly for at most
+   <code>min(256, batch_rows)</code> selected rows with <code>SelectedOperatorVariance</code> (one PCG
+   solve per row), and maps each row's pivot <code>probes * estimate / exact</code>, which
+   is chi-square with <code>probes</code> degrees of freedom, to an equivalent standard
+   normal deviate (<code>equivalent_normal_deviates</code>). <code>bulk_link_variance</code> raises
+   <code>RuntimeError</code> when the largest absolute deviate exceeds
+   <code>max_calibration_standard_errors</code>.</li>
+<li><code>estimate_iter(source)</code> then streams any prediction source in batches,
+   yielding <code>BulkVarianceBatch(positions, variance, monte_carlo_se)</code> with a
+   <code>link_se</code> property. Results are on the link scale only.</li>
+</ol>
+<p>The calibration checks the selected rows only; it does not bound unselected
+rows or the iterative-solve bias, which <code>BulkVarianceDiagnostics</code> reports
+separately as <code>maximum_relative_residual</code>. <code>tests/test_execution/test_operator_bulk_variance.py</code>
+compares the exact selected-row variances with pinned R's squared link-scale
+standard errors at STRICT and checks that a biased sketch fails calibration.</p>
+<pre class="mermaid"><code>flowchart TD
+    Call["GAMPredictionResult.bulk_link_variance"] --&gt; Check{"converged operator result,&lt;br/&gt;same family, theta, source?"}
+    Check --&gt;|"no"| Err["RuntimeError or ValueError"]
+    Check --&gt;|"yes"| Replay["prepare_operator_model&lt;br/&gt;on training source"]
+    Replay --&gt; Digest{"replay digest and n_coef match?"}
+    Digest --&gt;|"no"| Err
+    Digest --&gt;|"yes"| Fisher["FrozenScanSystem with&lt;br/&gt;fisher_curvature"]
+    Fisher --&gt; Build["BulkOperatorVariance.build"]
+    Build --&gt; Probe["_sample_rhs: one scan&lt;br/&gt;X'W^1/2 z plus S^1/2 q"]
+    Probe --&gt; Solve["FrozenScanSystem.solve"]
+    Solve --&gt;|"not converged"| SolveErr["BulkVarianceSolveError"]
+    Solve --&gt;|"more probes"| Probe
+    Solve --&gt;|"all probes done"| Sketch["probes x p sketch"]
+    Sketch --&gt; Cal["calibrate: SelectedOperatorVariance&lt;br/&gt;exact solves for selected rows"]
+    Cal --&gt; Pivot["equivalent_normal_deviates&lt;br/&gt;chi-square pivot"]
+    Pivot --&gt; Gate{"max deviate within&lt;br/&gt;max_calibration_standard_errors?"}
+    Gate --&gt;|"no"| Fail["RuntimeError"]
+    Gate --&gt;|"yes"| Out["BulkOperatorVariance and&lt;br/&gt;BulkVarianceCalibration"]
+    Out --&gt; Stream["estimate_iter yields BulkVarianceBatch"]</code></pre>
+<p>The sketch is built once; calibration and streaming both read it, and neither
+changes the probes.</p>
+<h3 id="memory-bounds">Memory bounds<a class="headerlink" href="#memory-bounds" title="Permanent link">&para;</a></h3>
+<p>Every stage checks a prospective bound before allocating and raises
+<code>MemoryError</code>: preparation through <code>_check_budget</code> and per-row charges;
+<code>fit_operator_fixed_sp</code> through <code>fit_bound</code> plus measured kernel scratch;
+<code>FrozenScanSystem</code> through its construction and action peak bounds;
+<code>solve_host_pcg</code> through 14 p-vectors plus measured scratch;
+<code>prepare_preconditioner</code> through <code>17p</code> plus block terms; the EFS provider
+through <code>reserve</code> on its aggregate budget. No p-by-p array is formed for the
+indexed coefficients; the indexed width is not capped by
+<code>max_modest_coefficients</code>. The reported byte figures (<code>peak_bound_bytes</code>,
+<code>known_workspace_bytes</code>) are accounting bounds that exclude source storage and
+native allocator or compiler memory.</p>
+<h2 id="key-types">Key types<a class="headerlink" href="#key-types" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>classDiagram
+    class OperatorControl {
+        +max_modest_coefficients int
+        +max_iterations int
+        +tolerance float
+        +cg_max_iterations int
+        +cg_rtol float
+        +cg_atol float
+        +use_coarse bool
+    }
+    class PreparedOperatorModel {
+        +modest PreparedModel
+        +modest_columns tuple
+        +random_effects tuple
+        +penalties PenaltyStructure
+        +source_fingerprint str
+        +source_replay_digest str
+        +metadata_bound_bytes int
+        +n_coef int
+        +evaluate_batch(batch) OperatorBatch
+    }
+    class IndexedRandomEffect {
+        +factors tuple
+        +numeric_variables tuple
+        +col_start int
+        +n_coef int
+        +sp_index int
+        +penalty_scale float
+        +evaluate(columns) tuple
+    }
+    class FrozenScanSystem {
+        +model PreparedOperatorModel
+        +preconditioner PreparedPreconditioner
+        +diagnostics ScanDiagnostics
+        +has_exact_diagonal bool
+        +has_exact_arrowhead bool
+        +matvec(vector) Array
+        +solve(rhs, initial, control) HostPCGResult
+    }
+    class PCGControl {
+        +rtol float
+        +atol float
+        +max_iterations int
+    }
+    class HostPCGResult {
+        +solution ndarray
+        +status int
+        +iterations int
+        +matvec_count int
+        +relative_residual float
+        +converged bool
+    }
+    class OperatorFitResult {
+        +coefficients ndarray
+        +log_lambda ndarray
+        +deviance float
+        +converged bool
+        +convergence_info str
+        +diagnostics OperatorFitDiagnostics
+    }
+    class OperatorFitDiagnostics {
+        +krylov_actions int
+        +krylov_iterations int
+        +certificate_scans int
+        +peak_bound_bytes int
+        +inner_status int
+        +final_gradient_norm float
+        +efs_indeterminate_comparisons int
+    }
+    class PreparedPreconditioner {
+        +inverse InversePreconditioner
+        +retained_device_bytes int
+        +construction_peak_bound_bytes int
+    }
+    PreparedOperatorModel *-- IndexedRandomEffect
+    FrozenScanSystem o-- PreparedOperatorModel
+    FrozenScanSystem *-- PreparedPreconditioner
+    FrozenScanSystem ..&gt; PCGControl : solve
+    FrozenScanSystem ..&gt; HostPCGResult : returns
+    OperatorFitResult *-- OperatorFitDiagnostics
+    OperatorFitResult o-- PreparedOperatorModel
+    OperatorFitResult ..&gt; OperatorControl : fitted under</code></pre>
+<p><code>PreparedOperatorModel</code> is the Phase 1 handoff; each Newton iteration builds a
+new <code>FrozenScanSystem</code> over it; <code>OperatorFitResult</code> is the private row-free
+handoff to the result builder. The EFS side adds <code>OperatorEFSState</code> (a fit,
+its <code>MatchedOperatorEFSComponents</code>, <code>score_error_bound</code> and
+<code>score_bound_method</code>) and <code>OperatorEFSControllerResult</code> (accepted state,
+<code>converged</code>, <code>stop_reason</code>, counts and histories).</p>
+<h2 id="rules-and-invariants">Rules and invariants<a class="headerlink" href="#rules-and-invariants" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>No dense design, penalty or covariance.</strong> The route never forms X, a p-by-p
+  penalty or a covariance; <code>tests/test_execution/test_operator_fit.py</code> fails a
+  fit that calls <code>PenaltyStructure.materialize</code>, and
+  <code>tests/test_scaling_allocation_guards.py</code> checks that the dense design
+  builder never sees the training rows.</li>
+<li><strong>Replay identity.</strong> Every scan is checked against the preparation replay
+  digest and every system action against its curvature digest
+  (<code>tests/test_execution/test_operator.py</code>,
+  <code>test_selected_repeated_lineage_and_frozen_curvature_replay</code>).</li>
+<li><strong>Certified SPD before PCG.</strong> <code>solve_host_pcg</code> assumes the caller certified
+  the system; sampled CG curvature does not certify it. Certificate failures
+  raise from <code>GAM.fit</code> rather than returning <code>converged=False</code>.</li>
+<li><strong>Convergence needs a true residual</strong> (<code>tests/test_fitting/test_iterative.py</code>,
+  <code>test_recursive_residual_cannot_claim_convergence_and_false_candidate_restarts</code>).</li>
+<li><strong>Observed curvature, never Fisher, in the fit</strong>; Fisher curvature only in the
+  EFS traces and the bulk variance, each on its own frozen system.</li>
+<li><strong>Budgets before allocation</strong>
+  (<code>test_memory_preflight_rejects_before_source_scan_predictor_or_transfer</code>,
+  <code>test_fit_combined_budget_rejects_before_initial_source_pass</code>,
+  <code>tests/test_fitting/test_preconditioners.py</code>).</li>
+<li><strong>R parity.</strong> Fixed-sp coefficients, deviance and fitted values are compared
+  with pinned R for Gaussian, Poisson, Binomial, Gamma and fixed-theta NB links
+  in <code>tests/test_execution/test_operator_fit.py</code>
+  (<code>test_operator_observed_fixed_sp_fit_matches_pinned_family_reference</code>), and
+  through <code>GAM.fit</code> in <code>tests/test_validation_matrix.py</code>.</li>
+<li><strong>EFS decisions only with admitted bounds</strong>
+  (<code>tests/test_execution/test_operator_score.py</code>,
+  <code>test_common_probe_difference_reports_noise_but_waits_for_calibration</code>).</li>
+<li><strong>Phase 1 stays NumPy.</strong> The modules of <code>jaxgam/formula/operator/</code> import no JAX.</li>
+</ul>
+<h2 id="pitfalls">Pitfalls<a class="headerlink" href="#pitfalls" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>fit()</code> defaults to <code>result="full"</code>; this route needs <code>result="prediction"</code>.</li>
+<li><code>family="nb"</code> is an estimated theta and is refused; use
+  <code>NegativeBinomial(theta, fixed=True)</code>.</li>
+<li>Loosening <code>OperatorControl.tolerance</code>, <code>cg_rtol</code> or <code>cg_atol</code> from their
+  defaults removes every EFS bound, so an EFS fit ends <code>indeterminate_score</code>
+  after one outer iteration with no warning. A Poisson response above 32 does
+  the same.</li>
+<li>Non-unit weights, an offset, a penalized modest smooth or a random slope are
+  hard <code>NotImplementedError</code> refusals under operator EFS (from the start
+  provider), not indeterminate outcomes.</li>
+<li>Parametric terms must be numeric; a factor main effect is refused in
+  preparation.</li>
+<li>A <code>gp</code> penalty can keep signed eigenvalues; a modest penalty with a negative
+  eigenvalue is refused in <code>FrozenScanSystem</code>.</li>
+<li>No-intercept layouts depend on source null projections, several of which
+  refuse with <code>NotImplementedError</code>.</li>
+<li>Scan counts are high: every matvec, right-hand side, objective and gradient
+  re-reads and re-hashes every row.</li>
+<li>The fit and the result use different batch sizes on a small source. The
+  prepared model carries the smaller of <code>FitControl.batch_rows</code> and the
+  source's row count (<code>_operator_fit_batch_rows</code> in <code>jaxgam/api.py</code>), because
+  the kernels pad every batch to that size and every bound charges it.
+  <code>OperatorPredictionGeometry</code> keeps <code>FitControl.batch_rows</code>, so a prediction
+  request may be larger than the training data.</li>
+<li><code>PCGControl</code> is not exported from the top-level package; import it from
+  <code>jaxgam/execution/operator/system.py</code>.</li>
+</ul>
+<h2 id="where-to-change-things">Where to change things<a class="headerlink" href="#where-to-change-things" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Admit a new basis in the modest block</strong>: <code>prepare_operator_model</code>'s term
+  check and <code>jaxgam/formula/operator/modest.py</code> (or
+  <code>jaxgam/formula/operator/radial.py</code>), plus its evaluator bound in
+  <code>jaxgam/formula/operator/workspace.py</code>.</li>
+<li><strong>Change the actions</strong>: <code>jaxgam/fitting/operator/actions.py</code>; keep
+  <code>to_device_operator_batch</code>'s validation and charges in step.</li>
+<li><strong>Change the SPD certificate or preconditioner</strong>: <code>FrozenScanSystem.__init__</code>
+  in <code>jaxgam/execution/operator/system.py</code> and <code>jaxgam/fitting/operator/preconditioners.py</code>.</li>
+<li><strong>Change PCG</strong>: <code>solve_host_pcg</code> and <code>jaxgam/fitting/operator/iterative.py</code>; keep the
+  true-residual rule.</li>
+<li><strong>Change the Newton driver, start or step halving</strong>: <code>fit_operator_fixed_sp</code>
+  and <code>_initial_null_beta</code> in <code>jaxgam/execution/operator/fit.py</code>.</li>
+<li><strong>Widen operator EFS admission</strong>: the domain, envelopes and
+  <code>admitted_operator_efs_score_bound</code> in
+  <code>jaxgam/execution/operator/efs_controller.py</code>, <code>_fit_operator_efs</code> in
+  <code>jaxgam/api.py</code>, and the start provider; re-measure with
+  <code>scripts/benchmark_operator_efs_calibration.py</code> and update
+  <code>tests/test_execution/test_operator_efs_calibrated.py</code>.</li>
+<li><strong>Change score assembly</strong>: <code>jaxgam/execution/operator/score.py</code> and
+  <code>jaxgam/fitting/operator/efs_score.py</code>.</li>
+<li><strong>Change bulk variance</strong>: <code>jaxgam/execution/operator/bulk_variance.py</code> and
+  <code>GAMPredictionResult.bulk_link_variance</code> in <code>jaxgam/results.py</code>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

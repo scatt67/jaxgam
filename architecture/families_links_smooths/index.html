@@ -1,0 +1,2268 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../results_and_prediction/">
+      
+      
+        <link rel="next" href="../testing_and_ci/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Families, links and smooths - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#families-links-and-smooths-the-extension-points" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Families, links and smooths
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#families" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Families
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#extended-families-and-the-negative-binomial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Extended families and the negative binomial
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-execution-capability-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The execution-capability contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Links
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#smooths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Smooths
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#registries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resolution-at-fit-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolution at fit time
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Where to change things">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#checklist-adding-a-link" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checklist: adding a link
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checklist-adding-a-family" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checklist: adding a family
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checklist-adding-a-smooth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checklist: adding a smooth
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#families" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Families
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#extended-families-and-the-negative-binomial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Extended families and the negative binomial
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-execution-capability-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The execution-capability contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Links
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#smooths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Smooths
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#registries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resolution-at-fit-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolution at fit time
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Where to change things">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#checklist-adding-a-link" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checklist: adding a link
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checklist-adding-a-family" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checklist: adding a family
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checklist-adding-a-smooth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checklist: adding a smooth
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="families-links-and-smooths-the-extension-points">Families, links and smooths: the extension points<a class="headerlink" href="#families-links-and-smooths-the-extension-points" title="Permanent link">&para;</a></h1>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>This page describes the three places a contributor extends JaxGAM's model space: distribution families (<code>jaxgam/families/</code>), link functions (<code>jaxgam/links/</code>) and smooth bases (<code>jaxgam/smooths/</code>). It covers the base-class contracts, the execution-capability contract that the fitting routes query, the registries and how strings are resolved at fit time, and the JAX or NumPy rule each extension must respect. It ends with checklists for adding a link, a family and a smooth.</p>
+<h2 id="where-the-code-is">Where the code is<a class="headerlink" href="#where-the-code-is" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/registry.py</code></td>
+<td>Generic <code>Registry</code>: case-insensitive string-to-class map with immutable built-ins.</td>
+</tr>
+<tr>
+<td><code>jaxgam/families/__init__.py</code></td>
+<td>Exports the family classes, the response supports, <code>family_registry</code> and <code>get_family</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/families/base.py</code></td>
+<td><code>ExponentialFamily</code> and the execution-contract descriptors <code>FamilyExecutionCapabilities</code>, <code>StreamReductionPolicy</code>, <code>FamilyPadding</code>, <code>FamilyParameterSnapshot</code>, <code>FamilyInitialWorkingState</code>; <code>ResponseSupport</code> and its constants.</td>
+</tr>
+<tr>
+<td><code>jaxgam/families/extended.py</code></td>
+<td><code>ExtendedFamily</code>: families with extra parameters (theta) estimated with the smoothing parameters.</td>
+</tr>
+<tr>
+<td><code>jaxgam/families/standard.py</code></td>
+<td><code>Gaussian</code>, <code>Binomial</code>, <code>Poisson</code>, <code>Gamma</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/families/negative_binomial.py</code></td>
+<td><code>NegativeBinomial</code> and its stable <code>lgamma</code> differences with custom JVPs.</td>
+</tr>
+<tr>
+<td><code>jaxgam/families/registry.py</code></td>
+<td><code>family_registry</code> and <code>get_family</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/families/execution_inventory.py</code></td>
+<td><code>FAMILY_EXECUTION_INVENTORY</code>: a checked-in, descriptive record of every registered family, link and theta mode, with R constructor status and test evidence. Not read by any fit driver.</td>
+</tr>
+<tr>
+<td><code>jaxgam/links/__init__.py</code></td>
+<td>Exports the link classes, <code>link_registry</code> and <code>get_link</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/links/links.py</code></td>
+<td><code>Link</code> base class and the eight built-in links.</td>
+</tr>
+<tr>
+<td><code>jaxgam/links/registry.py</code></td>
+<td><code>link_registry</code> and <code>get_link</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/base.py</code></td>
+<td><code>Smooth</code> base class.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/registry.py</code></td>
+<td><code>smooth_registry</code> and <code>get_smooth_class</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/gp_kernels.py</code></td>
+<td><code>GPKernel</code> and <code>gp_kernel_registry</code>, the kernel extension point of <code>bs="gp"</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/family_execution.py</code></td>
+<td>Phase 2 consumer of the family contract: <code>FamilyExecutionContext</code>, <code>FamilyExecutionLineage</code>, batch working quantities for the bounded routes.</td>
+</tr>
+</tbody>
+</table>
+<p>The smooth classes themselves are listed on <a href="../setup/">setup.md</a>.</p>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<h3 id="families">Families<a class="headerlink" href="#families" title="Permanent link">&para;</a></h3>
+<p><code>ExponentialFamily</code> is an abstract base class. A subclass sets the class attribute <code>family_name</code> and implements nine abstract members:</p>
+<table>
+<thead>
+<tr>
+<th>Member</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>default_link</code> (property)</td>
+<td>The link when the constructor gets <code>link=None</code>.</td>
+</tr>
+<tr>
+<td><code>variance(mu)</code></td>
+<td>Working weights and the REML criterion (<code>jaxgam/fitting/reml.py</code>).</td>
+</tr>
+<tr>
+<td><code>dvar(mu)</code></td>
+<td>The Fletcher scale estimate in REML and in the regular EFS PIRLS.</td>
+</tr>
+<tr>
+<td><code>saturated_loglik(y, wt, scale, *, max_y=0)</code></td>
+<td>The saturated log-likelihood in the REML score (R's <code>family$ls</code>).</td>
+</tr>
+<tr>
+<td><code>deviance_resids(y, mu, wt)</code></td>
+<td>Signed deviance residuals; <code>dev_resids</code> sums their squares for the PIRLS deviance.</td>
+</tr>
+<tr>
+<td><code>aic(y, mu, wt, scale)</code></td>
+<td>Abstract, but no fit or result code calls it at HEAD; only <code>tests/test_families.py</code> does.</td>
+</tr>
+<tr>
+<td><code>_initialize_impl(y, wt)</code></td>
+<td>Starting <code>mu</code>. Called by the concrete <code>initialize</code>, which first checks <code>y</code> against <code>response_support</code>.</td>
+</tr>
+<tr>
+<td><code>valid_mu(mu)</code>, <code>valid_eta(eta)</code></td>
+<td>Domain checks during initialization and PIRLS step control.</td>
+</tr>
+</tbody>
+</table>
+<p>Concrete methods on the base class that the fit calls: <code>working_weights</code> (<code>wt / (V(mu) * g'(mu)**2)</code>), <code>working_response</code> (<code>eta + (y - mu) * g'(mu)</code>), <code>dev_resids</code>, <code>initialize</code>, and the explicit-parameter hooks <code>working_weights_for_parameters</code>, <code>deviance_contributions_for_parameters</code>, <code>saturated_loglikelihood_for_parameters</code> and <code>deviance_derivative_contributions_for_parameters</code>, which take a <code>log_theta</code> array and reject a non-empty one unless overridden.</p>
+<p>Optional methods that some routes require, each raising <code>NotImplementedError</code> on the base class:</p>
+<ul>
+<li><code>deviance_contributions</code> (per-row deviance without the square root) and <code>deviance_derivative_contributions</code> (a smooth form for automatic differentiation). The dense route differentiates the latter to form observed-information weights, which mgcv uses in the REML <code>log|H|</code> for non-canonical links (<code>jaxgam/fitting/pirls.py</code>), so a custom family with a non-canonical link needs it even on the dense route.</li>
+<li><code>source_dev_resids</code>: pinned <code>dev.resids</code> arithmetic with no domain safeguard, for the discretized performance iteration (<code>jaxgam/fitting/discrete/working.py</code>).</li>
+</ul>
+<p>Class attributes: <code>n_theta</code> (number of estimated extra parameters, 0 by default), <code>scale_known</code>, <code>response_support</code> (<code>REAL</code>, <code>NON_NEGATIVE</code>, <code>POSITIVE</code> or <code>UNIT_INTERVAL</code>) and <code>canonical_link_cls</code>. <code>is_canonical</code> is true when the link is an instance of <code>canonical_link_cls</code>; Gaussian, Binomial, Poisson and Gamma declare <code>IdentityLink</code>, <code>LogitLink</code>, <code>LogLink</code> and <code>InverseLink</code>. <code>NegativeBinomial</code> declares none, so it is never canonical.</p>
+<p>The constructor is <code>ExponentialFamily(link=None)</code>. <code>link</code> may be <code>None</code>, a link-registry name (resolved with <code>Link.from_name</code>) or a <code>Link</code> instance; anything else raises <code>TypeError</code>. The constructor does not check that the link suits the family: <code>NegativeBinomial(link="logit")</code> constructs, and the routes reject unsupported pairs later.</p>
+<p><strong>JIT identity.</strong> The dense kernels take the family as a static argument of <code>jax.jit</code> (for example <code>static_argnames=("family", ...)</code> in <code>jaxgam/fitting/pirls.py</code>). <code>__hash__</code> and <code>__eq__</code> therefore use <code>_static_cache_key()</code>: the class, <code>link._cache_key()</code>, <code>n_theta</code> and <code>scale_known</code>. Two equal families share compiled code. Any state that changes the traced arithmetic must be in this key; <code>NegativeBinomial</code> adds its fixed theta, because a fixed theta is read inside the trace.</p>
+<h3 id="extended-families-and-the-negative-binomial">Extended families and the negative binomial<a class="headerlink" href="#extended-families-and-the-negative-binomial" title="Permanent link">&para;</a></h3>
+<p><code>ExtendedFamily</code> adds four abstract members for families whose extra parameters are estimated: <code>get_theta(transformed=False)</code> and <code>put_theta(log_theta)</code> (the mutable host state), <code>deviance_fn(y, wt)</code> and <code>working_weights_fn(wt)</code> (factories of pure functions of <code>eta</code> and <code>log_theta</code>, differentiated by the PIRLS custom JVP) and <code>saturated_loglik_theta</code> (the REML term with explicit theta). It also lists <code>_log_theta</code> in <code>execution_dynamic_config_attributes</code>, so the mutable value is kept out of the static configuration snapshot.</p>
+<p><code>NegativeBinomial(theta=1.0, *, fixed=False, link=None)</code>, mgcv's <code>nb()</code> from <code>R/efam.r</code>, has <code>V(mu) = mu + mu**2 / theta</code>, known scale 1 and the log link by default. <code>theta &lt;= 0</code> raises <code>ValueError</code>.</p>
+<ul>
+<li><code>fixed=False</code> (the default): <code>n_theta = 1</code> and <code>theta</code> is the starting value. On the dense route, when the model has penalties, the Newton optimizer appends <code>log theta</code> to the smoothing parameters and optimizes them jointly (<code>_joint_theta</code> in <code>jaxgam/fitting/newton.py</code>), then calls <code>put_theta</code>. <code>GAM.fit</code> deep-copies a family with <code>n_theta &gt; 0</code> before fitting, so a cached registry instance is never mutated.</li>
+<li><code>fixed=True</code>: <code>n_theta = 0</code>; theta is a constant baked into the trace and into <code>_static_cache_key</code>.</li>
+</ul>
+<p>How the streamed, discretized and operator routes estimate theta is on their fitting pages (<a href="../fitting_streamed/">fitting_streamed.md</a>, <a href="../fitting_discrete/">fitting_discrete.md</a>, <a href="../fitting_operator/">fitting_operator.md</a>).</p>
+<h3 id="the-execution-capability-contract">The execution-capability contract<a class="headerlink" href="#the-execution-capability-contract" title="Permanent link">&para;</a></h3>
+<p>The bounded routes do not branch on family names. They ask the family what it can do:</p>
+<ul>
+<li><code>execution_capabilities()</code> returns a frozen <code>FamilyExecutionCapabilities</code>.</li>
+<li><code>stream_reduction_policy()</code> returns a <code>StreamReductionPolicy</code> naming the reported-scale and score-scale formulas (<code>known_one</code>, <code>gaussian_fisher_edf_deviance</code>, <code>regular_fletcher</code>, <code>gaussian_fixed_sp</code>, or <code>unsupported</code>).</li>
+<li><code>execution_padding()</code> returns finite response and <code>eta</code> values for masked rows.</li>
+<li><code>execution_parameter_snapshot()</code> returns the theta and scale modes and values as immutable scalars.</li>
+<li><code>execution_static_config()</code> freezes the family's and link's attributes, capabilities, padding and policy.</li>
+</ul>
+<p><code>prepare_model</code> stores the last two in <code>FittingPreparation</code>. <code>FamilyExecutionLineage.validate</code> in <code>jaxgam/fitting/family_execution.py</code> compares them again before each cached device dispatch, because JAX can reuse a compiled executable without retracing and so would not notice a family mutated after preparation.</p>
+<p>The base class fills the capabilities from what the subclass implements: <code>direct_deviance</code> and <code>differentiable_deviance</code> are true only if the subclass overrides the corresponding method, <code>dynamic_phi</code> is <code>not scale_known</code>, and <code>coefficient_system</code> is <code>"fisher"</code> for a canonical link and <code>"observed"</code> otherwise. Subclasses override with <code>dataclasses.replace</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Meaning</th>
+<th>Read by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>row_separable</code></td>
+<td>Per-row quantities depend only on that row.</td>
+<td><code>jaxgam/api.py</code> (<code>_check_stream_fixed_family</code>), <code>jaxgam/execution/stream/pirls.py</code>, <code>jaxgam/execution/stream/regular.py</code>, <code>jaxgam/fitting/family_execution.py</code>, <code>jaxgam/fitting/operator/family.py</code></td>
+</tr>
+<tr>
+<td><code>fisher_working_system</code></td>
+<td>A positive Fisher working system exists.</td>
+<td><code>jaxgam/api.py</code>, <code>jaxgam/execution/stream/pirls.py</code>, <code>jaxgam/execution/stream/regular.py</code>, <code>jaxgam/fitting/family_execution.py</code></td>
+</tr>
+<tr>
+<td><code>observed_information</code></td>
+<td>Observed information is available through the direct deviance.</td>
+<td><code>jaxgam/api.py</code>, <code>jaxgam/execution/stream/regular.py</code>, <code>jaxgam/fitting/family_execution.py</code>, <code>jaxgam/fitting/operator/family.py</code></td>
+</tr>
+<tr>
+<td><code>direct_deviance</code></td>
+<td><code>deviance_contributions</code> is implemented.</td>
+<td><code>jaxgam/api.py</code>, <code>jaxgam/execution/stream/pirls.py</code>, <code>jaxgam/execution/stream/regular.py</code>, <code>jaxgam/fitting/family_execution.py</code>, <code>jaxgam/fitting/operator/family.py</code></td>
+</tr>
+<tr>
+<td><code>differentiable_deviance</code></td>
+<td><code>deviance_derivative_contributions</code> is implemented.</td>
+<td><code>jaxgam/api.py</code> (required for unknown-scale streamed fixed-sp fits), <code>jaxgam/fitting/family_execution.py</code>, <code>jaxgam/fitting/operator/family.py</code></td>
+</tr>
+<tr>
+<td><code>saturated_loglikelihood</code></td>
+<td><code>saturated_loglik</code> is usable in a score.</td>
+<td><code>jaxgam/api.py</code>, <code>jaxgam/execution/stream/pirls.py</code>, <code>jaxgam/execution/stream/regular.py</code>, <code>jaxgam/fitting/family_execution.py</code></td>
+</tr>
+<tr>
+<td><code>dynamic_theta</code></td>
+<td>Theta is estimated and passed as a dynamic argument.</td>
+<td><code>jaxgam/api.py</code>, <code>jaxgam/execution/stream/regular.py</code>, <code>jaxgam/execution/stream/reml.py</code>, <code>jaxgam/fitting/family_execution.py</code>, <code>jaxgam/fitting/stream/reml.py</code></td>
+</tr>
+<tr>
+<td><code>dynamic_phi</code></td>
+<td>The scale is estimated.</td>
+<td>No reader outside <code>jaxgam/families/</code> at HEAD.</td>
+</tr>
+<tr>
+<td><code>coefficient_system</code></td>
+<td><code>"fisher"</code> or <code>"observed"</code> coefficient system.</td>
+<td><code>jaxgam/api.py</code>, <code>jaxgam/execution/stream/pirls.py</code>, <code>jaxgam/execution/stream/regular.py</code>, <code>jaxgam/fitting/family_execution.py</code>, <code>jaxgam/fitting/stream/reml.py</code></td>
+</tr>
+<tr>
+<td><code>fisher_equals_observed_for_score</code></td>
+<td>The two informations coincide in the score (canonical links).</td>
+<td><code>jaxgam/api.py</code>, <code>jaxgam/execution/efs.py</code>, <code>jaxgam/execution/stream/pirls.py</code>, <code>jaxgam/execution/stream/regular.py</code>, <code>jaxgam/fitting/stream/reml.py</code></td>
+</tr>
+<tr>
+<td><code>regular_fletcher_scale</code></td>
+<td>The Fletcher scale reduction applies (Gamma, non-canonical Gaussian).</td>
+<td><code>jaxgam/fitting/family_execution.py</code></td>
+</tr>
+<tr>
+<td><code>single_step_pirls</code></td>
+<td>The first accepted coefficient solve is final (Gaussian identity, <code>gam.fit3</code>'s strictly additive branch).</td>
+<td><code>jaxgam/execution/operator/fit.py</code>, <code>jaxgam/execution/stream/regular.py</code>, <code>jaxgam/fitting/efs_regular_pirls.py</code></td>
+</tr>
+<tr>
+<td><code>initial_alpha_resolution</code></td>
+<td>Flags the Binomial/log start whose alpha is cancellation-sensitive.</td>
+<td><code>jaxgam/fitting/family_execution.py</code></td>
+</tr>
+<tr>
+<td><code>regular_performance_iteration</code></td>
+<td><code>bgam.fitd</code>'s Fisher performance iteration is validated for this family and link.</td>
+<td><code>jaxgam/api.py</code> (<code>_fit_discrete</code>), <code>jaxgam/execution/discrete/regular.py</code></td>
+</tr>
+<tr>
+<td><code>extended_performance_iteration</code></td>
+<td><code>bgam.fitd</code>'s extended-family iteration is validated (NB log, identity, sqrt).</td>
+<td><code>jaxgam/api.py</code>, <code>jaxgam/execution/discrete/regular.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>The dense route does not read the descriptor; it uses <code>is_canonical</code>, <code>n_theta</code> and <code>scale_known</code> directly. A route's own acceptance policy can be narrower than the capabilities: the streamed EFS check <code>_check_stream_efs_family</code> in <code>jaxgam/api.py</code> accepts only the built-in classes, by <code>isinstance</code>.</p>
+<p><code>jaxgam/families/execution_inventory.py</code> is a record, not policy: its module docstring says fit drivers must not consult it. It lists, for each registered family and link (and NB theta mode), whether pinned R's constructor accepts the pair, the dense and EFS evidence scope and the test names.</p>
+<h3 id="links">Links<a class="headerlink" href="#links" title="Permanent link">&para;</a></h3>
+<p><code>Link</code> is an abstract base class with three abstract methods: <code>link(mu)</code>, <code>inverse(eta)</code> and <code>derivative(mu)</code> (<code>d eta / d mu</code>). The other methods have defaults:</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Default</th>
+<th>Who needs an override</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mu_eta(eta)</code></td>
+<td><code>1 / derivative(inverse(eta))</code></td>
+<td>Every built-in overrides it for stability; used by EFS, the discretized working model and the operator and stream initialization.</td>
+</tr>
+<tr>
+<td><code>second_derivative(mu)</code></td>
+<td>Raises <code>NotImplementedError</code></td>
+<td>Required by the streamed fixed-sp route (<code>_check_stream_fixed_family</code> refuses a link without it) and the observed-Newton initialization.</td>
+</tr>
+<tr>
+<td><code>valid_eta(eta)</code></td>
+<td>All finite values</td>
+<td>Links with a restricted domain (<code>SqrtLink</code> requires <code>eta &gt; 0</code>).</td>
+</tr>
+<tr>
+<td><code>linkinv(eta)</code></td>
+<td>Alias of <code>inverse</code></td>
+<td>None.</td>
+</tr>
+<tr>
+<td><code>initial_link_cpu(mu)</code></td>
+<td><code>link(mu)</code> as NumPy</td>
+<td>Links whose <code>link</code> clamps, so the R-style start can tell a clipped value from a valid one.</td>
+</tr>
+<tr>
+<td><code>source_g2g(mu)</code></td>
+<td>Raises <code>NotImplementedError</code></td>
+<td>Only the negative binomial's extended route; <code>IdentityLink</code>, <code>LogLink</code> and <code>SqrtLink</code> implement it.</td>
+</tr>
+</tbody>
+</table>
+<p>The built-in methods port R's <code>make.link</code> and mgcv's <code>fix.family.link</code> (<code>R/gam.fit3.r</code>) arithmetic. They clamp out-of-domain inputs rather than raise, so they stay usable inside <code>jax.jit</code>.</p>
+<p><code>_stateless = True</code> on a link makes <code>_cache_key()</code> return its class, so two instances share compiled code. A parameterized link must leave it <code>False</code> (the key is then <code>id(self)</code>) or override <code>_cache_key</code> to include its parameters; <code>test_parameterized_custom_link_uses_identity</code> in <code>tests/test_families.py</code> pins this.</p>
+<h3 id="smooths">Smooths<a class="headerlink" href="#smooths" title="Permanent link">&para;</a></h3>
+<p>The <code>Smooth</code> contract (details and the class hierarchy are on <a href="../setup/">setup.md</a>):</p>
+<ul>
+<li><code>__init__(spec)</code> receives the <code>SmoothSpec</code>; options come from <code>spec.k</code>, <code>spec.bs</code> and <code>spec.extra_args</code>.</li>
+<li><code>setup(data)</code> builds the training basis into <code>self._X</code>, sets <code>n_coefs</code>, <code>rank</code>, <code>null_space_dim</code>, and ends with <code>self._is_setup = True</code>. Without <code>_X</code>, <code>training_design_matrix</code> raises <code>RuntimeError</code> during assembly.</li>
+<li><code>build_penalty_matrices()</code> returns a list of <code>Penalty</code> objects, one per smoothing parameter, in the raw (unconstrained) basis.</li>
+<li><code>predict_matrix(new_data)</code> evaluates the raw basis on new data with the stored knots and transforms.</li>
+<li><code>build_design_matrix(data)</code> evaluates the raw basis on given data; the by-variable wrappers call it on the base smooth.</li>
+<li>Optional: <code>training_matrix</code> (when training rows differ from prediction rows), <code>copy_for_prediction</code> (must drop every fit-only cache), <code>copy_for_training</code>.</li>
+<li>Attributes model assembly reads with defaults: <code>side_constrain</code> (take part in <code>gam_side</code>, default true), <code>_has_centering_constraint</code> (read with <code>getattr</code>, default true; <code>RandomEffectSmooth</code> sets false), <code>_random</code> (summary test type), <code>_noterp</code> (skip tensor-margin reparameterization), <code>_s_scale</code> (the normalization factor <code>te</code> margins undo).</li>
+</ul>
+<p>The penalty null space is declared through <code>null_space_dim</code> on the smooth and <code>rank</code>/<code>null_space_dim</code> on each <code>Penalty</code>.</p>
+<h3 id="registries">Registries<a class="headerlink" href="#registries" title="Permanent link">&para;</a></h3>
+<p><code>Registry(entries, name, cache_instances=False)</code> in <code>jaxgam/registry.py</code> holds built-in entries in a read-only mapping and custom entries in a dict, both with lower-cased keys.</p>
+<ul>
+<li><code>register(key, cls)</code> adds a custom entry. A key that already exists, built-in or custom, raises <code>ValueError</code>. The class is not type-checked, and there is no way to unregister.</li>
+<li><code>get_class(key)</code> raises <code>KeyError("Unknown {name}: 'key'. Available: ...")</code> for a missing key.</li>
+<li><code>get_instance(key)</code> calls <code>cls()</code> with no arguments, and caches the instance when <code>cache_instances</code> is true.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Registry</th>
+<th>Module</th>
+<th>Keys</th>
+<th>Instances cached</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>smooth_registry</code></td>
+<td><code>jaxgam/smooths/registry.py</code></td>
+<td><code>tp</code>, <code>ts</code>, <code>cr</code>, <code>cs</code>, <code>cc</code>, <code>gp</code>, <code>re</code>, <code>te</code>, <code>ti</code></td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>family_registry</code></td>
+<td><code>jaxgam/families/registry.py</code></td>
+<td><code>gaussian</code>, <code>binomial</code>, <code>poisson</code>, <code>gamma</code>, <code>nb</code></td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>link_registry</code></td>
+<td><code>jaxgam/links/registry.py</code></td>
+<td><code>identity</code>, <code>log</code>, <code>logit</code>, <code>inverse</code>, <code>probit</code>, <code>cloglog</code>, <code>sqrt</code>, <code>inverse_squared</code></td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>gp_kernel_registry</code></td>
+<td><code>jaxgam/smooths/gp_kernels.py</code></td>
+<td><code>spherical</code>, <code>power_exponential</code>, <code>matern_3_2</code>, <code>matern_5_2</code>, <code>matern_7_2</code></td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<p>The registries are exported from their packages (<code>jaxgam.smooths</code>, <code>jaxgam.families</code>, <code>jaxgam.links</code>), not from top-level <code>jaxgam</code>. There are no <code>register_*</code> helper functions: the registration API is <code>&lt;registry&gt;.register(key, cls)</code>. Registration is process-global, so register before fitting, once per process.</p>
+<h3 id="resolution-at-fit-time">Resolution at fit time<a class="headerlink" href="#resolution-at-fit-time" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart TD
+    A["GAM.fit"] --&gt; B["get_family(self.family)"]
+    B --&gt;|"str"| C["family_registry.get_instance:&lt;br/&gt;lower-cased key, cached no-argument instance"]
+    B --&gt;|"ExponentialFamily"| D["the instance as given"]
+    B --&gt;|"anything else"| E["TypeError"]
+    C --&gt;|"unknown key"| F["KeyError: Unknown family"]
+    C --&gt; G{"n_theta &gt; 0?"}
+    D --&gt; G
+    G --&gt;|"yes"| H["copy.deepcopy of the family"]
+    G --&gt;|"no"| I["route on FitControl.execution"]
+    H --&gt; I
+    I --&gt; J["route checks: execution_capabilities,&lt;br/&gt;stream_reduction_policy"]
+    A --&gt; K["parse_formula: SmoothSpec"]
+    K --&gt; L["ModelSetup._build_smooth_components"]
+    L --&gt; M{"smooth_type is te or ti?"}
+    M --&gt;|"yes"| N["key = smooth_type"]
+    M --&gt;|"no"| O["key = bs"]
+    N --&gt; P["get_smooth_class: smooth_registry.get_class"]
+    O --&gt; P
+    P --&gt;|"unknown key"| Q["KeyError: Unknown basis type"]
+    P --&gt; R["cls(spec), then setup(data)"]
+    R --&gt; S["te or ti: get_smooth_class(spec.bs) per margin"]</code></pre>
+<p>A family string always yields the registry's shared instance with the default link; a non-default link needs an instance such as <code>Gamma(link="log")</code>. Links are resolved earlier, in the family constructor: <code>Link.from_name(name)</code> calls <code>get_link</code>, which returns a new instance from <code>link_registry</code>, and turns an unknown name into <code>ValueError("Unknown link function ...")</code>.</p>
+<p>The registry path for smooths runs inside <code>ModelSetup.build</code>, which the dense route and the discretized route's compact setup call. The other routes have their own term checks: streamed preparation accepts only <code>cr</code>/<code>cs</code> through <code>_cubic_class</code> in <code>jaxgam/formula/prepare.py</code>, and <code>prepare_operator_model</code> accepts only <code>re</code>, <code>cr</code>, <code>cs</code>, <code>cc</code>, <code>tp</code>, <code>ts</code> and <code>gp</code>. A registered custom smooth is therefore reachable on the dense route, and possibly the discretized one (not verified), but never on the stream or operator routes.</p>
+<h2 id="key-types">Key types<a class="headerlink" href="#key-types" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>classDiagram
+    class ExponentialFamily {
+        &lt;&lt;abstract&gt;&gt;
+        +family_name str
+        +n_theta int
+        +scale_known bool
+        +response_support ResponseSupport
+        +canonical_link_cls type
+        +link Link
+        +is_canonical bool
+        +variance(mu) ndarray
+        +dvar(mu) ndarray
+        +saturated_loglik(y, wt, scale) float
+        +deviance_resids(y, mu, wt) ndarray
+        +dev_resids(y, mu, wt) float
+        +initialize(y, wt) ndarray
+        +valid_mu(mu) ndarray
+        +valid_eta(eta) ndarray
+        +working_weights(mu, wt) ndarray
+        +working_response(y, mu, eta) ndarray
+        +deviance_derivative_contributions(y, mu, wt) ndarray
+        +execution_capabilities() FamilyExecutionCapabilities
+        +stream_reduction_policy() StreamReductionPolicy
+        +execution_static_config() tuple
+        +execution_parameter_snapshot() FamilyParameterSnapshot
+    }
+    class ExtendedFamily {
+        &lt;&lt;abstract&gt;&gt;
+        +get_theta(transformed) ndarray
+        +put_theta(log_theta)
+        +deviance_fn(y, wt) Callable
+        +working_weights_fn(wt) Callable
+        +saturated_loglik_theta(y, wt, scale, log_theta) float
+    }
+    class NegativeBinomial {
+        +alpha float
+        +source_dev_resids_at(y, mu, wt, theta) ndarray
+    }
+    class FamilyExecutionCapabilities {
+        +row_separable bool
+        +coefficient_system str
+        +fisher_equals_observed_for_score bool
+        +dynamic_theta bool
+        +single_step_pirls bool
+        +regular_performance_iteration bool
+        +extended_performance_iteration bool
+    }
+    class StreamReductionPolicy {
+        +reported_scale str
+        +score_scale str
+    }
+    ExponentialFamily &lt;|-- Gaussian
+    ExponentialFamily &lt;|-- Binomial
+    ExponentialFamily &lt;|-- Poisson
+    ExponentialFamily &lt;|-- Gamma
+    ExponentialFamily &lt;|-- ExtendedFamily
+    ExtendedFamily &lt;|-- NegativeBinomial
+    ExponentialFamily ..&gt; FamilyExecutionCapabilities : execution_capabilities
+    ExponentialFamily ..&gt; StreamReductionPolicy : stream_reduction_policy</code></pre>
+<p>The members listed on <code>ExponentialFamily</code> are the ones the fitting code calls; <code>FamilyExecutionCapabilities</code> shows a subset of its fields (the full list is in the capability table above).</p>
+<pre class="mermaid"><code>classDiagram
+    class Link {
+        &lt;&lt;abstract&gt;&gt;
+        +_stateless bool
+        +link(mu) Array
+        +inverse(eta) Array
+        +derivative(mu) Array
+        +second_derivative(mu) Array
+        +mu_eta(eta) Array
+        +valid_eta(eta) Array
+        +initial_link_cpu(mu) ndarray
+        +source_g2g(mu) Array
+        +from_name(name) Link
+    }
+    Link &lt;|-- IdentityLink
+    Link &lt;|-- LogLink
+    Link &lt;|-- LogitLink
+    Link &lt;|-- InverseLink
+    Link &lt;|-- ProbitLink
+    Link &lt;|-- CloglogLink
+    Link &lt;|-- SqrtLink
+    Link &lt;|-- InverseSquaredLink</code></pre>
+<p>All eight built-ins set <code>_stateless = True</code> and implement <code>second_derivative</code> and <code>mu_eta</code>. <code>InverseSquaredLink</code> is registered although no built-in family uses it by default.</p>
+<pre class="mermaid"><code>classDiagram
+    class Smooth {
+        &lt;&lt;abstract&gt;&gt;
+        +spec SmoothSpec
+        +n_coefs int
+        +rank int
+        +null_space_dim int
+        +side_constrain bool
+        +setup(data)
+        +build_design_matrix(data) ndarray
+        +build_penalty_matrices() list~Penalty~
+        +predict_matrix(new_data) ndarray
+        +training_matrix(data) ndarray
+        +copy_for_prediction() Smooth
+    }
+    class Penalty {
+        +S ndarray
+        +rank int
+        +null_space_dim int
+    }
+    class Registry {
+        +register(key, cls)
+        +get_class(key) type
+        +get_instance(key) object
+        +available tuple~str~
+    }
+    class FactorBySmooth {
+        +base_smooth Smooth
+        +n_levels int
+    }
+    class NumericBySmooth {
+        +base_smooth Smooth
+        +has_centering_constraint bool
+    }
+    Smooth ..&gt; Penalty : build_penalty_matrices
+    Registry ..&gt; Smooth : smooth_registry
+    FactorBySmooth o-- Smooth
+    NumericBySmooth o-- Smooth</code></pre>
+<p>This is the contract view of the smooth hierarchy drawn on <a href="../setup/">setup.md</a>: a new basis subclasses <code>Smooth</code>, and the by-variable wrappers then work with it without change.</p>
+<h2 id="rules-and-invariants">Rules and invariants<a class="headerlink" href="#rules-and-invariants" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Families and links run inside JIT.</strong> Their methods are called on JAX tracers in <code>jaxgam/fitting/</code>. They must use <code>array_module(x)</code> from <code>jaxgam/jax_utils.py</code> (NumPy for NumPy input, <code>jax.numpy</code> for JAX input), must not branch in Python on array values, and must not mutate arrays in place. <code>test_link_methods_jax_match_numpy</code> and <code>test_link_jit_compiles</code> in <code>tests/test_links.py</code> check the built-in links.</li>
+<li><strong>Static state is in the cache key.</strong> Anything a family or link reads inside a trace that can differ between instances must be part of <code>_static_cache_key</code> or <code>_cache_key</code>; otherwise two different models share one compiled executable.</li>
+<li><strong>Dynamic parameters are explicit.</strong> Estimated theta flows through the explicit-parameter hooks (such as <code>working_weights_for_parameters</code>) and the factories as an argument, never read from mutable storage inside a kernel; <code>execution_dynamic_config_attributes</code> names the storage to exclude from the static snapshot.</li>
+<li><strong>Smooths are Phase 1.</strong> Smooth code uses NumPy and SciPy (Numba and <code>ctypes</code> appear in the source-exact helpers) and never imports JAX.</li>
+<li><strong>Families are not imported by Phase 1.</strong> <code>jaxgam/formula/prepare.py</code> receives the family as an argument and duck-types it.</li>
+<li><strong>Built-in keys are immutable.</strong> <code>tests/test_registry.py</code> checks lower-casing, duplicate rejection and that built-ins are unchanged after a registration; the same file pins the nine smooth keys.</li>
+<li><strong>Every registered family and link has an inventory cell.</strong> <code>test_execution_inventory_matches_pinned_r_constructors_and_evidence</code> in <code>tests/test_fitting/test_family_execution.py</code> iterates <code>family_registry.available</code> and <code>link_registry.available</code> and requires a <code>FAMILY_EXECUTION_INVENTORY</code> entry for each pair.</li>
+<li><strong>Every registered smooth has a prediction-copy strategy.</strong> <code>test_copy_for_prediction_registry_audit</code> in <code>tests/test_smooths/test_prediction_copy.py</code> iterates <code>smooth_registry.available</code>.</li>
+</ul>
+<h2 id="pitfalls">Pitfalls<a class="headerlink" href="#pitfalls" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><code>Gamma.family_name</code> is <code>"Gamma"</code></strong> while its registry key is <code>gamma</code>; code comparing names must lower-case.</li>
+<li><strong><code>te</code> and <code>ti</code> are registry keys but not <code>bs</code> values.</strong> They are selected by the function name; <code>s(x, bs="te")</code> recurses until Python raises a RecursionError.</li>
+<li><strong>String families are shared.</strong> <code>family_registry</code> caches one instance per key. Only families with <code>n_theta &gt; 0</code> are copied before fitting, so other mutable state on a custom family would be shared across fits.</li>
+<li><strong>Constructors do not validate links.</strong> A family accepts any registered link; refusal comes later and differs per route.</li>
+<li><strong>Registering in tests leaks.</strong> Registration cannot be undone, and the inventory and copy-audit tests iterate the registries, so a test that registers a custom class into a built-in registry affects later tests in the same process. Use a separate <code>Registry</code> instance in tests, as <code>tests/test_registry.py</code> does.</li>
+<li><strong>Default capabilities are conservative.</strong> A custom family that does not override <code>deviance_contributions</code> gets <code>direct_deviance=False</code> and is refused by the streamed fixed-sp route; one that does not override <code>stream_reduction_policy</code> and has unknown scale gets <code>unsupported</code>.</li>
+</ul>
+<h2 id="where-to-change-things">Where to change things<a class="headerlink" href="#where-to-change-things" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Change which routes accept a family or link:</strong> the family's <code>execution_capabilities</code> (for the discretized route, the <code>regular_performance_iteration</code>/<code>extended_performance_iteration</code> link lists in <code>jaxgam/families/standard.py</code> and <code>jaxgam/families/negative_binomial.py</code>), and the route checks in <code>jaxgam/api.py</code> (<code>_check_stream_fixed_family</code>, <code>_check_stream_efs_family</code>, the family checks in <code>GAM._fit_discrete</code>).</li>
+<li><strong>Add a GP kernel:</strong> subclass <code>GPKernel</code> in <code>jaxgam/smooths/gp_kernels.py</code> and add it to <code>gp_kernel_registry</code> (or call <code>gp_kernel_registry.register</code>); port the arithmetic of mgcv's <code>gpE</code> (<code>R/smooth.r</code>).</li>
+</ul>
+<h3 id="checklist-adding-a-link">Checklist: adding a link<a class="headerlink" href="#checklist-adding-a-link" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Read R's <code>make.link</code> (R <code>stats</code> package) for the function, inverse and <code>valideta</code>, and mgcv's <code>fix.family.link</code> in <code>R/gam.fit3.r</code> for the derivative forms.</li>
+<li>In <code>jaxgam/links/links.py</code>, subclass <code>Link</code>; implement <code>link</code>, <code>inverse</code>, <code>derivative</code>, <code>second_derivative</code> and <code>mu_eta</code> with <code>array_module</code>; override <code>valid_eta</code> and <code>initial_link_cpu</code> if the domain is restricted or <code>link</code> clamps; set <code>_stateless = True</code> only if the class has no parameters.</li>
+<li>For a built-in link, add it to <code>link_registry</code> in <code>jaxgam/links/registry.py</code> and to <code>jaxgam/links/__init__.py</code>. For user code, call <code>link_registry.register("name", MyLink)</code> before constructing families with it.</li>
+<li>A built-in link becomes a cell of <code>FAMILY_EXECUTION_INVENTORY</code>: add it to <code>_LINKS</code> and the tables in <code>jaxgam/families/execution_inventory.py</code>.</li>
+<li>If a family should run it on the discretized or NB routes, extend that family's link lists in <code>execution_capabilities</code> and, for NB, <code>_link_name</code> in <code>jaxgam/execution/stream/nb.py</code> and <code>_check_stream_efs_family</code>.</li>
+<li>Tests in <code>tests/test_links.py</code>: round trip, <code>mu_eta</code> against finite differences, values against R <code>make.link</code> through the R bridge, JAX against NumPy, and JIT compilation. Add family fits with the new link to <code>tests/test_validation_matrix.py</code> if it is meant for R parity.</li>
+</ol>
+<h3 id="checklist-adding-a-family">Checklist: adding a family<a class="headerlink" href="#checklist-adding-a-family" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Read the R family constructor (<code>stats::family</code> objects, or mgcv's <code>R/efam.r</code> for an extended family) and mgcv's <code>fix.family.var</code> and <code>fix.family.ls</code> in <code>R/gam.fit3.r</code>, which supply <code>dvar</code> and the saturated log-likelihood.</li>
+<li>Subclass <code>ExponentialFamily</code> (or <code>ExtendedFamily</code> for estimated parameters) in <code>jaxgam/families/</code>. Set <code>family_name</code>, <code>scale_known</code>, <code>response_support</code>, <code>canonical_link_cls</code>, and implement the nine abstract members with <code>array_module</code>. Give it a no-argument constructor if it should be usable by name.</li>
+<li>For the bounded routes, implement <code>deviance_contributions</code> and <code>deviance_derivative_contributions</code>, and override <code>stream_reduction_policy</code> and <code>execution_capabilities</code> to declare exactly what is implemented; <code>source_dev_resids</code> is needed for the discretized performance iteration.</li>
+<li>Extend <code>_static_cache_key</code> with any state read inside a trace. For an extended family, implement <code>get_theta</code>, <code>put_theta</code>, <code>deviance_fn</code>, <code>working_weights_fn</code>, <code>saturated_loglik_theta</code>, the four explicit-parameter hooks and <code>execution_parameter_snapshot</code>.</li>
+<li>For a built-in family, add it to <code>family_registry</code> in <code>jaxgam/families/registry.py</code> and <code>jaxgam/families/__init__.py</code>, and add inventory cells in <code>jaxgam/families/execution_inventory.py</code>. For user code, call <code>family_registry.register("name", MyFamily)</code> or pass an instance as <code>GAM(..., family=MyFamily())</code>.</li>
+<li>Tests: unit tests of each method against R in <code>tests/test_families.py</code>; JIT tests (compile the dense PIRLS with the family); R fits in <code>tests/test_validation_matrix.py</code>; and, for each bounded route it should run on, that route's tests under <code>tests/test_execution/</code>.</li>
+</ol>
+<h3 id="checklist-adding-a-smooth">Checklist: adding a smooth<a class="headerlink" href="#checklist-adding-a-smooth" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Read the constructor <code>smooth.construct.&lt;bs&gt;.smooth.spec</code> and <code>Predict.matrix.&lt;class&gt;</code> in mgcv's <code>R/smooth.r</code>, and any C routine it calls in <code>src/</code>. Note how <code>smoothCon</code> (<code>R/smooth.r</code>) centers and scales the result.</li>
+<li>Subclass <code>Smooth</code> in a new module under <code>jaxgam/smooths/</code>, NumPy and SciPy only. In <code>setup</code>, build <code>_X</code>, the penalty, <code>n_coefs</code>, <code>rank</code> and <code>null_space_dim</code>, apply <code>smoothCon</code>'s scaling (<code>_smoothcon_normalize</code>), and set <code>_is_setup</code>. Implement <code>build_design_matrix</code>, <code>build_penalty_matrices</code> and <code>predict_matrix</code>; override <code>training_matrix</code> if training rows differ from prediction rows, and <code>copy_for_prediction</code> if the class keeps caches other than <code>_X</code> and <code>_S</code> or nested smooths.</li>
+<li>Set the assembly flags if the basis needs them: <code>side_constrain = False</code> to stay out of <code>gam_side</code>, <code>_has_centering_constraint = False</code> to skip centering, <code>_noterp = True</code> if tensor margins should not be reparameterized.</li>
+<li>For a built-in smooth, add the key to <code>smooth_registry</code> in <code>jaxgam/smooths/registry.py</code> and the export to <code>jaxgam/smooths/__init__.py</code>, and update the expected keys in <code>tests/test_registry.py</code>. For user code, call <code>smooth_registry.register("key", MySmooth)</code>; it is then selectable with <code>s(x, bs="key")</code> on the dense route.</li>
+<li>Add the class to the audit in <code>tests/test_smooths/test_prediction_copy.py</code>, either by overriding <code>copy_for_prediction</code> or by adding it to the audited default list there.</li>
+<li>Tests: a new <code>tests/test_smooths/test_&lt;name&gt;.py</code> comparing basis, penalty and prediction matrix with R's <code>smoothCon</code> output through the R bridge; prediction round trip; <code>by=</code> and <code>te</code> margin use if supported; and R fits in <code>tests/test_validation_matrix.py</code>.</li>
+<li>If the streamed, discretized or operator routes should accept it, extend <code>_cubic_class</code> in <code>jaxgam/formula/prepare.py</code>, the memory bounds in <code>jaxgam/formula/discrete/continuous_setup.py</code> and <code>jaxgam/formula/discrete/design.py</code>, or the term checks in <code>jaxgam/formula/operator/prepare.py</code>; see <a href="../setup/">setup.md</a>.</li>
+</ol>
+<p>The proposed fitting-engine refactor in <a href="../../unify_fit/design/">docs/unify_fit/design.md</a> concerns <code>jaxgam/fitting/</code>, <code>jaxgam/execution/</code> and routing in <code>jaxgam/api.py</code>; it describes the family capability contract as an abstraction to keep.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

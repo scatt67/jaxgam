@@ -1,0 +1,2081 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../row_sources/">
+      
+      
+        <link rel="next" href="../discretized/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Streamed fitting - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#streamed-fitting" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Streamed fitting
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#fixed-smoothing-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed smoothing parameters
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fixed smoothing parameters">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#choosing-the-linear-solver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing the linear solver
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#estimated-smoothing-by-exact-reml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Estimated smoothing by exact REML
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#streamed-fellner-schall" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streamed Fellner-Schall
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#streamed-gaussian-qr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streamed Gaussian QR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#options-that-matter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options that matter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#batch-size-and-memory-budget" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batch size and memory budget
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#standard-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standard errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-you-get-back" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What you get back
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What you get back">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#telling-whether-the-fit-converged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Telling whether the fit converged
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related pages
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#fixed-smoothing-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed smoothing parameters
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fixed smoothing parameters">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#choosing-the-linear-solver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing the linear solver
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#estimated-smoothing-by-exact-reml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Estimated smoothing by exact REML
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#streamed-fellner-schall" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streamed Fellner-Schall
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#streamed-gaussian-qr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streamed Gaussian QR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#options-that-matter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options that matter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#batch-size-and-memory-budget" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batch size and memory budget
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#standard-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standard errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-you-get-back" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What you get back
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What you get back">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#telling-whether-the-fit-converged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Telling whether the fit converged
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related pages
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="streamed-fitting">Streamed fitting<a class="headerlink" href="#streamed-fitting" title="Permanent link">&para;</a></h1>
+<p>The streamed route fits a GAM from a row source, reading the data in batches,
+so the full model matrix is never held in memory. Select it with
+<code>FitControl(execution="stream")</code>.</p>
+<p><strong>Use it when</strong></p>
+<ul>
+<li>the data do not fit in memory as a model matrix, but can be read again and
+  again in batches (from arrays, a DataFrame or <code>.npy</code> files on disk);</li>
+<li>the model uses one-dimensional cubic regression splines (<code>bs="cr"</code> or
+  <code>bs="cs"</code>) and numeric parametric terms.</li>
+</ul>
+<p><strong>Do not use it when</strong></p>
+<ul>
+<li>the model needs thin plate (the default <code>s(x)</code>), cyclic, random-effect or
+  tensor smooths, a <code>by=</code> variable or factor terms: use the
+  <a href="../discretized/">discretized route</a> or the default fit;</li>
+<li>you need <code>summary()</code>, <code>plot()</code> or per-term EDF: a streamed fit returns only a
+  prediction result.</li>
+</ul>
+<p>Every example on this page runs in order in one Python session. The setup
+block makes the data and a row source used throughout.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">jaxgam</span><span class="w"> </span><span class="kn">import</span> <span class="n">GAM</span><span class="p">,</span> <span class="n">FitControl</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">jaxgam.data</span><span class="w"> </span><span class="kn">import</span> <span class="n">DataFrameRowSource</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="kn">from</span><span class="w"> </span><span class="nn">jaxgam.families</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poisson</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">n</span> <span class="o">=</span> <span class="mi">2000</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">x</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">z</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">eta</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">x</span><span class="p">)</span> <span class="o">+</span> <span class="mf">0.3</span> <span class="o">*</span> <span class="n">z</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="n">data</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="p">{</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        <span class="s2">"x"</span><span class="p">:</span> <span class="n">x</span><span class="p">,</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        <span class="s2">"z"</span><span class="p">:</span> <span class="n">z</span><span class="p">,</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        <span class="s2">"y"</span><span class="p">:</span> <span class="n">eta</span> <span class="o">+</span> <span class="n">rng</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">scale</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="n">n</span><span class="p">),</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>        <span class="s2">"count"</span><span class="p">:</span> <span class="n">rng</span><span class="o">.</span><span class="n">poisson</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">eta</span><span class="p">)),</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="p">}</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="p">)</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="n">source</span> <span class="o">=</span> <span class="n">DataFrameRowSource</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">response</span><span class="o">=</span><span class="s2">"y"</span><span class="p">)</span>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="n">counts</span> <span class="o">=</span> <span class="n">DataFrameRowSource</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">response</span><span class="o">=</span><span class="s2">"count"</span><span class="p">)</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="n">newdata</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">"x"</span><span class="p">:</span> <span class="p">[</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.9</span><span class="p">],</span> <span class="s2">"z"</span><span class="p">:</span> <span class="p">[</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">]})</span>
+</code></pre></div>
+<p>A row source is an object that can replay the same rows, batch by batch,
+every time it is scanned. See <a href="../row_sources/">Row sources</a> for the built-in
+sources, prior weights and offsets, and how to write your own.</p>
+<h2 id="fixed-smoothing-parameters">Fixed smoothing parameters<a class="headerlink" href="#fixed-smoothing-parameters" title="Permanent link">&para;</a></h2>
+<p>Pass <code>sp=</code> to fix the smoothing parameters. A streamed fit always needs
+<code>result="prediction"</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">control</span> <span class="o">=</span> <span class="n">FitControl</span><span class="p">(</span><span class="n">execution</span><span class="o">=</span><span class="s2">"stream"</span><span class="p">,</span> <span class="n">batch_rows</span><span class="o">=</span><span class="mi">500</span><span class="p">)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">fit</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ z + s(x, bs='cr')"</span><span class="p">,</span> <span class="n">sp</span><span class="o">=</span><span class="p">[</span><span class="mf">1.0</span><span class="p">],</span> <span class="n">control</span><span class="o">=</span><span class="n">control</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">)</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">execution_route</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">source_scans</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">batches_scanned</span><span class="p">)</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># stream True 11 44</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">newdata</span><span class="p">))</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1"># [ 0.57438901 -0.03205741 -0.57433759]</span>
+</code></pre></div>
+<p>Each PIRLS iteration (penalized iteratively reweighted least squares, the
+coefficient fit) reads the whole source once, so <code>source_scans</code> grows with the
+number of iterations. The scans made by the setup pass (knots, bases and
+constraints) are not counted.</p>
+<h3 id="choosing-the-linear-solver">Choosing the linear solver<a class="headerlink" href="#choosing-the-linear-solver" title="Permanent link">&para;</a></h3>
+<p><code>FitControl.linear_solver</code> picks how each coefficient system is solved:
+<code>"cholesky"</code> (the default) or <code>"qr"</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Family and link</th>
+<th><code>"cholesky"</code></th>
+<th><code>"qr"</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gaussian identity, Poisson log, Binomial logit</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Other links of Gaussian, Poisson and Binomial</td>
+<td>no</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Gamma (any supported link)</td>
+<td>no</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Negative binomial (log, identity, sqrt)</td>
+<td>no</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table>
+<p>The Cholesky solve covers only the families whose Fisher information equals
+the observed information and whose scale is known or is the Gaussian
+residual scale. Everything else asks for QR:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">try</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">GAM</span><span class="p">(</span><span class="s2">"count ~ z + s(x, bs='cr')"</span><span class="p">,</span> <span class="n">family</span><span class="o">=</span><span class="n">Poisson</span><span class="p">(</span><span class="n">link</span><span class="o">=</span><span class="s2">"sqrt"</span><span class="p">),</span> <span class="n">sp</span><span class="o">=</span><span class="p">[</span><span class="mf">1.0</span><span class="p">],</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>        <span class="n">control</span><span class="o">=</span><span class="n">control</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">counts</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="k">except</span> <span class="ne">NotImplementedError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">error</span><span class="p">)</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="c1"># Streamed observed-information fitting requires linear_solver='qr'.</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="n">qr</span> <span class="o">=</span> <span class="n">FitControl</span><span class="p">(</span><span class="n">execution</span><span class="o">=</span><span class="s2">"stream"</span><span class="p">,</span> <span class="n">batch_rows</span><span class="o">=</span><span class="mi">500</span><span class="p">,</span> <span class="n">linear_solver</span><span class="o">=</span><span class="s2">"qr"</span><span class="p">)</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="n">fit</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"count ~ z + s(x, bs='cr')"</span><span class="p">,</span> <span class="n">family</span><span class="o">=</span><span class="n">Poisson</span><span class="p">(</span><span class="n">link</span><span class="o">=</span><span class="s2">"sqrt"</span><span class="p">),</span> <span class="n">sp</span><span class="o">=</span><span class="p">[</span><span class="mf">1.0</span><span class="p">],</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>          <span class="n">control</span><span class="o">=</span><span class="n">qr</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">counts</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">execution_route</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">converged</span><span class="p">)</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="c1"># stream_qr True</span>
+</code></pre></div>
+<p>For the negative binomial the message is <code>Streamed NB observed-information
+fitting requires linear_solver='qr'.</code></p>
+<p>A fixed <code>sp</code> does not always mean nothing else is estimated. For Gamma and for
+a non-identity Gaussian link the scale is still estimated, and for
+<code>family="nb"</code> the theta parameter is still estimated, with the smoothing
+parameters held. <code>lambda_strategy</code> is still <code>"fixed"</code>, and
+<code>convergence_info</code> then holds the optimizer's message. To hold the negative
+binomial theta too, pass <code>NegativeBinomial(theta, fixed=True)</code>.</p>
+<h2 id="estimated-smoothing-by-exact-reml">Estimated smoothing by exact REML<a class="headerlink" href="#estimated-smoothing-by-exact-reml" title="Permanent link">&para;</a></h2>
+<p>Omit <code>sp</code> to estimate the smoothing parameters by REML. On this route that
+requires <code>linear_solver="qr"</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">try</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ z + s(x, bs='cr')"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">control</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="k">except</span> <span class="ne">NotImplementedError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">error</span><span class="p">)</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1"># Exact streamed REML requires linear_solver='qr'.</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="n">fit</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ z + s(x, bs='cr')"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">qr</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">execution_route</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">lambda_strategy</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">converged</span><span class="p">)</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="c1"># stream_exact_reml_qr exact_reml True</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">convergence_info</span><span class="p">)</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="c1"># CONVERGENCE: NORM OF PROJECTED GRADIENT &lt;= PGTOL; 1 source step window(s).</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="n">diagnostics</span> <span class="o">=</span> <span class="n">fit</span><span class="o">.</span><span class="n">exact_optimizer_diagnostics</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="nb">print</span><span class="p">(</span><span class="n">diagnostics</span><span class="o">.</span><span class="n">status</span><span class="p">,</span> <span class="n">diagnostics</span><span class="o">.</span><span class="n">n_evaluations</span><span class="p">,</span> <span class="n">diagnostics</span><span class="o">.</span><span class="n">n_accepted</span><span class="p">)</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="c1"># 0 16 14</span>
+</code></pre></div>
+<p>The criterion is the same exact REML score as the default fit, but the
+optimizer is different: SciPy's L-BFGS-B with exact gradients, not the Newton
+iteration of the default fit. It works on the log smoothing parameters
+(bounded to [-40, 40]), plus the log scale for families with an unknown scale
+and log theta for a negative binomial with estimated theta. Every score
+evaluation is a full coefficient fit over the source, so this sub-route makes
+many scans (146 in the example above, including 2 start-up scans). Each step
+is limited to 5 on the log scale per "window"; at most 20 windows are opened.</p>
+<p><code>exact_optimizer_diagnostics</code> holds the L-BFGS-B <code>status</code> (0 means it met its
+stopping test), <code>n_evaluations</code>, <code>n_accepted</code>, <code>projected_gradient_inf</code>, the
+accepted score history and the start-up scan counts. A model with no
+penalty, a known scale and no theta skips the optimizer: it reports
+<code>lambda_strategy="exact_reml_no_parameters"</code>.</p>
+<h2 id="streamed-fellner-schall">Streamed Fellner-Schall<a class="headerlink" href="#streamed-fellner-schall" title="Permanent link">&para;</a></h2>
+<p><code>optimizer="efs"</code> selects the smoothing parameters by the extended
+Fellner-Schall update (mgcv's <code>efsudr</code> method, which the dense
+<code>optimizer="efs"</code> fit also follows) instead of L-BFGS-B. It also requires
+<code>linear_solver="qr"</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">fit</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ z + s(x, bs='cr')"</span><span class="p">,</span> <span class="n">optimizer</span><span class="o">=</span><span class="s2">"efs"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">qr</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="p">)</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">execution_route</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">lambda_strategy</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">convergence_info</span><span class="p">)</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># stream_efs_qr efs_reml True deviance_change</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">efs</span> <span class="o">=</span> <span class="n">fit</span><span class="o">.</span><span class="n">optimizer_diagnostics</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">source_scans</span><span class="p">,</span> <span class="n">efs</span><span class="o">.</span><span class="n">startup_source_scans</span> <span class="o">+</span> <span class="n">efs</span><span class="o">.</span><span class="n">provider_source_scans</span><span class="p">)</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># 8 26</span>
+</code></pre></div>
+<p>The top-level <code>source_scans</code> counts only the final accepted fit; the sum of
+the two diagnostics counts is the whole search.</p>
+<p>It accepts Gaussian, Binomial, Poisson, Gamma and the negative binomial with
+a log, identity or sqrt link; estimated theta is updated inside the fit.
+Other families raise <code>Streamed EFS supports registered Gaussian, Binomial,
+Poisson, Gamma, and NegativeBinomial families only.</code> The limits and
+tolerances come from <code>FitControl(efs=EFSControl(...))</code>; see
+<a href="../smoothing_selection/">Smoothing selection</a>.</p>
+<p><code>convergence_info</code> is <code>"score_window"</code> or <code>"deviance_change"</code> when it
+converged. With no penalties, Fellner-Schall has nothing to select: the fit
+runs one coefficient fit (<code>execution_route="stream_parametric_qr"</code>) and, for
+the negative binomial, leaves theta at its starting value and reports
+<code>theta=None</code>.</p>
+<h2 id="streamed-gaussian-qr">Streamed Gaussian QR<a class="headerlink" href="#streamed-gaussian-qr" title="Permanent link">&para;</a></h2>
+<p>For a Gaussian identity-link model, <code>gaussian_compression=True</code> reads the
+source once to build a weighted QR reduction, then selects the smoothing
+parameters using only coefficient-sized arrays, with no further scans:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">gaussian_qr</span> <span class="o">=</span> <span class="n">FitControl</span><span class="p">(</span><span class="n">execution</span><span class="o">=</span><span class="s2">"stream"</span><span class="p">,</span> <span class="n">batch_rows</span><span class="o">=</span><span class="mi">500</span><span class="p">,</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>                         <span class="n">gaussian_compression</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">fit</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ z + s(x, bs='cr')"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">gaussian_qr</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">)</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">execution_route</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">lambda_strategy</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">source_scans</span><span class="p">)</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># stream_gaussian_qr newton_reml 1</span>
+</code></pre></div>
+<p>It works with either <code>linear_solver</code>. It needs the exact <code>Gaussian</code> family
+with the identity link, at least one penalty, a full-rank coefficient map, and
+prior weights between <code>1e-10</code> and <code>1e10</code>. When a request does not qualify, the
+fit takes the route it would take without the request and says why in
+<code>execution_fallback_reason</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">request</span> <span class="o">=</span> <span class="n">FitControl</span><span class="p">(</span><span class="n">execution</span><span class="o">=</span><span class="s2">"stream"</span><span class="p">,</span> <span class="n">batch_rows</span><span class="o">=</span><span class="mi">500</span><span class="p">,</span> <span class="n">linear_solver</span><span class="o">=</span><span class="s2">"qr"</span><span class="p">,</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>                     <span class="n">gaussian_compression</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">fit</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"count ~ z + s(x, bs='cr')"</span><span class="p">,</span> <span class="n">family</span><span class="o">=</span><span class="s2">"poisson"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">request</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="n">counts</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="p">)</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">execution_route</span><span class="p">)</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1"># stream_exact_reml_qr</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">execution_fallback_reason</span><span class="p">)</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1"># Gaussian QR requires the exact Gaussian family with identity link</span>
+</code></pre></div>
+<p>With estimated smoothing and the default <code>"cholesky"</code> solver there is no
+route to fall back to, so an ineligible request raises
+<code>Estimated-sp RowSource fitting requires an eligible Gaussian QR route (...)
+or linear_solver='qr' for exact streamed REML.</code> With <code>optimizer="efs"</code> the
+request is not used and the reason is <code>Gaussian QR compression requires
+Newton smoothing selection.</code></p>
+<p>Up to 50 penalties the smoothing parameters are selected by Newton
+(<code>lambda_strategy="newton_reml"</code>). Above 50 penalties L-BFGS-B is used
+instead (<code>"lbfgs_reml"</code>), limited to 100 iterations. If it stops at that
+limit the fit returns with <code>converged=False</code> and <code>convergence_info="iteration
+limit"</code>. With <code>sp=</code> the smoothing parameters are held, the scale is still
+estimated, and <code>lambda_strategy</code> is <code>"fixed"</code>.</p>
+<h2 id="options-that-matter">Options that matter<a class="headerlink" href="#options-that-matter" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>execution</code></td>
+<td><code>"dense"</code></td>
+<td><code>"stream"</code> selects this route.</td>
+</tr>
+<tr>
+<td><code>linear_solver</code></td>
+<td><code>"cholesky"</code></td>
+<td><code>"qr"</code> is needed for estimated smoothing, Fellner-Schall and most families. <code>"pcg"</code> is refused.</td>
+</tr>
+<tr>
+<td><code>batch_rows</code></td>
+<td><code>65_536</code></td>
+<td>Rows per batch in every fit scan, and the default batch size of <code>predict_iter</code>.</td>
+</tr>
+<tr>
+<td><code>memory_budget_bytes</code></td>
+<td>512 MiB</td>
+<td>Bound on the arrays the setup pass and the fit know they will hold.</td>
+</tr>
+<tr>
+<td><code>output_budget_bytes</code></td>
+<td>512 MiB</td>
+<td>Bound on what one <code>predict</code> call may return.</td>
+</tr>
+<tr>
+<td><code>uncertainty</code></td>
+<td><code>"none"</code></td>
+<td><code>"fisher"</code> or <code>"covariance"</code> keeps what standard errors need.</td>
+</tr>
+<tr>
+<td><code>gaussian_compression</code></td>
+<td><code>False</code></td>
+<td>Requests the Gaussian QR sub-route.</td>
+</tr>
+<tr>
+<td><code>efs</code></td>
+<td><code>EFSControl()</code></td>
+<td>Fellner-Schall limits, used with <code>optimizer="efs"</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>There is no option for the PIRLS iteration limit or tolerance on this route.
+Field-level detail is in the <a href="../../api/#fit-control">API reference</a>.</p>
+<h2 id="batch-size-and-memory-budget">Batch size and memory budget<a class="headerlink" href="#batch-size-and-memory-budget" title="Permanent link">&para;</a></h2>
+<p><code>memory_budget_bytes</code> is a check made before arrays are allocated, against
+the arrays the setup pass and the fit know they will need. It is not a cap on
+the process: the row source's own storage and native LAPACK or XLA workspace
+are outside it. A failed check raises <code>MemoryError</code> before the work starts.</p>
+<p>The setup pass shrinks its own scan size until it fits the budget. If not even
+one row fits, it stops before reading the data. A model with a cubic smooth
+always needs a fixed 16 MiB allowance for exact knot placement, so budgets
+below about 17 MB fail this way:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">try</span><span class="p">:</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x, bs='cr')"</span><span class="p">,</span> <span class="n">sp</span><span class="o">=</span><span class="p">[</span><span class="mf">1.0</span><span class="p">],</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>        <span class="n">control</span><span class="o">=</span><span class="n">FitControl</span><span class="p">(</span><span class="n">execution</span><span class="o">=</span><span class="s2">"stream"</span><span class="p">,</span> <span class="n">memory_budget_bytes</span><span class="o">=</span><span class="mi">1_000_000</span><span class="p">)</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>        <span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="k">except</span> <span class="ne">MemoryError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">error</span><span class="p">)</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="c1"># Streamed setup requires at least 17318011 bytes to scan one row, exceeding</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="c1"># the setup memory budget of 1000000 bytes (FitControl.memory_budget_bytes).</span>
+</code></pre></div>
+<p>The fit does not shrink its scans: its check charges a full <code>batch_rows</code>
+batch, whatever the number of rows in the source. When it fails, lower
+<code>batch_rows</code> (or raise the budget):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">tight</span> <span class="o">=</span> <span class="n">FitControl</span><span class="p">(</span><span class="n">execution</span><span class="o">=</span><span class="s2">"stream"</span><span class="p">,</span> <span class="n">memory_budget_bytes</span><span class="o">=</span><span class="mi">18_000_000</span><span class="p">)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="k">try</span><span class="p">:</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ z + s(x, bs='cr')"</span><span class="p">,</span> <span class="n">sp</span><span class="o">=</span><span class="p">[</span><span class="mf">1.0</span><span class="p">],</span> <span class="n">control</span><span class="o">=</span><span class="n">tight</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>        <span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="p">)</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="k">except</span> <span class="ne">MemoryError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">error</span><span class="p">)</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="c1"># Known streamed PIRLS workspace requires 21507776 bytes, exceeding</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="c1"># FitControl.memory_budget_bytes=18000000. Setup scans are budgeted</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="c1"># separately.</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="n">smaller</span> <span class="o">=</span> <span class="n">FitControl</span><span class="p">(</span><span class="n">execution</span><span class="o">=</span><span class="s2">"stream"</span><span class="p">,</span> <span class="n">memory_budget_bytes</span><span class="o">=</span><span class="mi">18_000_000</span><span class="p">,</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>                     <span class="n">batch_rows</span><span class="o">=</span><span class="mi">4096</span><span class="p">)</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="n">fit</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ z + s(x, bs='cr')"</span><span class="p">,</span> <span class="n">sp</span><span class="o">=</span><span class="p">[</span><span class="mf">1.0</span><span class="p">],</span> <span class="n">control</span><span class="o">=</span><span class="n">smaller</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>    <span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span>
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="p">)</span>
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">known_workspace_bytes</span><span class="p">)</span>
+<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a><span class="c1"># True 1355456</span>
+</code></pre></div>
+<p>The QR solver's message reads <code>Known streamed QR PIRLS workspace requires
+...</code>. The Gaussian QR sub-route raises <code>Known streamed Gaussian QR workspace
+requires ...</code> and does not fall back. See
+<a href="../memory_and_performance/">Memory and performance</a> for every budget.</p>
+<h2 id="standard-errors">Standard errors<a class="headerlink" href="#standard-errors" title="Permanent link">&para;</a></h2>
+<p>By default a streamed fit keeps nothing for standard errors, and
+<code>predict(se_fit=True)</code> raises <code>RuntimeError</code>. Fit with
+<code>uncertainty="fisher"</code> to keep the factor of the penalized Fisher information:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">fisher</span> <span class="o">=</span> <span class="n">FitControl</span><span class="p">(</span><span class="n">execution</span><span class="o">=</span><span class="s2">"stream"</span><span class="p">,</span> <span class="n">linear_solver</span><span class="o">=</span><span class="s2">"qr"</span><span class="p">,</span> <span class="n">uncertainty</span><span class="o">=</span><span class="s2">"fisher"</span><span class="p">)</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">fit</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ z + s(x, bs='cr')"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">fisher</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">mean</span><span class="p">,</span> <span class="n">se</span> <span class="o">=</span> <span class="n">fit</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">newdata</span><span class="p">,</span> <span class="n">se_fit</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="nb">print</span><span class="p">(</span><span class="n">se</span><span class="p">)</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># [0.02150264 0.01786659 0.02194168]</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">Vp</span> <span class="o">=</span> <span class="n">fit</span><span class="o">.</span><span class="n">materialize_covariance</span><span class="p">(</span><span class="n">memory_budget_bytes</span><span class="o">=</span><span class="mi">10_000_000</span><span class="p">)</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="nb">print</span><span class="p">(</span><span class="n">Vp</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="c1"># (11, 11)</span>
+</code></pre></div>
+<p><code>materialize_covariance</code> builds the coefficient covariance on request, under
+its own budget. <code>uncertainty="covariance"</code> builds it during the fit instead
+(checked against <code>memory_budget_bytes</code>); read it from <code>fit.to_predictor().Vp</code>.
+See <a href="../prediction_results/">Prediction results</a>.</p>
+<h2 id="what-you-get-back">What you get back<a class="headerlink" href="#what-you-get-back" title="Permanent link">&para;</a></h2>
+<p>A <code>GAMPredictionResult</code> (see the <a href="../../api/#gampredictionresult">API reference</a>).
+It has <code>predict</code>, <code>predict_iter</code>, <code>predict_matrix</code>, <code>to_predictor</code> and
+<code>materialize_covariance</code>, but no <code>summary()</code>, <code>plot()</code> or per-term EDF.</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Meaning on this route</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>converged</code>, <code>convergence_info</code>, <code>n_iter</code></td>
+<td>Whether the fit, or the smoothing search, met its stopping test, and how it stopped.</td>
+</tr>
+<tr>
+<td><code>execution_route</code></td>
+<td><code>"stream"</code>, <code>"stream_qr"</code>, <code>"stream_exact_reml_qr"</code>, <code>"stream_efs_qr"</code>, <code>"stream_parametric_qr"</code> or <code>"stream_gaussian_qr"</code>.</td>
+</tr>
+<tr>
+<td><code>lambda_strategy</code></td>
+<td><code>"fixed"</code>, <code>"exact_reml"</code>, <code>"exact_reml_no_parameters"</code>, <code>"efs_reml"</code>, <code>"newton_reml"</code> or <code>"lbfgs_reml"</code>.</td>
+</tr>
+<tr>
+<td><code>smoothing_params</code>, <code>scale</code>, <code>theta</code>, <code>edf_total</code>, <code>deviance</code>, <code>score</code></td>
+<td>The fitted values of these quantities.</td>
+</tr>
+<tr>
+<td><code>source_scans</code>, <code>batches_scanned</code></td>
+<td>Fit scans, not setup scans. Exact REML adds its start-up scans. On Fellner-Schall they count only the final fit; the totals are <code>optimizer_diagnostics.startup_source_scans + provider_source_scans</code>.</td>
+</tr>
+<tr>
+<td><code>known_workspace_bytes</code></td>
+<td>The fit's known-array bound. <code>None</code> on Fellner-Schall and on the parametric bypass.</td>
+</tr>
+<tr>
+<td><code>exact_optimizer_diagnostics</code></td>
+<td>Exact REML only (see above).</td>
+</tr>
+<tr>
+<td><code>optimizer_diagnostics</code></td>
+<td>Fellner-Schall only: an <code>EFSOptimizerDiagnostics</code>.</td>
+</tr>
+<tr>
+<td><code>execution_fallback_reason</code></td>
+<td>Why a <code>gaussian_compression=True</code> request was not used, else <code>None</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="telling-whether-the-fit-converged">Telling whether the fit converged<a class="headerlink" href="#telling-whether-the-fit-converged" title="Permanent link">&para;</a></h3>
+<p>Check <code>fit.converged</code> and read <code>fit.convergence_info</code>. The streamed route
+issues no warning when it stops short; a fit that did not converge is
+returned with <code>converged=False</code>. The messages you can see:</p>
+<ul>
+<li>fixed <code>sp</code>: <code>"fixed sp streamed PIRLS"</code> or <code>"fixed sp streamed PIRLS did not
+  converge"</code>. The PIRLS limit (100 iterations) cannot be changed here.</li>
+<li>exact REML: the L-BFGS-B message plus the window count. If the window limit
+  was reached it adds <code>Window limit 20 reached with descent beyond the last
+  window.</code></li>
+<li>Fellner-Schall: <code>"score_window"</code> or <code>"deviance_change"</code> when converged,
+  otherwise <code>"iteration limit reached"</code> or a failure label. Raise
+  <code>EFSControl(outer_limit=...)</code> for the first.</li>
+<li>Gaussian QR: <code>"iteration limit"</code> or <code>"step failed"</code> when not converged.</li>
+</ul>
+<p>Some failures raise instead of returning. Under exact REML, a coefficient fit
+that does not converge at any trial raises <code>RuntimeError</code> (for example
+<code>Regular streamed REML requires a converged, valid final source state.</code>, or
+<code>NB streamed REML requires a converged valid coefficient state</code> for the
+negative binomial). An unpenalized
+model matrix that is rank deficient raises <code>LinAlgError</code>. A source that
+changes during the fit raises <code>RuntimeError</code>.</p>
+<h2 id="limits">Limits<a class="headerlink" href="#limits" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Not accepted</th>
+<th>Error</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>result="full"</code> or <code>"inference"</code> (the default is <code>"full"</code>)</td>
+<td><code>NotImplementedError: Streamed fitting supports result='prediction' only; full and inference results retain unsupported row diagnostics.</code></td>
+</tr>
+<tr>
+<td>A DataFrame or dict instead of a row source</td>
+<td><code>TypeError: FitControl(execution='stream') requires a replayable RowSource.</code></td>
+</tr>
+<tr>
+<td><code>fit(weights=...)</code> or <code>fit(offset=...)</code></td>
+<td><code>ValueError: weights and offset must be owned by the RowSource for execution='stream'; do not pass separate arrays.</code></td>
+</tr>
+<tr>
+<td><code>linear_solver="pcg"</code></td>
+<td><code>ValueError: linear_solver='pcg' requires execution='operator'.</code></td>
+</tr>
+<tr>
+<td><code>s(x)</code> (thin plate), <code>bs="cc"</code>, <code>bs="re"</code>, <code>bs="gp"</code>, multi-variable <code>s()</code></td>
+<td><code>NotImplementedError: Prepared setup currently supports only univariate cr/cs smooths.</code></td>
+</tr>
+<tr>
+<td><code>te()</code>, <code>ti()</code>, or any <code>by=</code></td>
+<td><code>NotImplementedError: Prepared setup does not yet support by-variable or tensor smooths.</code></td>
+</tr>
+<tr>
+<td>A factor parametric term</td>
+<td><code>NotImplementedError: Prepared setup currently supports numeric parametric terms only.</code></td>
+</tr>
+<tr>
+<td>Two cubic smooths of the same variable</td>
+<td><code>NotImplementedError: Prepared setup does not yet support overlapping cubic terms.</code></td>
+</tr>
+</tbody>
+</table>
+<p>Accepted: one-dimensional <code>bs="cr"</code> and <code>bs="cs"</code> smooths (default <code>k=10</code>),
+numeric parametric terms, with or without an intercept. The formula parser's
+own limits (for example no <code>id=</code> and no <code>offset()</code> term) apply on every route;
+see <a href="../../api/#formula-syntax">Formula syntax</a>.</p>
+<h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../choosing_a_route/">Choosing a route</a></li>
+<li><a href="../row_sources/">Row sources</a></li>
+<li><a href="../smoothing_selection/">Smoothing selection</a></li>
+<li><a href="../prediction_results/">Prediction results</a></li>
+<li><a href="../memory_and_performance/">Memory and performance</a></li>
+<li><a href="../../api/#fitting-routes">Fitting routes in the API reference</a></li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

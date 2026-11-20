@@ -1,0 +1,2356 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../fit_lifecycle/">
+      
+      
+        <link rel="next" href="../data_sources/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Model setup - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#phase-1-model-setup" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Model setup
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#which-route-uses-which-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which route uses which setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#formula-parsing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Formula parsing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dense-model-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dense model setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#smooth-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Smooth construction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#identifiability-constraints-and-coefficientmap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Identifiability constraints and CoefficientMap
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#penalties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Penalties
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prediction-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prediction state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#streamed-preparation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streamed preparation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compact-setup-for-the-discretized-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compact setup for the discretized route
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operator-preparation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator preparation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#which-route-uses-which-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which route uses which setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#formula-parsing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Formula parsing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dense-model-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dense model setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#smooth-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Smooth construction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#identifiability-constraints-and-coefficientmap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Identifiability constraints and CoefficientMap
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#penalties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Penalties
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prediction-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prediction state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#streamed-preparation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streamed preparation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compact-setup-for-the-discretized-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compact setup for the discretized route
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operator-preparation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator preparation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="phase-1-model-setup">Phase 1: model setup<a class="headerlink" href="#phase-1-model-setup" title="Permanent link">&para;</a></h1>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>This page covers everything that happens before fitting, on the CPU with NumPy and SciPy: parsing the formula, constructing smooth bases and penalties, absorbing identifiability constraints into a <code>CoefficientMap</code>, and assembling the dense model matrix. It then covers the three row-source setups that never build a dense training matrix: streamed preparation (<code>jaxgam/formula/prepare.py</code>), the compact setup of the discretized route (<code>jaxgam/formula/discrete/continuous_setup.py</code> and its neighbours) and the operator preparation modules. Fitting starts at the Phase 1 to 2 boundary described in <a href="../fitting_dense/">fitting_dense.md</a>.</p>
+<h2 id="where-the-code-is">Where the code is<a class="headerlink" href="#where-the-code-is" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/formula/__init__.py</code></td>
+<td>Re-exports <code>parse_formula</code>, <code>FormulaSpec</code>, <code>SmoothSpec</code>, <code>ParametricTerm</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/parser.py</code></td>
+<td>AST-based parser: formula string to <code>FormulaSpec</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/terms.py</code></td>
+<td>Frozen term dataclasses <code>SmoothSpec</code>, <code>ParametricTerm</code>, <code>FormulaSpec</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/design.py</code></td>
+<td><code>ModelSetup.build</code>, the dense setup (port of <code>gam.setup</code> in <code>R/mgcv.r</code>), and <code>SmoothInfo</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/predict_matrix.py</code></td>
+<td><code>PredictSpec</code> (prediction-only setup state), <code>build_predict_spec</code>, <code>build_predict_matrix</code>, parametric and factor encoding shared by training and prediction.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/design_provider.py</code></td>
+<td><code>StreamDesign</code> (prepared metadata plus a source, evaluates one batch at a time) and <code>DenseDesign</code> (explicit materialization, used by tests).</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/prepare.py</code></td>
+<td>Streamed preparation: <code>prepare_model</code>, <code>prepare_fitting</code>, <code>PreparedModel</code>, <code>SetupWorkspace</code>, exact cubic knots.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/fitting_prepare.py</code></td>
+<td>CPU fitting-coordinate preparation shared by dense and streamed setup: <code>reparameterize_structure</code>, <code>qr_penalty_roots</code>, <code>initial_log_sp_from_diagonal</code> (port of <code>initial.sp</code>), <code>FittingPreparation</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/rank_coordinates.py</code></td>
+<td>CPU rank-coordinate maps for Gaussian QR fitting (<code>IdentifiableCoordinateMap</code>, used by <code>jaxgam/execution/gaussian_qr/preparation.py</code>); follows <code>gdiPK</code>'s coordinate choice.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/discrete/working_penalties.py</code></td>
+<td><code>build_working_penalty_blocks</code>: the initial local penalty parameterization of <code>Sl.setup</code> (<code>R/fast-REML.r</code>) for the discrete working model.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/kernel_groups.py</code></td>
+<td>Host grouping of equal-shape items (<code>shape_groups</code>, <code>pair_reduction_plan</code>, <code>discrete_pair_schedule</code>) so JIT kernels in <code>jaxgam/fitting/</code> trace one loop per shape.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/discrete/design.py</code></td>
+<td>Indexed design descriptors: <code>FrozenDiscreteDesign</code>, <code>LookupBlock</code>, <code>TensorLookupBlock</code>, <code>DiscreteDesignControl</code>, the memory <code>_Ledger</code> and <code>_memory_plan</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/discrete/continuous_setup.py</code></td>
+<td><code>build_continuous_discrete_setup</code>: basis setup on the compact frame of the discretized route.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/discrete/continuous_design.py</code></td>
+<td><code>build_continuous_discrete_design</code>: evaluates the frozen bases on compact representatives into a <code>FrozenDiscreteDesign</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/discrete/continuous_metadata.py</code></td>
+<td>Row-free record of the fitted discretization (<code>ContinuousDiscretizationMetadata</code>) and the prediction request grouping (<code>build_request_compression</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/operator/prepare.py</code></td>
+<td><code>prepare_operator_model</code>: bounded preparation for the operator route, with symbolic random-effect blocks (<code>IndexedRandomEffect</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/operator/modest.py</code></td>
+<td><code>prepare_modest_cubic_by</code>: the capped non-random-effect part of an operator model when it has <code>by=</code>, <code>te</code>/<code>ti</code> or radial terms.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/operator/radial.py</code></td>
+<td><code>prepare_radial_smooth</code>: rowless thin-plate and Gaussian-process setup for the operator route.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/operator/workspace.py</code></td>
+<td>Prospective evaluator workspace bounds for operator prediction (<code>smooth_evaluator_workspace_bound</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/__init__.py</code></td>
+<td>Re-exports the smooth classes, wrappers, <code>CoefficientMap</code>, <code>TermBlock</code> and the registry.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/base.py</code></td>
+<td>Abstract <code>Smooth</code> base class and the <code>smoothCon</code> penalty normalization helpers.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/registry.py</code></td>
+<td><code>smooth_registry</code> and <code>get_smooth_class</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/tprs.py</code></td>
+<td><code>TPRSSmooth</code> (<code>tp</code>) and <code>TPRSShrinkageSmooth</code> (<code>ts</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/cubic.py</code></td>
+<td><code>CubicRegressionSmooth</code> (<code>cr</code>), <code>CubicShrinkageSmooth</code> (<code>cs</code>), <code>CyclicCubicSmooth</code> (<code>cc</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/tensor.py</code></td>
+<td><code>TensorProductSmooth</code> (<code>te</code>) and <code>TensorInteractionSmooth</code> (<code>ti</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/gaussian_process.py</code></td>
+<td><code>GaussianProcessSmooth</code> (<code>gp</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/gp_kernels.py</code></td>
+<td><code>GPKernel</code> and its five subclasses, <code>gp_kernel_registry</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/random_effects.py</code></td>
+<td><code>RandomEffectSmooth</code> (<code>re</code>).</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/by_variable.py</code></td>
+<td><code>FactorBySmooth</code>, <code>NumericBySmooth</code>, <code>resolve_by_variable</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/constraints.py</code></td>
+<td><code>CoefficientMap</code> and <code>TermBlock</code>: centering, <code>gam_side</code>, coefficient and design transforms.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/utils.py</code></td>
+<td>Factor detection (<code>is_factor</code>, <code>get_factor_levels</code>, <code>is_ordered_factor</code>), <code>row_tensor</code>, <code>radial_knot_options</code>, unique rows, Lanczos helpers.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/source_arithmetic.py</code></td>
+<td>Numba ports of mgcv's compiled scalar loops with the pinned build's fused multiply-add rounding, and <code>libm_exp</code>/<code>r_pow</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/source_lapack.py</code></td>
+<td>Pinned LAPACK provider (<code>scipy-openblas32</code>) for source-exact cubic, thin-plate and Gaussian-process constructors. See <a href="../numerics_and_platform/">numerics_and_platform.md</a>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/source_penalty_coordinates.py</code></td>
+<td>Source-faithful centering of <code>te</code> cubic penalties (<code>source_centered_smooth</code>) and the source eigensolver used for Gaussian determinants.</td>
+</tr>
+<tr>
+<td><code>jaxgam/penalties/__init__.py</code></td>
+<td>Re-exports <code>Penalty</code>, <code>CompositePenalty</code>, <code>PenaltyBlock</code>, <code>PenaltyStructure</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/penalties/penalty.py</code></td>
+<td><code>Penalty</code> (one symmetric matrix with rank and null-space dimension) and <code>CompositePenalty</code> (exported and tested, not used by the fit).</td>
+</tr>
+<tr>
+<td><code>jaxgam/penalties/structure.py</code></td>
+<td>Local penalty descriptors: <code>PenaltyStructure</code>, <code>PenaltyBlock</code>, <code>make_penalty_structure</code>, the <code>IdentityPenalty</code>/<code>DiagonalPenalty</code>/<code>DenseLocalPenalty</code> and transform types.</td>
+</tr>
+<tr>
+<td><code>jaxgam/penalties/stable_reparam.py</code></td>
+<td><code>stable_reparam</code>: port of <code>gam.reparam</code> (<code>R/gam.fit3.r</code>) and <code>get_stableS</code> (<code>src/gdi.c</code>). Called from <code>jaxgam/fitting/stable_log_det.py</code> and <code>jaxgam/formula/fitting_prepare.py</code>.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<h3 id="which-route-uses-which-setup">Which route uses which setup<a class="headerlink" href="#which-route-uses-which-setup" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Route (<code>FitControl.execution</code>)</th>
+<th>Setup entry point</th>
+<th>Training matrix built?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dense</code></td>
+<td><code>parse_formula</code>, then <code>ModelSetup.build</code> (<code>jaxgam/api.py</code>)</td>
+<td>Yes, dense <code>X</code></td>
+</tr>
+<tr>
+<td><code>stream</code></td>
+<td><code>parse_formula</code>, then <code>prepare_model(..., family=...)</code> and <code>StreamDesign</code></td>
+<td>No; one batch at a time</td>
+</tr>
+<tr>
+<td><code>discrete</code></td>
+<td><code>parse_formula</code>, then <code>build_continuous_discrete_setup</code> from <code>jaxgam/execution/discrete/gaussian.py</code></td>
+<td>Only on the compact frame, then discarded</td>
+</tr>
+<tr>
+<td><code>operator</code></td>
+<td><code>prepare_operator_model</code></td>
+<td>No; random effects stay symbolic</td>
+</tr>
+</tbody>
+</table>
+<p>The route dispatch itself is on <a href="../fit_lifecycle/">fit_lifecycle.md</a>.</p>
+<h3 id="formula-parsing">Formula parsing<a class="headerlink" href="#formula-parsing" title="Permanent link">&para;</a></h3>
+<p><code>parse_formula</code> splits the string on the first <code>~</code>. The left side is taken verbatim as the response column name. The right side is parsed with <code>ast.parse(..., mode="eval")</code> and walked by <code>_TermCollector</code>; no regular expressions are used.</p>
+<p>Accepted:</p>
+<ul>
+<li><code>+</code> between terms. Long chains are flattened iteratively (<code>_additive_chain</code>), so the recursion depth does not grow with the number of terms.</li>
+<li><code>0</code> and <code>- 1</code> (or a leading <code>-1</code>) remove the intercept; <code>1</code> restores it. The walk is left to right, so the last token wins, as in R.</li>
+<li>Bare names become <code>ParametricTerm</code>s. A repeated name is dropped, as R's <code>model.matrix</code> does.</li>
+<li>Calls to <code>s</code>, <code>te</code> and <code>ti</code> only (<code>_SMOOTH_FUNCTIONS</code>). Positional arguments must be bare names. A smooth identical to an earlier one (same variables, <code>bs</code>, <code>k</code>, <code>by</code>, type and extra arguments) is dropped, like R's <code>terms.formula</code>; a repeat with a different configuration is kept.</li>
+<li>Keywords: <code>k</code> must evaluate to an <code>int</code>, <code>bs</code> to a <code>str</code>, <code>by</code> to a name or string. <code>fx=False</code>, <code>sp=None</code> and <code>id=None</code> are accepted and ignored. <code>TRUE</code>, <code>FALSE</code> and <code>NA</code> are mapped to <code>True</code>, <code>False</code> and <code>None</code>. Every other keyword is evaluated with <code>ast.literal_eval</code> into <code>SmoothSpec.extra_args</code> (for example <code>m</code>, <code>xt</code>, <code>max_knots</code>, <code>seed</code>, and the GP options).</li>
+</ul>
+<p>Rejected:</p>
+<ul>
+<li><code>ValueError</code> for <code>*</code>, <code>:</code> (not valid Python, so <code>ast.parse</code> fails), <code>- x</code> other than <code>- 1</code>, any function other than <code>s</code>/<code>te</code>/<code>ti</code> (including <code>I()</code>, <code>offset()</code>, <code>factor()</code>), non-name positional arguments, non-literal keyword values, and a non-integer <code>k</code> (so per-margin <code>k=[5, 6]</code> is rejected).</li>
+<li><code>NotImplementedError</code> for <code>fx=True</code>, a per-term <code>sp=</code> other than <code>None</code>, and any <code>id=</code> other than <code>None</code>. The <code>id</code> check also runs in <code>SmoothSpec.__post_init__</code>, so a hand-built spec cannot bypass it.</li>
+</ul>
+<p>The parser does not check <code>bs</code>. An unregistered basis fails at setup with the registry's <code>KeyError</code> (see <a href="../families_links_smooths/">families_links_smooths.md</a>). Unread keys in <code>extra_args</code> are ignored without a warning.</p>
+<p>Default bases: <code>s()</code> uses <code>tp</code>; <code>te()</code> and <code>ti()</code> use <code>cr</code> (<code>_DEFAULT_BASIS</code>), as in R.</p>
+<h3 id="dense-model-setup">Dense model setup<a class="headerlink" href="#dense-model-setup" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart TD
+    A["formula string"] --&gt; B["parse_formula"]
+    B --&gt; C["FormulaSpec"]
+    C --&gt; D["ModelSetup.build"]
+    D --&gt; E["_validate_variables, _validate_equal_lengths,&lt;br/&gt;_validate_finite_covariates"]
+    E --&gt; F["_build_parametric_matrix"]
+    F --&gt; G["_drop_aliased_parametric_columns"]
+    E --&gt; H["_build_smooth_components"]
+    H --&gt; I["get_smooth_class, then Smooth.setup"]
+    I --&gt; J["resolve_by_variable"]
+    J --&gt; K["consume_training_design_matrix&lt;br/&gt;and build_penalty_matrices"]
+    G --&gt; L["CoefficientMap.build"]
+    K --&gt; L
+    L --&gt; M["np.column_stack: X"]
+    L --&gt; N["make_penalty_structure"]
+    M --&gt; O["ModelSetup"]
+    N --&gt; O
+    O --&gt; P["FittingData.from_setup (Phase 2)"]
+    O --&gt; Q["build_predict_spec: PredictSpec (Phase 3)"]</code></pre>
+<p>Read it top to bottom: validation, then the parametric block and the smooth blocks are built independently, joined in <code>CoefficientMap.build</code>, and the result is one frozen <code>ModelSetup</code> that feeds both the fit and prediction.</p>
+<p><code>ModelSetup.build</code> in order:</p>
+<ol>
+<li>Converts the data to a column mapping (<code>predict_matrix._to_dict</code>, which keeps categorical Series intact).</li>
+<li>Validates: the response exists, is finite and has at least two rows; every formula variable exists and has the response's length; weights are finite, non-negative and not all zero; the offset is finite; numeric covariates are finite (factor columns are skipped).</li>
+<li>Builds the parametric block (<code>_build_parametric_matrix</code>): an intercept column, numeric columns as given, factors with treatment contrasts and ordered factors with polynomial contrasts (<code>_contr_poly</code>). Without an intercept the first factor is coded in full. A factor needs at least two levels.</li>
+<li>Drops exactly aliased parametric columns (<code>_drop_aliased_parametric_columns</code>): a pivoted QR with tolerance <code>|R[0,0]| * eps**0.9</code>, as mgcv's <code>Rrank</code> check; the intercept is never dropped. Dropped names are kept in <code>dropped_param_names</code> and reproduced at prediction through <code>parametric_keep_cols</code>.</li>
+<li>Builds each smooth (<code>_build_smooth_components</code>): looks up the class, calls <code>setup</code>, wraps it with <code>resolve_by_variable</code>, takes ownership of the training basis with <code>consume_training_design_matrix</code> and collects the raw penalties from <code>build_penalty_matrices</code>.</li>
+<li>Applies constraints with <code>CoefficientMap.build</code> (next sections).</li>
+<li>Stacks <code>X = [X_parametric, constrained smooth blocks...]</code> and checks its width against <code>coef_map.total_coefs</code>.</li>
+<li>Stores penalties locally with <code>make_penalty_structure</code>. With <code>source_penalty_coordinates=True</code> (the discretized route passes it) a second <code>source_determinant_penalties</code> structure keeps multi-penalty blocks in the coordinates pinned mgcv uses for determinants.</li>
+<li>Builds <code>SmoothInfo</code> per smooth (one entry per level for a factor-by smooth, as mgcv's per-level <code>object$smooth</code>), the column names, and the factor levels of parametric factors (<code>factor_info</code>, <code>ordered_factors</code>).</li>
+</ol>
+<p>The Phase 1 to 2 transfer, <code>FittingData.from_setup</code>, is in <code>jaxgam/fitting/data.py</code> and is described on <a href="../fitting_dense/">fitting_dense.md</a>.</p>
+<h3 id="smooth-construction">Smooth construction<a class="headerlink" href="#smooth-construction" title="Permanent link">&para;</a></h3>
+<p><code>_build_smooth_components</code> resolves the registry key as <code>spec.smooth_type</code> for <code>te</code>/<code>ti</code> and <code>spec.bs</code> otherwise, instantiates the class with the <code>SmoothSpec</code>, and calls <code>setup(data_dict)</code>. Each <code>setup</code> builds the training basis (kept in <code>_X</code>), the penalty matrices, and the dimensions <code>n_coefs</code>, <code>rank</code> and <code>null_space_dim</code>, then sets <code>_is_setup</code>. Most constructors end with <code>smoothCon</code>'s penalty scaling, dividing the penalty by <code>norm(S, 1) / norm(X, inf)**2</code> (<code>Smooth._smoothcon_normalize</code>, or <code>_source_smoothcon_normalize</code>, which follows LAPACK <code>dlange</code>'s summation order; tensor products scale each margin penalty by its own norm).</p>
+<table>
+<thead>
+<tr>
+<th>Class (<code>bs</code>)</th>
+<th>mgcv routines ported</th>
+<th>Notes from the code</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TPRSSmooth</code> (<code>tp</code>)</td>
+<td><code>smooth.construct.tp.smooth.spec</code>, <code>Predict.matrix.tprs.smooth</code> (<code>R/smooth.r</code>); <code>tprs_setup</code>, <code>predict_tprs</code> (<code>src/tprs.c</code>); <code>Rlanczos</code> (<code>src/mat.c</code>) through <code>source_lanczos</code></td>
+<td>Default <code>k = M + (8, 27, 100)[min(d,3)-1]</code> where <code>M</code> is the null-space dimension (<code>_default_k</code>); <code>k</code> is raised to <code>M + 1</code>. Knots are the unique centred rows; when there are more than <code>max_knots</code> (default 2000) unique rows, that many are sampled with a port of R's sampler (<code>r_sample_knot_rows</code>). Training rows map to knot rows (<code>training_matrix</code>), which differ from prediction rows.</td>
+</tr>
+<tr>
+<td><code>TPRSShrinkageSmooth</code> (<code>ts</code>)</td>
+<td><code>smooth.construct.ts.smooth.spec</code></td>
+<td>Null-space eigenvalues of <code>S</code> replaced by <code>0.1</code> times the smallest non-zero absolute eigenvalue (<code>_uniform_replacement</code>); <code>null_space_dim</code> becomes 0.</td>
+</tr>
+<tr>
+<td><code>CubicRegressionSmooth</code> (<code>cr</code>)</td>
+<td><code>smooth.construct.cr.smooth.spec</code>, <code>place.knots</code>, <code>Predict.matrix.cr.smooth</code> (<code>R/smooth.r</code>); <code>getFS</code> (<code>src/mgcv.c</code>)</td>
+<td>Default <code>k = 10</code>, raised with a warning to 3. Knots interpolate equally spaced ranks of the unique values. Sets <code>_noterp = True</code>.</td>
+</tr>
+<tr>
+<td><code>CubicShrinkageSmooth</code> (<code>cs</code>)</td>
+<td><code>smooth.construct.cs.smooth.spec</code></td>
+<td>Geometric null-space shrinkage through <code>cubic_shrinkage_penalty</code> on the pinned provider.</td>
+</tr>
+<tr>
+<td><code>CyclicCubicSmooth</code> (<code>cc</code>)</td>
+<td><code>smooth.construct.cc.smooth.spec</code>, <code>Predict.matrix.cyclic.smooth</code></td>
+<td>Minimum <code>k</code> 4; <code>k - 1</code> coefficients; null space of dimension 1.</td>
+</tr>
+<tr>
+<td><code>GaussianProcessSmooth</code> (<code>gp</code>)</td>
+<td><code>smooth.construct.gp.smooth.spec</code>, <code>gpE</code>, <code>Predict.matrix.gp.smooth</code></td>
+<td>Kernel from <code>gp_kernel_registry</code> (default <code>matern_3_2</code>); <code>m=</code> raises <code>ValueError</code>; negative truncated eigenvalues are replaced by their absolute values with a warning.</td>
+</tr>
+<tr>
+<td><code>RandomEffectSmooth</code> (<code>re</code>)</td>
+<td><code>smooth.construct.re.smooth.spec</code>, <code>Predict.matrix.random.effect</code></td>
+<td>Design equals <code>model.matrix(~v1:...:vN - 1)</code>; identity penalty scaled by <code>norm(X, inf)**2</code>; <code>k</code> ignored; <code>side_constrain = False</code>, <code>_has_centering_constraint = False</code>. Unseen or missing levels predict 0.</td>
+</tr>
+<tr>
+<td><code>TensorProductSmooth</code> (<code>te</code>)</td>
+<td><code>smooth.construct.tensor.smooth.spec</code>, <code>tensor.prod.penalties</code>, <code>Predict.matrix.tensor.smooth</code></td>
+<td>One 1-D margin per variable, all with the term's <code>bs</code> and one scalar <code>k</code> (default 5 per margin); only <code>m</code> is forwarded to the margins. Univariate margins whose class leaves <code>_noterp</code> false (thin plate, GP) are reparameterized at evenly spaced points (<code>_reparameterize_margin</code>); cubic margins are not. One penalty per margin.</td>
+</tr>
+<tr>
+<td><code>TensorInteractionSmooth</code> (<code>ti</code>)</td>
+<td>the same routines, with margin constraints</td>
+<td>Absorbs a centering constraint into each margin before the product, so <code>CoefficientMap.build</code> skips its centering.</td>
+</tr>
+</tbody>
+</table>
+<p>By-variables are resolved after <code>setup</code> by <code>resolve_by_variable</code>, which applies to <code>s</code>, <code>te</code> and <code>ti</code> alike:</p>
+<ul>
+<li>A factor <code>by</code> (pandas categorical, object or string column; integers are never factors, see <code>is_factor</code>) returns a <code>FactorBySmooth</code>: one block per level, rows non-zero only in their level's block, one penalty per level and base penalty, labels <code>s(x):fLEVEL</code>. An ordered factor drops its first level. An empty level raises <code>ValueError</code>. At prediction an unseen level gives a <code>NaN</code> row and the warning <code>factor levels ... not in original fit</code>.</li>
+<li>A numeric <code>by</code> returns a <code>NumericBySmooth</code>: the base basis times the column, same penalties. It keeps the centering constraint only when the column is constant (R's <code>sd(by) &gt; mean(by) * eps * 1000</code> test).</li>
+</ul>
+<p>Neither wrapper subclasses <code>Smooth</code>; they duck-type the same members and hold the base smooth in <code>base_smooth</code>.</p>
+<h3 id="identifiability-constraints-and-coefficientmap">Identifiability constraints and CoefficientMap<a class="headerlink" href="#identifiability-constraints-and-coefficientmap" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart TD
+    A["raw blocks X_j, S_j per smooth"] --&gt; B{"centering applies?"}
+    B --&gt;|"_has_centering_constraint False (re)"| G["no centering"]
+    B --&gt;|"NumericBySmooth, non-constant by"| G
+    B --&gt;|"TensorInteractionSmooth"| G
+    B --&gt;|"FactorBySmooth"| C["apply_sum_to_zero_factor_by&lt;br/&gt;one Z from the base column sums"]
+    B --&gt;|"te with cr or cs"| D["source_centered_smooth"]
+    B --&gt;|"otherwise"| E["apply_sum_to_zero&lt;br/&gt;Z = Q[:, 1:] of QR(colSums X)"]
+    C --&gt; F["CoefficientMap.gam_side"]
+    D --&gt; F
+    E --&gt; F
+    G --&gt; F
+    F --&gt; H["fix_dependence on penalty-augmented blocks&lt;br/&gt;(_augment_smooth_x)"]
+    H --&gt; I["TermBlock: Z_centering, del_index, col_start, penalty_indices"]
+    I --&gt; J["CoefficientMap"]</code></pre>
+<p>Each smooth first loses one column to its sum-to-zero constraint (<code>Z</code> has shape <code>(k, k-1)</code>), unless it opts out. Then <code>gam_side</code> (port of <code>gam.side</code>, with <code>fixDependence</code> and <code>augment.smX</code> from <code>R/mgcv.r</code>) runs from low to high dimension and deletes columns of a smooth that are linearly dependent on the intercept plus the smooths processed before it (lower-dimensional ones, or earlier ones of the same dimension) that share one of its variables. It returns early when no two smooths share a variable. A parametric term sharing a smooth's variable (<code>y ~ x + s(x)</code>) never triggers a deletion, as in R. Two 1-D smooths of the same variable are both kept, the later one side-constrained, with the warning <code>model has repeated 1-d smooths of same variable.</code></p>
+<p><code>CoefficientMap</code> (frozen) holds one <code>TermBlock</code> per term: a single <code>parametric</code> block first, then one block per smooth with its constrained width <code>n_coefs</code>, raw width <code>n_coefs_raw</code>, <code>Z_centering</code>, <code>del_index</code> and <code>penalty_indices</code>. It maps both ways:</p>
+<ul>
+<li><code>transform_X</code> and <code>transform_S</code> take a raw design or penalty block to constrained coordinates (<code>X @ Z</code>, then drop <code>del_index</code>).</li>
+<li><code>constrained_to_full</code> and <code>full_to_constrained</code> move coefficient vectors between the constrained and raw bases.</li>
+</ul>
+<p>Prediction depends on it because the fitted coefficients live in constrained coordinates. <code>build_predict_matrix</code> evaluates each smooth's raw <code>predict_matrix</code> on new data and passes it through <code>coef_map.transform_X</code> with that term's own <code>TermBlock</code>, so new rows get exactly the centering and deletions of the training design. If the map were wrong, the fit could be right and every prediction wrong; <code>tests/test_predict/test_predict.py</code> checks that predicting the training data reproduces <code>fitted_values</code>.</p>
+<h3 id="penalties">Penalties<a class="headerlink" href="#penalties" title="Permanent link">&para;</a></h3>
+<p><code>make_penalty_structure</code> stores each smooth's constrained penalties in that smooth's coefficient block, never padded to <code>p x p</code>:</p>
+<ul>
+<li>A <code>PenaltyBlock</code> has <code>start</code>/<code>stop</code>, the global <code>sp_indices</code>, the <code>local_penalties</code> and an initial <code>IdentityTransform</code>.</li>
+<li>Each local matrix becomes an <code>IdentityPenalty</code> (scaled identity), a <code>DiagonalPenalty</code>, or a <code>DenseLocalPenalty</code>.</li>
+<li>Several penalties with disjoint supports (factor-by levels) become one block per penalty covering only its own interval. Overlapping penalties (tensor margins) share one block.</li>
+<li>Source-centered <code>te</code> cubic penalties keep their exact bytes (<code>preserve_bytes</code>), because re-symmetrizing them changes the pinned coordinate gauge.</li>
+</ul>
+<p><code>PenaltyStructure.materialize</code> builds the combined <code>S_lambda</code> explicitly when a caller needs it, with smoothing parameters formed by <code>libm_exp</code>. The penalty reparameterization used by the fit (<code>reparameterize_structure</code>, <code>stable_reparam</code>) is described on <a href="../fitting_dense/">fitting_dense.md</a>.</p>
+<h3 id="prediction-state">Prediction state<a class="headerlink" href="#prediction-state" title="Permanent link">&para;</a></h3>
+<p><code>build_predict_spec</code> turns a <code>ModelSetup</code> into a <code>PredictSpec</code>: the <code>CoefficientMap</code> with each smooth replaced by <code>copy_for_prediction()</code> (training design, penalties and other fit caches dropped), the <code>SmoothInfo</code>, column names, factor levels and alias columns. <code>ModelSetup</code> builds it lazily and caches it. In Phase 3 <code>GAMPredictor</code> holds the <code>PredictSpec</code> rather than the <code>ModelSetup</code>, while a full <code>GAMResults</code> also keeps its <code>setup</code>; see <a href="../results_and_prediction/">results_and_prediction.md</a>. <code>PredictSpec.build_training_matrix</code> instead evaluates <code>training_matrix</code>, which differs from <code>predict_matrix</code> only where a thin-plate basis with data knots is involved (directly, as a tensor margin or under a by wrapper); it is used only to replay setup-source rows (<code>PreparedModel.evaluate_batch</code>).</p>
+<h3 id="streamed-preparation">Streamed preparation<a class="headerlink" href="#streamed-preparation" title="Permanent link">&para;</a></h3>
+<p><code>prepare_model</code> builds the same frozen metadata as dense setup, for a narrower formula, by scanning a <code>RowSource</code> several times and keeping only coefficient-sized state. It never calls <code>ModelSetup.build</code>. Accepted: univariate <code>s(x, bs="cr")</code> or <code>bs="cs"</code> (and <code>cc</code> when the caller passes <code>allow_cyclic=True</code>, which only the operator route does), distinct smooth variables, numeric parametric terms, with or without an intercept. Everything else raises <code>NotImplementedError</code> before the design scan: <code>by=</code>, <code>te</code>/<code>ti</code>, other bases, factor parametric terms and two smooths of one variable.</p>
+<pre class="mermaid"><code>flowchart TD
+    A["prepare_model"] --&gt; B["two scan(1) probes:&lt;br/&gt;replayable, same row_positions,&lt;br/&gt;response present, variables present"]
+    B --&gt; C["SetupWorkspace.for_design, then batch_rows"]
+    C --&gt; D{"in_memory_knot_columns &gt; 0?"}
+    D --&gt;|"yes"| E["_exact_cubic_knots_in_memory&lt;br/&gt;one scan per group of covariates"]
+    D --&gt;|"no"| F["_exact_cubic_knots&lt;br/&gt;one SQLite scan per covariate"]
+    E --&gt; G["_cubic_from_knots"]
+    F --&gt; G
+    G --&gt; H["design scan: _CanonicalTreeR of the parametric block,&lt;br/&gt;exact alias ratios, smooth column sums,&lt;br/&gt;max abs row sums, row_positions digest"]
+    H --&gt; I["_drop_aliased_parametric_columns,&lt;br/&gt;_canonicalize_exact_parametric_aliases"]
+    I --&gt; J["smoothCon scaling, centering Z, TermBlock,&lt;br/&gt;CoefficientMap, make_penalty_structure"]
+    J --&gt; K["PredictSpec and basis fingerprint: PreparedModel"]
+    K --&gt; L{"family given?"}
+    L --&gt;|"yes"| M["_prepare_fitting scan 1: Gram, QR merge,&lt;br/&gt;rank tree, diag of X'WX, response reductions"]
+    M --&gt; N["scan 2: check the start lies in the family domain"]
+    N --&gt;|"outside the domain"| O["scan 3: refit the start to the null mean"]
+    N --&gt; P["FittingPreparation in PreparedModel.fitting"]
+    O --&gt; P</code></pre>
+<p>Read each box below the probes as one full scan of the source, except the knot box, which is one scan per group of covariates (in memory) or one per covariate (SQLite).</p>
+<p>What each scan produces:</p>
+<ul>
+<li><strong>Probes.</strong> Two <code>scan(1)</code> calls must return equal first <code>row_positions</code>, or the source is not replayable (<code>TypeError</code>). The first batch gives the column dtypes used to size the workspace.</li>
+<li><strong>Exact cubic knots.</strong> mgcv's <code>place.knots</code> interpolates ranks of the sorted unique values, so knots need every distinct value. In memory, a covariate costs 8 bytes per row and as many covariates are gathered per scan as the budget allows. Otherwise each covariate gets a temporary on-disk SQLite table (<code>PRAGMA temp_store = FILE</code>, a 2,048 KiB page cache) and the needed ranks are read with <code>SELECT DISTINCT</code> and <code>ROW_NUMBER()</code>. Both paths share <code>_interpolate_knots</code> and give bitwise-identical knots (<code>test_in_memory_knots_are_bitwise_equal_to_sqlite_knots</code> in <code>tests/test_formula/test_prepare.py</code>).</li>
+<li><strong>Design scan.</strong> Column sums give each smooth's centering constraint; the maximum absolute row sum gives <code>smoothCon</code>'s scaling, applied before centering as in dense setup. The parametric block feeds a <code>_CanonicalTreeR</code>.</li>
+<li><strong>Rank and alias decisions.</strong> <code>_CanonicalTreeR</code> cuts rows into fixed 1,024-row leaves by scan ordinal and merges leaf R factors in a binary tree, so the R factor, and every decision made from it, does not depend on the batch partition. The parametric R factor goes through the dense <code>_drop_aliased_parametric_columns</code>, then <code>_canonicalize_exact_parametric_aliases</code> reproduces the dense pivot choice for exactly proportional columns. In <code>_prepare_fitting</code> a second tree on the unpenalized directions gives <code>unpenalized_rank_deficit</code> (an SVD with tolerance <code>max(sv) * max(n, columns) * eps</code>).</li>
+<li><strong>Fitting scans</strong> (<code>_prepare_fitting</code>, only with a <code>family</code>). They compute the start coefficients from <code>family.initialize</code> and <code>family.link</code>, <code>diag(X'WX)</code> for <code>initial_log_sp_from_diagonal</code>, and the response, weight and offset ranges in <code>ResponseReduction</code>. The family is duck-typed: this Phase 1 module never imports <code>jaxgam.families</code>. Its <code>execution_static_config()</code> and <code>execution_parameter_snapshot()</code> are stored and compared again at the end, so a family mutated during preparation raises.</li>
+</ul>
+<p>The fingerprint is checked at the start and end of <code>prepare_model</code> and <code>_prepare_fitting</code>; <code>GAM._fit_stream</code> runs the whole preparation inside <code>single_fit_fingerprints()</code> (see <a href="../data_sources/">data_sources.md</a>).</p>
+<p><strong>The setup workspace and its budget.</strong> <code>SetupWorkspace.for_design</code> estimates the live bytes per batch row and the fixed bytes of a design scan and, with cubic smooths, of a knot scan. An SQLite knot scan is charged a fixed 16 MiB (<code>_SQLITE_SCOPE_BYTES</code>) whether or not it runs, so every cubic model needs at least that much. <code>batch_rows(requested, maximum_bytes)</code> returns the largest scan size that fits, or raises <code>MemoryError("Streamed setup requires at least ...")</code> before any full scan when one row does not fit. <code>GAM._fit_stream_routes</code> passes <code>FitControl.batch_rows</code> and <code>FitControl.memory_budget_bytes</code>. The estimate covers JaxGAM-owned arrays only; source storage, allocator retention and native BLAS/LAPACK workspace are outside it. <code>test_setup_workspace_bounds_traced_setup_allocations</code> checks it with <code>tracemalloc</code>.</p>
+<h3 id="compact-setup-for-the-discretized-route">Compact setup for the discretized route<a class="headerlink" href="#compact-setup-for-the-discretized-route" title="Permanent link">&para;</a></h3>
+<p>The discretized route reproduces <code>bam(discrete=TRUE)</code>: covariates are compressed first, and bases are then built on the compact rows.</p>
+<ol>
+<li><code>build_continuous_discrete_setup</code> opens <code>single_fit_fingerprints(verify_on_exit=False)</code> and calls <code>build_compact_setup_frame</code> (in <code>jaxgam/data/continuous_frame.py</code>; see <a href="../data_sources/">data_sources.md</a>). That returns a padded compact <code>DataFrame</code> and one <code>CompactGroup</code> with row selectors per jointly discretized group.</li>
+<li><code>_prospective_basis_bytes</code> bounds the arrays <code>ModelSetup.build</code> will create on the compact frame; with the frame's retained bytes it must fit <code>DiscretizationBudget.max_table_bytes</code>, or the result is a <code>ContinuousSetupUnavailable</code>.</li>
+<li><code>ModelSetup.build(formula, compact.frame, source_penalty_coordinates=True)</code> runs the ordinary dense setup on the compact frame, so every registered basis is accepted. Only <code>build_predict_spec</code>, the penalties and the source determinant penalties are kept; the compact training <code>X</code> is discarded.</li>
+<li>The result is a <code>ContinuousDiscreteSetup</code> with a <code>basis_fingerprint</code> (SHA-256 of the pickled <code>PredictSpec</code>) and a byte ledger.</li>
+</ol>
+<p>Then <code>_prepared_discrete</code> in <code>jaxgam/execution/discrete/gaussian.py</code> calls <code>build_discretization_metadata</code> and, for <code>prediction_policy="mgcv_predict_bamd"</code>, <code>build_request_compression</code> (both in <code>jaxgam/formula/discrete/continuous_metadata.py</code>), and <code>build_continuous_discrete_design</code> (<code>jaxgam/formula/discrete/continuous_design.py</code>). That last step evaluates each term's frozen <code>predict_matrix</code> on its group's compact representatives and stores the constrained table with the group's selector as a <code>LookupBlock</code>, or as a <code>TensorLookupBlock</code> for tensor and by terms, where margins and the by multiplier are separate indexed tables. Each step returns a typed unavailable value (<code>ContinuousSetupUnavailable</code>, <code>DiscreteDesignUnavailable</code>) instead of raising; <code>_prepared_discrete</code> turns it into <code>MemoryError("{reason}: requires {n} bytes, budget is {m}.")</code>. A multi-variable random effect, <code>s(x, g, bs="re")</code>, is refused by <code>_reject_unsupported_formula</code>. The fit itself is on <a href="../fitting_discrete/">fitting_discrete.md</a>.</p>
+<p><code>jaxgam/formula/discrete/design.py</code> also holds exact (unrounded) descriptor builders, <code>build_discrete_design_from_predict_spec</code> and its <code>build_discrete_design_from_prepared</code> and <code>build_discrete_design_from_setup</code> adapters. They replay a frozen <code>PredictSpec</code> over <code>exact_index_columns</code> rather than re-running setup on unique rows, because re-running it would change centering and normalization. At HEAD only tests call them.</p>
+<h3 id="operator-preparation">Operator preparation<a class="headerlink" href="#operator-preparation" title="Permanent link">&para;</a></h3>
+<p><code>prepare_operator_model</code> accepts numeric parametric terms, <code>cr</code>/<code>cs</code>/<code>cc</code>, <code>tp</code>/<code>ts</code>/<code>gp</code> and <code>re</code>; <code>re</code> cannot have <code>by=</code> or be a tensor. It splits the formula:</p>
+<ul>
+<li><strong>Random effects</strong> are never built densely. One scan discovers factor levels (declared categorical levels are kept in order, otherwise observed levels are sorted) and the maximum interaction amplitude. Each term becomes an <code>IndexedRandomEffect</code> (per row: one level ID and one amplitude; unknown levels get amplitude 0) and a <code>PenaltyBlock</code> with an <code>IdentityPenalty</code> scaled by the squared maximum amplitude, which mirrors <code>smoothCon</code>'s scaling of the dense <code>re</code> penalty.</li>
+<li><strong>The modest part</strong> (all other terms) is capped at <code>OperatorPreparationControl.max_modest_coefficients</code> (default 64) raw columns. Plain cubic and numeric terms use <code>prepare_model(..., allow_cyclic=True)</code>; terms with <code>by=</code>, <code>te</code>/<code>ti</code> or radial bases use <code>prepare_modest_cubic_by</code>, which calls <code>prepare_radial_smooth</code> for <code>tp</code>/<code>ts</code>/<code>gp</code>. That function harvests knots following <code>uniquecombs(ordered=TRUE)</code> and the R sampler and, for <code>tp</code>/<code>ts</code>, reuses the dense <code>tprs_setup</code> port (<code>_source_tprs_knot_basis</code>).</li>
+<li><strong>Replay checking.</strong> Every scan goes through <code>_CheckedSource</code>, which hashes every row (position, every column value, <code>y</code>, weight, offset) and requires each replay to give the same digest.</li>
+</ul>
+<p><code>jaxgam/formula/operator/workspace.py</code> bounds the prediction scratch of radial smooths, whose knots can make evaluation larger than the coefficient width suggests. The fit is on <a href="../fitting_operator/">fitting_operator.md</a>.</p>
+<h2 id="key-types">Key types<a class="headerlink" href="#key-types" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>classDiagram
+    class FormulaSpec {
+        +response str
+        +smooth_terms list~SmoothSpec~
+        +parametric_terms list~ParametricTerm~
+        +has_intercept bool
+    }
+    class SmoothSpec {
+        +variables list~str~
+        +bs str
+        +k int
+        +by str
+        +smooth_type str
+        +extra_args dict
+    }
+    class ParametricTerm {
+        +name str
+    }
+    class ModelSetup {
+        +X ndarray
+        +y ndarray
+        +weights ndarray
+        +offset ndarray
+        +penalties PenaltyStructure
+        +coef_map CoefficientMap
+        +smooth_info tuple~SmoothInfo~
+        +parametric_keep_cols tuple~int~
+        +dropped_param_names tuple~str~
+        +build(formula_spec, data, weights, offset) ModelSetup
+        +build_predict_matrix(newdata) ndarray
+    }
+    class SmoothInfo {
+        +label str
+        +term_type str
+        +first_coef int
+        +last_coef int
+        +first_penalty int
+        +n_penalties int
+        +null_space_dim int
+        +is_random bool
+    }
+    class PredictSpec {
+        +coef_map CoefficientMap
+        +smooth_info tuple~SmoothInfo~
+        +factor_info dict
+        +total_coefs int
+        +build_predict_matrix(newdata) ndarray
+        +build_training_matrix(data) ndarray
+    }
+    FormulaSpec *-- SmoothSpec
+    FormulaSpec *-- ParametricTerm
+    ModelSetup *-- SmoothInfo
+    PredictSpec *-- SmoothInfo
+    ModelSetup ..&gt; FormulaSpec : built from
+    ModelSetup ..&gt; PredictSpec : build_predict_spec</code></pre>
+<p>The three formula types are frozen dataclasses produced by <code>parse_formula</code>; <code>ModelSetup</code> and <code>PredictSpec</code> are the dense setup's output and its prediction-only projection. <code>SmoothInfo</code> is per smooth (per level for factor-by smooths), whereas <code>coef_map.terms</code> is per formula term.</p>
+<pre class="mermaid"><code>classDiagram
+    class Smooth {
+        &lt;&lt;abstract&gt;&gt;
+        +spec SmoothSpec
+        +n_coefs int
+        +null_space_dim int
+        +rank int
+        +side_constrain bool
+        +setup(data)
+        +build_design_matrix(data) ndarray
+        +build_penalty_matrices() list~Penalty~
+        +predict_matrix(new_data) ndarray
+        +training_matrix(data) ndarray
+        +copy_for_prediction() Smooth
+        +consume_training_design_matrix() ndarray
+    }
+    Smooth &lt;|-- TPRSSmooth
+    TPRSSmooth &lt;|-- TPRSShrinkageSmooth
+    Smooth &lt;|-- CubicRegressionSmooth
+    CubicRegressionSmooth &lt;|-- CubicShrinkageSmooth
+    CubicRegressionSmooth &lt;|-- CyclicCubicSmooth
+    Smooth &lt;|-- GaussianProcessSmooth
+    Smooth &lt;|-- RandomEffectSmooth
+    Smooth &lt;|-- TensorProductSmooth
+    TensorProductSmooth &lt;|-- TensorInteractionSmooth</code></pre>
+<p>All nine registered classes derive from <code>Smooth</code>. The four abstract methods are <code>setup</code>, <code>build_design_matrix</code>, <code>build_penalty_matrices</code> and <code>predict_matrix</code>; the others have defaults on the base class.</p>
+<pre class="mermaid"><code>classDiagram
+    class Registry {
+        +register(key, cls)
+        +get_class(key) type
+        +get_instance(key) object
+        +available tuple~str~
+    }
+    class FactorBySmooth {
+        +base_smooth Smooth
+        +levels list
+        +all_levels list
+        +n_levels int
+        +k_per_level int
+        +labels list~str~
+        +predict_matrix(new_data) ndarray
+        +build_penalty_matrices() list~Penalty~
+    }
+    class NumericBySmooth {
+        +base_smooth Smooth
+        +by_variable str
+        +has_centering_constraint bool
+        +predict_matrix(new_data) ndarray
+    }
+    class TensorProductSmooth {
+        +setup(data)
+        +predict_matrix(new_data) ndarray
+    }
+    Registry ..&gt; Smooth : smooth_registry maps bs to class
+    FactorBySmooth o-- Smooth : base_smooth
+    NumericBySmooth o-- Smooth : base_smooth
+    TensorProductSmooth o-- Smooth : one marginal per variable</code></pre>
+<p><code>smooth_registry</code> is a <code>Registry</code> instance in <code>jaxgam/smooths/registry.py</code>; the by-variable wrappers and tensor products compose base smooths rather than subclass them.</p>
+<pre class="mermaid"><code>classDiagram
+    class CoefficientMap {
+        +terms tuple~TermBlock~
+        +total_coefs int
+        +total_coefs_raw int
+        +has_intercept bool
+        +build(smooths, X_smooth_blocks, S_smooth_blocks) tuple
+        +transform_X(X_raw_block, term_label) ndarray
+        +transform_S(S_raw, term_label) ndarray
+        +constrained_to_full(beta_c) ndarray
+        +full_to_constrained(beta_raw) ndarray
+        +gam_side(smooths, X_blocks, S_blocks) list
+    }
+    class TermBlock {
+        +label str
+        +col_start int
+        +n_coefs int
+        +n_coefs_raw int
+        +term_type str
+        +smooth Smooth
+        +penalty_indices tuple~int~
+        +Z_centering ndarray
+        +del_index tuple~int~
+    }
+    class PenaltyStructure {
+        +n_coef int
+        +blocks tuple~PenaltyBlock~
+        +n_penalties int
+        +materialize(log_lambda) ndarray
+    }
+    class PenaltyBlock {
+        +start int
+        +stop int
+        +sp_indices tuple~int~
+        +local_penalties tuple
+        +transform object
+        +ranks tuple~int~
+    }
+    CoefficientMap *-- TermBlock
+    PenaltyStructure *-- PenaltyBlock
+    TermBlock ..&gt; PenaltyBlock : penalty_indices equal sp_indices</code></pre>
+<p><code>TermBlock.smooth</code> may also be a <code>FactorBySmooth</code> or <code>NumericBySmooth</code>. A <code>PenaltyBlock</code> is placed by <code>col_start</code> and the smooth's width; its <code>sp_indices</code> are the global smoothing-parameter positions listed in the term's <code>penalty_indices</code>.</p>
+<pre class="mermaid"><code>classDiagram
+    class PreparedModel {
+        +predict_spec PredictSpec
+        +penalties PenaltyStructure
+        +source_fingerprint str
+        +row_positions_fingerprint str
+        +basis_fingerprint str
+        +n_obs int
+        +fitting FittingPreparation
+        +evaluate_batch(batch) ndarray
+        +evaluate_fitting_batch(batch) ndarray
+    }
+    class FittingPreparation {
+        +penalty_structure PenaltyStructure
+        +log_lambda_init ndarray
+        +beta_init ndarray
+        +gram ndarray
+        +response ResponseReduction
+        +unpenalized_rank_deficit int
+        +family_execution_static_config tuple
+    }
+    class SetupWorkspace {
+        +row_bytes int
+        +fixed_bytes int
+        +knot_column_bytes int
+        +for_design() SetupWorkspace
+        +batch_rows(requested, maximum_bytes) int
+        +in_memory_knot_columns(rows, maximum_bytes, wanted) int
+    }
+    class StreamDesign {
+        +prepared PreparedModel
+        +source RowSource
+        +batches(batch_rows) Iterator
+    }
+    class ContinuousDiscreteSetup {
+        +compact CompactSetupFrame
+        +predict_spec PredictSpec
+        +penalties PenaltyStructure
+        +basis_fingerprint str
+        +retained_table_bytes int
+        +cleanup()
+    }
+    class PreparedOperatorModel {
+        +modest PreparedModel
+        +random_effects tuple~IndexedRandomEffect~
+        +penalties PenaltyStructure
+        +source_replay_digest str
+        +evaluate_batch(batch) OperatorBatch
+    }
+    PreparedModel *-- FittingPreparation
+    StreamDesign o-- PreparedModel
+    PreparedOperatorModel *-- PreparedModel
+    PreparedModel ..&gt; SetupWorkspace : scans sized by</code></pre>
+<p>These are the row-free outputs of the three row-source setups; none holds an observation-sized array except the compact frame's selectors.</p>
+<h2 id="rules-and-invariants">Rules and invariants<a class="headerlink" href="#rules-and-invariants" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>No JAX in Phase 1.</strong> <code>jaxgam/formula/</code>, <code>jaxgam/smooths/</code> and <code>jaxgam/penalties/</code> contain no <code>import jax</code>. They do use SciPy, Numba (<code>jaxgam/smooths/cubic.py</code>, <code>jaxgam/smooths/utils.py</code>, <code>jaxgam/smooths/source_arithmetic.py</code>) and <code>ctypes</code> (<code>jaxgam/smooths/cubic.py</code>, <code>jaxgam/smooths/source_lapack.py</code>, <code>jaxgam/smooths/source_arithmetic.py</code>). Families reach <code>jaxgam/formula/prepare.py</code> duck-typed, never imported. Import guards that stub the package and assert JAX stays unloaded exist for some modules only: <code>test_compact_setup_import_does_not_import_jax</code> (<code>tests/test_formula/test_continuous_setup.py</code>), <code>test_continuous_descriptor_import_does_not_import_jax</code> (<code>tests/test_formula/test_continuous_design.py</code>), <code>test_metadata_module_imports_without_jax</code> (<code>tests/test_formula/test_continuous_metadata.py</code>) and <code>test_global_rank_coordinate_helpers_import_without_jax</code> (<code>tests/test_formula/test_rank_coordinates.py</code>).</li>
+<li><strong>Bases match pinned mgcv.</strong> Knot placement, eigen truncation and normalization are ported operation by operation; R comparisons of the bases are in <code>tests/test_smooths/</code> (<code>tests/test_smooths/test_tprs.py</code>, <code>tests/test_smooths/test_tprs_source_parity.py</code>, <code>tests/test_smooths/test_cubic.py</code>, <code>tests/test_smooths/test_tensor.py</code>, <code>tests/test_smooths/test_gaussian_process.py</code>, <code>tests/test_smooths/test_random_effects.py</code>, <code>tests/test_smooths/test_by_variable.py</code>), and of whole fits in <code>tests/test_validation_matrix.py</code>.</li>
+<li><strong>Prediction reproduces training.</strong> <code>build_predict_matrix</code> on the training data must equal the training design through the same <code>CoefficientMap</code> (<code>tests/test_predict/test_predict.py</code>, <code>tests/test_constraints.py</code>).</li>
+<li><strong>Setup owns the training basis.</strong> <code>setup</code> must leave the basis in <code>_X</code>; <code>consume_training_design_matrix</code> transfers it and clears it, so no smooth keeps a second <code>n x k</code> matrix (<code>tests/test_smooths/test_prediction_copy.py</code>).</li>
+<li><strong>Every smooth class chooses a prediction-copy strategy.</strong> <code>test_copy_for_prediction_registry_audit</code> fails for a registered class that neither overrides <code>copy_for_prediction</code> nor is on its audited list.</li>
+<li><strong>Penalties stay local and symmetric.</strong> <code>Penalty</code> validates symmetry; <code>make_penalty_structure</code> never pads to <code>p x p</code> (<code>tests/test_penalties/test_structure.py</code>, <code>tests/test_penalties.py</code>).</li>
+<li><strong>Streamed decisions are partition-invariant.</strong> Knots, alias and rank decisions do not depend on <code>batch_rows</code> (<code>test_prepared_model_is_invariant_to_setup_batch_partition</code>, <code>test_canonical_tree_r_is_bitwise_invariant_to_row_chunking</code> in <code>tests/test_formula/test_prepare.py</code>), and the streamed metadata matches dense setup (<code>test_prepared_cubic_matches_dense_setup_and_batch_boundaries</code>).</li>
+</ul>
+<h2 id="pitfalls">Pitfalls<a class="headerlink" href="#pitfalls" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Label collisions.</strong> <code>s(x, k=6) + s(x, k=8)</code> gives two smooths with the same label. <code>SmoothInfo</code>, column names and <code>transform_X</code> pair smooths with <code>TermBlock</code>s by position, never by label (comments in <code>jaxgam/formula/design.py</code> and <code>jaxgam/formula/predict_matrix.py</code>). New code must do the same; <code>CoefficientMap.get_term(label)</code> returns the first match.</li>
+<li><strong>Integer columns are not factors.</strong> <code>is_factor</code> follows R's <code>is.factor</code>: an integer-coded group in <code>s(g, bs="re")</code> or <code>by=g</code> becomes one numeric column without a warning.</li>
+<li><strong><code>te</code> cubic margins.</strong> For <code>te</code> with <code>cr</code>/<code>cs</code>, margins are built without <code>smoothCon</code> normalization (<code>setup(data, _normalize_penalty=False)</code>), centered with <code>source_centered_smooth</code>, and stored with <code>preserve_bytes</code>. Re-symmetrizing or normalizing them changes the rank-deficient coordinate gauge pinned R uses.</li>
+<li><strong><code>bs="te"</code> inside <code>s()</code>.</strong> <code>te</code> and <code>ti</code> are registry keys but are chosen by the function name. <code>s(x, bs="te")</code> recurses until Python raises a RecursionError.</li>
+<li><strong>Thin-plate training rows are not prediction rows.</strong> With data knots, <code>tprs_setup</code> maps each datum to its knot row, which differs from re-evaluating the kernel by the Lanczos residual. Source replay must use <code>training_matrix</code> or <code>copy_for_training()</code>, not <code>predict_matrix</code>.</li>
+<li><strong>Silently ignored keywords.</strong> Unread <code>extra_args</code> keys (for example <code>pc=</code>, <code>select=</code>, <code>d=</code>) are accepted without a warning, and only <code>m</code> is forwarded to tensor margins.</li>
+</ul>
+<h2 id="where-to-change-things">Where to change things<a class="headerlink" href="#where-to-change-things" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Accept a new formula construct:</strong> <code>_TermCollector</code> in <code>jaxgam/formula/parser.py</code>, then <code>FormulaSpec</code> in <code>jaxgam/formula/terms.py</code> and <code>ModelSetup.build</code>; add cases to <code>tests/test_formula/test_parser.py</code>.</li>
+<li><strong>Add or change a smooth basis:</strong> a <code>Smooth</code> subclass in <code>jaxgam/smooths/</code>, registered in <code>jaxgam/smooths/registry.py</code>; see the checklist on <a href="../families_links_smooths/">families_links_smooths.md</a>.</li>
+<li><strong>Change centering or side constraints:</strong> <code>CoefficientMap.build</code> and <code>CoefficientMap.gam_side</code> in <code>jaxgam/smooths/constraints.py</code>; tests in <code>tests/test_constraints.py</code>.</li>
+<li><strong>Change parametric or factor encoding:</strong> <code>_build_parametric_matrix</code> and <code>_encode_factor</code> in <code>jaxgam/formula/predict_matrix.py</code>. Training and prediction share them, so both change together.</li>
+<li><strong>Change how penalties are stored:</strong> <code>make_penalty_structure</code> in <code>jaxgam/penalties/structure.py</code>, and every consumer of <code>PenaltyBlock</code> in <code>jaxgam/formula/fitting_prepare.py</code> and <code>jaxgam/fitting/</code>.</li>
+<li><strong>Widen streamed preparation:</strong> <code>_cubic_class</code> and the checks at the top of <code>prepare_model</code>; extend <code>SetupWorkspace.for_design</code> for any new per-row array.</li>
+<li><strong>Change the discretized setup bound:</strong> <code>_prospective_basis_bytes</code> in <code>jaxgam/formula/discrete/continuous_setup.py</code> and <code>_memory_plan</code> in <code>jaxgam/formula/discrete/design.py</code>.</li>
+<li><strong>Widen operator preparation:</strong> the term checks in <code>prepare_operator_model</code> and <code>prepare_modest_cubic_by</code>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

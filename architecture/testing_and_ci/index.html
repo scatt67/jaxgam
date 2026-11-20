@@ -1,0 +1,2556 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../families_links_smooths/">
+      
+      
+        <link rel="next" href="../numerics_and_platform/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Testing and CI - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#testing-and-continuous-integration" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Testing and CI
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#test-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shared-support-modules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shared support modules
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-r-bridge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The R bridge
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tolerance-classes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tolerance classes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-validation-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The validation matrix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hard-gate-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hard-gate invariants
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_assertcollector" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        _AssertCollector
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#platform-sensitive-tests-and-replay-bounds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Platform-sensitive tests and replay bounds
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pytest-markers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pytest markers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#skipping-without-the-pinned-r" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Skipping without the pinned R
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-docker-test-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Docker test image
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#makefile-targets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Makefile targets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ci-the-test-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CI: the test workflow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sharding-and-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sharding and coverage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#docs-and-publish-workflows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docs and publish workflows
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pre-commit-hooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-commit hooks
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#test-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shared-support-modules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shared support modules
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-r-bridge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The R bridge
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tolerance-classes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tolerance classes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-validation-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The validation matrix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hard-gate-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hard-gate invariants
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_assertcollector" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        _AssertCollector
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#platform-sensitive-tests-and-replay-bounds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Platform-sensitive tests and replay bounds
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pytest-markers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pytest markers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#skipping-without-the-pinned-r" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Skipping without the pinned R
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-docker-test-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Docker test image
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#makefile-targets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Makefile targets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ci-the-test-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CI: the test workflow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sharding-and-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sharding and coverage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#docs-and-publish-workflows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docs and publish workflows
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pre-commit-hooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-commit hooks
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="testing-and-continuous-integration">Testing and continuous integration<a class="headerlink" href="#testing-and-continuous-integration" title="Permanent link">&para;</a></h1>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>This page explains how JaxGAM establishes and guards numerical correctness.
+It covers the layout of <code>tests/</code> and its shared support modules, the R bridge
+that runs pinned mgcv in the test process, the tolerance classes, the
+validation matrix and hard-gate invariants, platform-sensitive tests, the
+Docker test image, the Makefile targets, and the GitHub Actions workflows that
+run all of it.</p>
+<h2 id="where-the-code-is">Where the code is<a class="headerlink" href="#where-the-code-is" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tests/conftest.py</code></td>
+<td>Data fixtures, the <code>r_bridge</code> fixture, shard selection (<code>pytest_collection_modifyitems</code>), the report header and the replay-count terminal summary.</td>
+</tr>
+<tr>
+<td><code>tests/helpers.py</code></td>
+<td><code>SEED</code>, <code>N</code>, <code>r_available</code>, <code>r_tolerance</code>, <code>_AssertCollector</code>, <code>check_that</code>, <code>check_flat_ridge_endpoint</code>, <code>make_smooth_spec</code>, data generators, OpenBLAS identity probes and the per-platform replay bounds.</td>
+</tr>
+<tr>
+<td><code>tests/tolerances.py</code></td>
+<td><code>ToleranceClass</code> and its three instances <code>STRICT</code>, <code>MODERATE</code>, <code>LOOSE</code>; the sign normalizers <code>normalize_column_signs</code> and <code>normalize_symmetric_signs</code>.</td>
+</tr>
+<tr>
+<td><code>tests/sharding.py</code></td>
+<td><code>Shard</code>, <code>shard_of</code>, <code>parse_shard</code> and <code>SHARD_ENV</code>: the CRC-32 split of the suite over CI runners.</td>
+</tr>
+<tr>
+<td><code>tests/r_bridge.py</code></td>
+<td><code>RBridge</code>, <code>RBridgeError</code>, the typed frozen result dataclasses, and <code>_r_array</code>, the copy of R values into NumPy memory.</td>
+</tr>
+<tr>
+<td><code>tests/r_ast.py</code></td>
+<td>Builds R language objects through rpy2 for instrumenting pinned mgcv internals without editing or parsing source.</td>
+</tr>
+<tr>
+<td><code>tests/r_number_format.py</code></td>
+<td>Exact model of R 4.5.2's numeric <code>paste0</code> label, whose rounding depends on the platform's <code>long double</code> width.</td>
+</tr>
+<tr>
+<td><code>tests/efs_oracle.py</code></td>
+<td>Reproducible EFS oracle fixtures and controller traces modelled on mgcv's <code>efsudr</code>; also the <code>make efs-fixture</code> generator.</td>
+</tr>
+<tr>
+<td><code>tests/operator_efs_calibration.py</code></td>
+<td>Generated rows and a 50-digit <code>decimal</code> REML reference for the operator Fellner-Schall calibration.</td>
+</tr>
+<tr>
+<td><code>tests/test_validation_matrix.py</code></td>
+<td>The 75-cell R comparison, the hard-gate invariants and route-level parity tests against pinned R.</td>
+</tr>
+<tr>
+<td><code>Dockerfile</code>, <code>docker/renv.lock</code>, <code>.dockerignore</code></td>
+<td>The test image with pinned R 4.5.2 and mgcv 1.9-3.</td>
+</tr>
+<tr>
+<td><code>Makefile</code></td>
+<td>Contributor and CI entry points.</td>
+</tr>
+<tr>
+<td><code>.github/workflows/test.yml</code></td>
+<td>Lint, sharded test suite, combined coverage, focused jobs, platform-sensitive replicas and the gate.</td>
+</tr>
+<tr>
+<td><code>.github/workflows/docs.yml</code>, <code>.github/workflows/publish.yml</code></td>
+<td>Documentation deployment and PyPI release.</td>
+</tr>
+<tr>
+<td><code>.pre-commit-config.yaml</code></td>
+<td>ruff, ruff-format and vulture hooks.</td>
+</tr>
+<tr>
+<td><code>pyproject.toml</code></td>
+<td>pytest markers, coverage settings, ruff and vulture configuration.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<h3 id="test-layout">Test layout<a class="headerlink" href="#test-layout" title="Permanent link">&para;</a></h3>
+<p>There are 178 <code>test_*.py</code> modules. Each directory mirrors a package area:</p>
+<table>
+<thead>
+<tr>
+<th>Directory</th>
+<th>Owns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tests/</code> (31 modules at top level)</td>
+<td>Cross-cutting checks: <code>tests/test_validation_matrix.py</code>, families and links (<code>tests/test_families.py</code>, <code>tests/test_links.py</code>), the R bridge itself (<code>tests/test_r_bridge.py</code>, <code>tests/test_r_ast.py</code>), sharding (<code>tests/test_sharding.py</code>), replay bounds (<code>tests/test_replay_bounds.py</code>), the Accelerate guard (<code>tests/test_platform_guard.py</code>), result modes, constraints, the benchmark harnesses and the tolerance classes (<code>tests/test_infrastructure.py</code>).</td>
+</tr>
+<tr>
+<td><code>tests/test_api/</code></td>
+<td><code>GAM</code> construction and fitting through the public API.</td>
+</tr>
+<tr>
+<td><code>tests/test_data/</code></td>
+<td>Row sources, source tokens, discretization, continuous range grids and R number formatting.</td>
+</tr>
+<tr>
+<td><code>tests/test_execution/</code> (60 modules)</td>
+<td>Phase 2 host drivers in <code>jaxgam/execution/</code>: streamed PIRLS and REML, QR reducers, EFS providers, discretized and operator routes.</td>
+</tr>
+<tr>
+<td><code>tests/test_fitting/</code> (39 modules)</td>
+<td>Phase 2 JAX kernels in <code>jaxgam/fitting/</code>: PIRLS, REML, Newton, EFS algebra, streamed, discretized and operator kernels, JIT behaviour.</td>
+</tr>
+<tr>
+<td><code>tests/test_formula/</code></td>
+<td>Parser, dense design, streamed, discretized and operator setup.</td>
+</tr>
+<tr>
+<td><code>tests/test_smooths/</code></td>
+<td>Basis and penalty construction, the pinned LAPACK provider and source arithmetic.</td>
+</tr>
+<tr>
+<td><code>tests/test_penalties/</code></td>
+<td>Penalty structure and stable reparameterization (there is also a top-level <code>tests/test_penalties.py</code>).</td>
+</tr>
+<tr>
+<td><code>tests/test_inference/</code>, <code>tests/test_predict/</code>, <code>tests/test_summary/</code>, <code>tests/test_plot/</code></td>
+<td>Phase 3: <code>GAMPredictor</code>, operator prediction geometry, prediction, summary tables, plots.</td>
+</tr>
+<tr>
+<td><code>tests/test_scripts/</code></td>
+<td>The benchmark scripts under <code>scripts/</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>No reference data is stored. <code>.gitignore</code> ignores <code>*.csv</code> and <code>/tests/fixtures/</code>;
+inputs are generated in code from seeds (<code>SEED = 42</code>, <code>N = 200</code> in
+<code>tests/helpers.py</code>) and references come from R at test time.</p>
+<h3 id="shared-support-modules">Shared support modules<a class="headerlink" href="#shared-support-modules" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>tests/conftest.py</code> provides seeded data fixtures (<code>simple_gaussian_data</code>,
+  <code>factor_by_data</code>, <code>re_model_data</code>, <code>gp_2d_data</code>, <code>family_data</code> and others),
+  the <code>r_bridge</code> fixture, the shard hook, <code>pytest_report_header</code> and
+  <code>pytest_terminal_summary</code>, and <code>minimal_git_checkout</code>, which builds a
+  throwaway committed checkout because the Docker image has no <code>.git</code>.</li>
+<li><code>tests/helpers.py</code> holds <code>r_available()</code> (true only when the bridge loads R
+  and the versions match), <code>r_tolerance(family_name)</code> (<code>MODERATE</code> for Gaussian,
+  <code>LOOSE</code> otherwise), <code>_AssertCollector</code> and <code>check_that</code>,
+  <code>check_flat_ridge_endpoint</code> (the rule for judging a REML endpoint where
+  pinned R stopped on a flat ridge), <code>_setup_fd</code> (a <code>FittingData</code> without the
+  public API), shared prediction case zoos, <code>r_links_pinned_openblas</code>,
+  <code>platform_report_lines</code>, and the replay-bound machinery described below.</li>
+<li><code>tests/tolerances.py</code> and <code>tests/sharding.py</code> are described in their own
+  sections.</li>
+</ul>
+<h3 id="the-r-bridge">The R bridge<a class="headerlink" href="#the-r-bridge" title="Permanent link">&para;</a></h3>
+<p><code>tests/r_bridge.py</code> (about 9,500 lines) is the only sanctioned way for tests to
+obtain mgcv reference values. Its constants pin <code>_REQUIRED_R_VERSION = "4.5.2"</code>
+and <code>_REQUIRED_MGCV_VERSION = "1.9.3"</code> (R's <code>packageVersion</code> spelling of
+1.9-3), and <code>_PINNED_MGCV_SOURCE_COMMIT</code> records the mgcv source commit in
+oracle provenance.</p>
+<p><strong>In-process R.</strong> <code>_r_packages()</code> imports <code>rpy2.robjects</code> and wraps the
+<code>mgcv</code>, <code>base</code>, <code>stats</code> and <code>utils</code> packages of the single embedded R
+interpreter; it is cached with <code>functools.lru_cache</code>, so every <code>RBridge</code> in the
+process shares one R session. The constructor <code>RBridge(mode="auto")</code> (or
+<code>mode="rpy2"</code>) calls <code>_setup_rpy2()</code>; there is no automatic fallback, so
+without rpy2 the constructor raises <code>ImportError</code>.</p>
+<ul>
+<li><code>RBridge.available()</code> is a static method that returns whether
+  <code>_r_packages()</code> succeeds. It never looks for an <code>Rscript</code> executable.</li>
+<li><code>RBridge.check_versions()</code> reads <code>getRversion()</code> and
+  <code>packageVersion("mgcv")</code> through rpy2 and returns <code>(True, "")</code> only for the
+  pinned pair, otherwise <code>(False, reason)</code>. It checks nothing about BLAS.</li>
+<li><code>_require_rpy2()</code> raises <code>RBridgeError</code> when the bridge is in subprocess
+  mode or the versions do not match. Most typed oracle methods call it first.
+  The rpy2 paths of the dual-mode methods (<code>fit_gam</code>, <code>get_smooth_components</code>,
+  <code>predict_gam</code>, <code>summary_gam</code>) do not, and rely on the caller's skip gate.</li>
+</ul>
+<p><strong>Data in and out.</strong> Inputs go to R through <code>_to_r_vector</code> (double, integer or
+logical vectors, with an int32 range check), <code>_to_r_matrix</code> (column-major) and
+<code>_to_r_dataframe</code> (the pandas converter). Every value that comes back passes
+through <code>_r_array</code>, which calls <code>np.array(value, copy=True, order="K")</code>. rpy2
+exposes R vectors through buffers that <code>np.asarray</code> would wrap without
+copying, and R's garbage collector may reuse that memory after any later R
+allocation, so a view could silently change under a test.</p>
+<p><strong>Typed methods.</strong> The class has about 110 public methods. Simple ones return a
+<code>dict</code> (for example <code>fit_gam</code>, which fits <code>mgcv::gam</code> and returns
+coefficients, fitted values, smoothing parameters, EDF, deviance, scale,
+<code>Vp</code>, the REML score, theta and convergence flags). Many reach mgcv internals
+with <code>_call_internal</code> (<code>utils::getFromNamespace</code>) or instrument them with
+<code>tests/r_ast.py</code>, and return frozen dataclasses defined at the top of the
+module, such as <code>BamDiscreteFit</code> (a pinned <code>bam(discrete=TRUE)</code> fit),
+<code>SourceLinearAlgebra</code> (R's LAPACK and BLAS identity from <code>La_library()</code>),
+<code>DiscreteOperatorLayout</code>, <code>SourceStableReparam</code> and
+<code>SourceWorkingModelTrace</code>. Two representative typed methods:
+<code>source_slanczos(matrix, k, tol)</code> calls <code>mgcv::slanczos</code> and returns its
+values, vectors and iteration count; <code>linked_lapack()</code> returns the resolved
+path of the LAPACK library R links, which <code>r_links_pinned_openblas</code> in
+<code>tests/helpers.py</code> then identifies by its <code>openblas_get_config</code> string.
+<code>_preserved_r_seed</code> sets R's seed for a fixture and restores
+<code>.Random.seed</code> afterwards.</p>
+<p><strong>Legacy subprocess mode.</strong> <code>RBridge(mode="subprocess")</code> is never selected
+automatically. In that mode six methods (<code>fit_gam</code>, <code>get_smooth_components</code>,
+<code>smooth_construct</code>, <code>smooth_construct_list</code>, <code>predict_gam</code>, <code>summary_gam</code>)
+write CSV files and an R script to a temporary directory and run <code>Rscript</code>
+with a 120 second timeout; every other method raises <code>RBridgeError</code> through
+<code>_require_rpy2()</code>. Only <code>tests/test_r_bridge.py</code> constructs this mode, to
+check that the two modes agree and that typed oracles refuse it.</p>
+<p>R is also reached outside the bridge in a few places: <code>tests/test_families.py</code>
+and <code>tests/test_links.py</code> run <code>Rscript</code> themselves (30 second timeout), and
+<code>tests/test_summary/test_summary.py</code> and <code>tests/r_ast.py</code> use rpy2 directly.</p>
+<p>The sequence below is one validation-matrix cell.</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant T as TestValidationMatrix
+    participant G as GAM
+    participant B as RBridge
+    participant R as embedded R with mgcv
+    participant C as _AssertCollector
+    T-&gt;&gt;G: fit(data)
+    G--&gt;&gt;T: GAMResults
+    T-&gt;&gt;B: fit_gam(r_formula, data, family)
+    B-&gt;&gt;B: _to_r_dataframe(data)
+    B-&gt;&gt;R: mgcv gam(formula, data, family, method)
+    R--&gt;&gt;B: fitted R model object
+    B-&gt;&gt;B: _extract_fit_results_rpy2 copies each field with _r_array
+    B--&gt;&gt;T: dict of NumPy arrays and floats
+    T-&gt;&gt;C: check(name, assertion) for each field
+    C-&gt;&gt;C: record AssertionError messages
+    T-&gt;&gt;C: raise_if_any(cell_id)</code></pre>
+<p>The R model never leaves the bridge: by the time the test compares anything,
+every R value has been copied into NumPy-owned memory, and the collector
+reports all failed fields of the cell in one assertion.</p>
+<h3 id="tolerance-classes">Tolerance classes<a class="headerlink" href="#tolerance-classes" title="Permanent link">&para;</a></h3>
+<p><code>tests/tolerances.py</code> defines one frozen dataclass and three instances:</p>
+<table>
+<thead>
+<tr>
+<th>Instance</th>
+<th><code>rtol</code></th>
+<th><code>atol</code></th>
+<th>Files that use it</th>
+<th><code>.rtol</code>/<code>.atol</code> references</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>STRICT</code></td>
+<td>1e-10</td>
+<td>1e-12</td>
+<td>143</td>
+<td>about 2,300</td>
+</tr>
+<tr>
+<td><code>MODERATE</code></td>
+<td>1e-4</td>
+<td>1e-6</td>
+<td>63</td>
+<td>about 540</td>
+</tr>
+<tr>
+<td><code>LOOSE</code></td>
+<td>1e-2</td>
+<td>1e-4</td>
+<td>16</td>
+<td>about 50</td>
+</tr>
+</tbody>
+</table>
+<p>Counts are from a grep over <code>tests/</code> at HEAD. In practice <code>STRICT</code> is the
+default for everything, including most R comparisons of individual routines
+and matched-state oracles. <code>MODERATE</code> appears for Gaussian final-model R
+comparisons (<code>r_tolerance</code>, the Gaussian single-smooth cells of the
+validation matrix) and for derived quantities. <code>LOOSE</code> is used for final-model
+comparisons of non-Gaussian families against R: <code>r_tolerance()</code> and the
+validation matrix's <code>_r_tol</code> and <code>_fitted_tol</code>. The module docstring describes
+the tiers as "CPU self-consistency", "cross-backend" and "JaxGAM vs R mgcv".
+<code>tests/test_infrastructure.py</code> checks only that the three are ordered. Nothing
+enforces their use; a few assertions pass literal <code>rtol</code>/<code>atol</code> values.</p>
+<p><code>normalize_column_signs</code> and <code>normalize_symmetric_signs</code> remove the
+per-column sign ambiguity of eigenvectors before element-wise comparison.</p>
+<h3 id="the-validation-matrix">The validation matrix<a class="headerlink" href="#the-validation-matrix" title="Permanent link">&para;</a></h3>
+<p><code>tests/test_validation_matrix.py</code> crosses 15 smooth configurations
+(<code>SMOOTH_CONFIGS</code>: <code>tp</code>, <code>cr</code>, <code>te</code>, <code>ti</code>, <code>tp_by</code>, <code>cr_by</code>, <code>te_by</code>, <code>re</code>,
+<code>re_slope</code>, <code>re_mixed</code>, <code>gp</code>, <code>gp_2d</code>, <code>gp_mixed</code>, <code>gp_te</code>, <code>gp_ti</code>) with five
+families (<code>FAMILIES</code>: gaussian, binomial, poisson, gamma, nb), giving 75 cells
+(<code>CELL_IDS</code>, ids like <code>tp-gaussian</code>). A <code>SmoothConfig</code> holds the Python
+formula, the R formula and a data generator key.</p>
+<p>In <code>TestValidationMatrix</code>, a class-scoped <code>cell</code> fixture fits the cell with
+<code>GAM(...).fit(data)</code> on the default dense route and with <code>RBridge().fit_gam</code>,
+and <code>test_matches_r</code> compares:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Tolerance</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>deviance, scale, theta (NB)</td>
+<td><code>_r_tol</code>: <code>MODERATE</code> for Gaussian <code>tp</code>, <code>cr</code>, <code>re</code>, <code>re_slope</code>, <code>re_mixed</code>, <code>gp</code>, <code>gp_2d</code> (7 cells); <code>LOOSE</code> for the other 68</td>
+</tr>
+<tr>
+<td>fitted values, total EDF</td>
+<td><code>_fitted_tol</code>: <code>_r_tol</code>, widened to <code>LOOSE</code> for some tensor and factor-by cells</td>
+</tr>
+<tr>
+<td>coefficients</td>
+<td><code>_r_tol</code> on raw coefficients for <code>cr</code>, <code>re</code>, <code>re_slope</code> only; the other 12 configurations compare fitted values instead (<code>_compare_fitted_not_coefs</code>), because eigenvector signs and flat REML surfaces make coefficients non-unique</td>
+</tr>
+<tr>
+<td><code>model.predict()</code> against <code>fitted_values</code></td>
+<td><code>STRICT</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>gp_mixed</code> compares total model EDF because its parametric <code>x</code> duplicates the
+GP null space. The <code>gp_2d-gaussian</code> cell is fitted through
+<code>_fit_matrix_model</code>, which traces the Newton optimizer and prints a
+<code>GP_GAUSSIAN_TRACE</code> line for CI diagnostics. The rest of the module (37 test
+functions in all) holds route-level parity tests against pinned R for the
+streamed, discretized, operator, Gaussian QR and EFS paths.</p>
+<h3 id="hard-gate-invariants">Hard-gate invariants<a class="headerlink" href="#hard-gate-invariants" title="Permanent link">&para;</a></h3>
+<p><code>TestHardGateInvariants</code> in the same module fits every one of the 75 cells
+again, with no R involved and no skip marker, and <code>test_all_invariants</code>
+checks eight items through one <code>_AssertCollector</code>:</p>
+<ol>
+<li><code>model.converged</code>.</li>
+<li>Deviance is non-negative.</li>
+<li>Coefficients, fitted values, linear predictor, scale and deviance are
+   finite.</li>
+<li>Every per-smooth EDF is positive, total EDF is at most p and at most n.</li>
+<li><code>Vp</code> is symmetric (<code>STRICT.atol</code>) with no negative eigenvalue.</li>
+<li>Every smooth penalty is symmetric with eigenvalues at least <code>-STRICT.atol</code>.</li>
+<li>Estimated theta is positive when the family has one.</li>
+<li><code>rank(X)</code> is at least <code>min(X.shape)</code> minus the number of smooth penalties.</li>
+</ol>
+<p>Objective monotonicity and Hessian symmetry are not in that class.
+<code>test_source_loops_hold_the_hard_gates_under_jit</code> in
+<code>tests/test_fitting/test_dense_source_parity.py</code> replays the source PIRLS loops
+(Poisson/log, Gamma/log, fixed-theta NB/sqrt) under <code>jax.jit</code> with an
+increasing iteration cap, checks that the penalized deviance never rises by
+more than R's divergence threshold, and that the converged penalized Hessian
+is symmetric positive definite. <code>test_reml_monotonicity</code> in
+<code>tests/test_fitting/test_newton.py</code> checks that the REML score does not
+increase at accepted Newton steps. These run in the ordinary shards; there is
+no separate hard-gate job.</p>
+<h3 id="_assertcollector"><code>_AssertCollector</code><a class="headerlink" href="#_assertcollector" title="Permanent link">&para;</a></h3>
+<p><code>_AssertCollector</code> (in <code>tests/helpers.py</code>) lets one expensive fit feed many
+named assertions. <code>check(name, fn)</code> runs <code>fn</code> and records an <code>AssertionError</code>
+message (other exceptions propagate); <code>raise_if_any(label)</code> raises one
+<code>AssertionError</code> listing every recorded failure. Lambdas cannot contain
+<code>assert</code>, so <code>check_that(condition, message)</code> raises for boolean conditions.
+94 test modules import it.</p>
+<h3 id="platform-sensitive-tests-and-replay-bounds">Platform-sensitive tests and replay bounds<a class="headerlink" href="#platform-sensitive-tests-and-replay-bounds" title="Permanent link">&para;</a></h3>
+<p>Some results depend on the CPU's SIMD maths or on which OpenBLAS kernel family
+a machine selects. Those tests carry <code>@pytest.mark.platform_sensitive</code> (25
+modules, mostly source-parity tests in <code>tests/test_smooths/</code>,
+<code>tests/test_execution/</code> discrete and working-model tests, and rank
+coordinates).</p>
+<p>The discretized performance iteration (a port of mgcv's <code>bgam.fitd</code> in
+<code>R/bam.r</code>) halves a coefficient step when one penalized deviance exceeds
+another. Near convergence the two can agree to rounding, and pinned R's own
+outcome there flips under a one-ULP perturbation. Tests in
+<code>tests/test_execution/test_discrete_regular.py</code> and
+<code>tests/test_execution/test_discrete_nb.py</code> therefore allow a fit to replay R's
+step-control outcome at such ties (only where the relative margin is within
+<code>STRICT.rtol</code>) and then gate every field at <code>STRICT</code>. The number of replayed
+decisions is bounded per case and per platform:</p>
+<ul>
+<li><code>cpu_platform_class()</code> returns <code>macos-arm64</code>, <code>linux-aarch64</code>, <code>x86_64</code> or
+  <code>x86_64-avx512</code> (<code>PLATFORM_CLASSES</code>). On x86_64 it reads the CPU's own
+  <code>avx512f</code> flag (from <code>/proc/cpuinfo</code> or <code>sysctl</code>), never the runner name.</li>
+<li><code>check_replay_bound(table_name, table, key, measured)</code> looks up
+  <code>{platform class: (bound, measured count)}</code> for the case. A case absent from
+  the table must need zero replays. A listed case on a class with no entry
+  fails and prints the measured count, unless the case lists
+  <code>OTHER_CLASSES_NEED_NONE</code>.</li>
+<li>Every check is appended to <code>REPLAY_COUNT_RECORDS</code>, and
+  <code>pytest_terminal_summary</code> prints them, so a passing run still reports its
+  counts.</li>
+</ul>
+<p>Counts are per platform because the residual last-bit differences between
+CPU families change how many ties occur; the tables (for example
+<code>_REVIEWED_TIE_REPLAYS</code>) record each reviewed count with the CI run that
+measured it. <code>tests/test_replay_bounds.py</code> tests the classifier and the bound
+logic.</p>
+<p>When the <code>-m</code> expression names <code>platform_sensitive</code>, <code>pytest_report_header</code>
+prints <code>platform_report_lines()</code>: machine, CPU model, AVX-512 flags, NumPy's
+AVX-512 dispatch, and the OpenBLAS configuration and core of the provider
+wheel and of R's LAPACK.</p>
+<h3 id="pytest-markers">Pytest markers<a class="headerlink" href="#pytest-markers" title="Permanent link">&para;</a></h3>
+<p><code>pyproject.toml</code> registers two markers and sets no default command-line options:</p>
+<ul>
+<li><code>platform_sensitive</code>: selected by <code>make test-platform-sensitive-ci</code>; also
+  runs in the ordinary shards.</li>
+<li><code>slow</code>: one use (<code>tests/test_execution/test_operator_bulk_variance.py</code>); no
+  target deselects it.</li>
+</ul>
+<h3 id="skipping-without-the-pinned-r">Skipping without the pinned R<a class="headerlink" href="#skipping-without-the-pinned-r" title="Permanent link">&para;</a></h3>
+<p>R-dependent tests skip unless rpy2 loads the pinned R and mgcv:</p>
+<ul>
+<li>the <code>r_bridge</code> fixture skips on <code>not RBridge.available()</code> or a failed
+  <code>check_versions()</code> (the skip message suggests <code>make test</code>);</li>
+<li>50 modules decorate tests with <code>@pytest.mark.skipif(not r_available(), ...)</code>
+  (190 decorators);</li>
+<li><code>tests/test_families.py</code>, <code>tests/test_links.py</code> and <code>tests/test_r_bridge.py</code>
+  define a local <code>_r_available()</code>, and a few tests call
+  <code>pytest.importorskip("rpy2...")</code>.</li>
+</ul>
+<p><code>make install</code> runs <code>uv sync --extra dev</code>, which does not install rpy2 (the
+<code>r</code> extra), so local runs skip these tests. Known cases that do not skip:</p>
+<ul>
+<li><code>tests/test_execution/test_discrete_score.py</code>:
+  <code>test_bridge_invalid_inputs_reject_before_r_process</code> (8 cases) constructs
+  <code>RBridge()</code> with no gate, which raises <code>ImportError</code> without rpy2.</li>
+<li><code>tests/test_execution/test_efs_stream_provider.py</code>:
+  <code>test_live_source_provider_score_theta_and_fisher_contractions</code> (3 cases)
+  is decorated <code>skipif(not r_available, ...)</code> without calling the function, so
+  the condition is always false and the test reaches
+  <code>RBridge(mode="rpy2")</code>.</li>
+<li><code>tests/test_r_bridge.py</code>: <code>TestRBridgeAvailability</code> gates on
+  <code>RBridge.available()</code> only and asserts the pinned versions, so it fails by
+  design when rpy2 loads a different R.</li>
+</ul>
+<h3 id="the-docker-test-image">The Docker test image<a class="headerlink" href="#the-docker-test-image" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart TD
+    A["r-base&lt;br/&gt;FROM rocker/r-ver:4.5.2&lt;br/&gt;apt build libraries for rpy2"] --&gt; B["r-deps&lt;br/&gt;renv::restore of docker/renv.lock"]
+    B --&gt; C["py-deps&lt;br/&gt;uv 0.9.15, uv python install 3.13&lt;br/&gt;uv sync --extra dev --extra r --no-install-project"]
+    C --&gt; D["test&lt;br/&gt;OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1&lt;br/&gt;git, copy jaxgam/ tests/ scripts/&lt;br/&gt;uv sync --extra dev --extra r"]
+    D --&gt; E["CMD uv run pytest -x --tb=short"]</code></pre>
+<p>Each stage is cached until its inputs change: R version, <code>docker/renv.lock</code>,
+<code>pyproject.toml</code>/<code>uv.lock</code>, then the source tree.</p>
+<ul>
+<li><code>docker/renv.lock</code> pins R 4.5.2, mgcv 1.9-3, Matrix 1.7-1, lattice 0.22-6
+  and nlme 3.1-166.</li>
+<li><code>ENV UV_PYTHON_PREFERENCE=only-managed</code>, <code>R_HOME=/usr/local/lib/R</code> and
+  <code>LD_LIBRARY_PATH=/usr/local/lib/R/lib:...</code> let rpy2 build against the
+  rocker R.</li>
+<li><code>ENV OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1</code>: the embedded R, SciPy and
+  the pinned LAPACK provider link threaded OpenBLAS, whose reduction order
+  changes with the core count, so R reference values would differ between a
+  local image and a CI runner. One thread gives every R comparison the same
+  reference arithmetic. See <a href="../numerics_and_platform/">Numerics and platform</a>.</li>
+<li><code>git</code> is installed for <code>minimal_git_checkout</code>. Only <code>jaxgam/</code>, <code>tests/</code>,
+  <code>scripts/</code>, <code>pyproject.toml</code> and <code>uv.lock</code> are copied; <code>.dockerignore</code>
+  excludes <code>.git</code>, <code>.venv</code>, <code>.github</code>, caches and <code>site/</code>.</li>
+<li>The suite runs only on the image's Python 3.13 and only on x86_64 Linux in
+  CI, although <code>requires-python</code> is <code>&gt;=3.11</code>.</li>
+</ul>
+<h3 id="makefile-targets">Makefile targets<a class="headerlink" href="#makefile-targets" title="Permanent link">&para;</a></h3>
+<p><code>make help</code> lists targets with a <code>##</code> description; its pattern excludes
+digits, so the <code>test-pr82-*</code> targets do not appear, nor do
+<code>test-operator-fit</code> and <code>test-operator-fit-local</code>, which have no description.</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Targets</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Setup and lint (local, uv)</td>
+<td><code>install</code>, <code>check</code>, <code>format</code>, <code>lint</code> (ruff check, ruff format --check, vulture), <code>pre-commit</code>, <code>pre-commit-install</code></td>
+</tr>
+<tr>
+<td>Local tests</td>
+<td><code>test-local</code> (<code>uv run pytest</code>), plus focused local runs such as <code>test-operator-local</code>, <code>test-iterative-local</code>, <code>test-operator-fit-local</code>, <code>test-operator-bulk-local</code>, <code>test-operator-adapters-local</code>, <code>test-scaling-memory</code>, <code>test-discrete-approximation-harness</code></td>
+</tr>
+<tr>
+<td>Docker, builds the image first</td>
+<td><code>docker-build</code> (depends on <code>colima-start</code>), <code>test</code> (image CMD in one container, stops at the first failure, no coverage), <code>test-file FILE=...</code>, <code>test-cov</code> (line coverage only), and focused runs such as <code>test-discrete</code>, <code>test-continuous-discrete</code>, <code>test-pivoted-cholesky</code>, <code>test-efs-*</code>, <code>test-nb-*</code>, <code>test-operator</code>, <code>test-iterative</code>, <code>test-operator-adapters</code>, <code>test-pr82-*</code></td>
+</tr>
+<tr>
+<td>CI, in an already built image</td>
+<td><code>test-cov-shard-ci</code>, <code>coverage-combine-ci</code>, <code>test-gaussian-ci</code>, <code>test-platform-sensitive-ci</code>, <code>test-efs-recovery-ci</code>, <code>test-nb-public-ci</code>, <code>test-regular-public-ci</code>, and <code>test-cov-ci</code> (called by no workflow)</td>
+</tr>
+<tr>
+<td>Benchmarks and fixtures</td>
+<td><code>benchmark-*</code> (wrappers for <code>scripts/benchmark_*.py</code>), <code>efs-fixture OUTPUT=...</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>test-operator-fit</code> builds with its own <code>docker build --target test</code> and skips
+<code>colima-start</code>. Override <code>DOCKER_IMAGE</code>, <code>DOCKER_TAG</code>, <code>TEST_SHARD</code> and
+<code>TEST_SHARDS</code> on the command line.</p>
+<h3 id="ci-the-test-workflow">CI: the test workflow<a class="headerlink" href="#ci-the-test-workflow" title="Permanent link">&para;</a></h3>
+<p><code>.github/workflows/test.yml</code> runs on pull requests and on pushes to <code>main</code>; a
+newer run cancels an older one for the same ref. Every job runs on
+<code>ubuntu-latest</code>.</p>
+<pre class="mermaid"><code>flowchart TD
+    EV["pull_request or push to main"] --&gt; CH["changes&lt;br/&gt;dorny/paths-filter output code"]
+    CH --&gt;|"code is true"| LI["lint&lt;br/&gt;make lint"]
+    LI --&gt; TF["test-full&lt;br/&gt;8 shards, make test-cov-shard-ci"]
+    LI --&gt; TG["test-gaussian&lt;br/&gt;make test-gaussian-ci"]
+    LI --&gt; TP["test-platform-sensitive&lt;br/&gt;8 replicas, make test-platform-sensitive-ci"]
+    LI --&gt; TE["test-efs-recovery&lt;br/&gt;make test-efs-recovery-ci"]
+    LI --&gt; TN["test-nb-public&lt;br/&gt;make test-nb-public-ci"]
+    LI --&gt; TR["test-regular-public&lt;br/&gt;make test-regular-public-ci"]
+    TF --&gt; CO["coverage&lt;br/&gt;make coverage-combine-ci, Codecov upload"]
+    LI --&gt; GA["gate&lt;br/&gt;fails on any failure or cancelled"]
+    TF --&gt; GA
+    CO --&gt; GA
+    TG --&gt; GA
+    TP --&gt; GA
+    TE --&gt; GA
+    TN --&gt; GA
+    TR --&gt; GA</code></pre>
+<p>Every test job also lists <code>changes</code> in <code>needs</code> and runs only when its <code>code</code>
+output is true; <code>coverage</code> depends on <code>test-full</code> alone; <code>gate</code> runs
+<code>if: always()</code>.</p>
+<ul>
+<li><strong>changes.</strong> The <code>code</code> filter matches <code>jaxgam/**</code>, <code>tests/**</code>,
+  <code>pyproject.toml</code>, <code>uv.lock</code>, <code>Dockerfile</code>, <code>Makefile</code> and
+  <code>.github/workflows/test.yml</code>. It omits <code>scripts/**</code> and <code>docker/renv.lock</code>,
+  although the image copies the first and restores the second, and it omits
+  <code>.pre-commit-config.yaml</code> and <code>docs/**</code>.</li>
+<li><strong>lint.</strong> <code>uv sync --extra dev</code>, then <code>make lint</code>.</li>
+<li><strong>test-full.</strong> An eight-entry matrix (<code>shard: [1..8]</code>, <code>fail-fast: false</code>).
+  Each entry builds <code>jaxgam-test:ci</code> with the docker/build-push-action GitHub action from the
+  GitHub Actions layer cache, which only shard 1 writes, then runs
+  <code>make test-cov-shard-ci DOCKER_TAG=ci TEST_SHARD=&lt;n&gt; TEST_SHARDS=&lt;job total&gt;</code>
+  and uploads <code>coverage/coverage-data.&lt;n&gt;</code>. To change the shard count, change
+  the matrix list only.</li>
+<li><strong>coverage.</strong> Downloads every shard's data and runs
+  <code>make coverage-combine-ci</code>, then uploads <code>coverage/coverage.xml</code> to Codecov.</li>
+<li><strong>Focused jobs.</strong> <code>test-gaussian</code> (the <code>gp_2d-gaussian</code> matrix cell with its
+  optimizer trace), <code>test-efs-recovery</code>, <code>test-nb-public</code> and
+  <code>test-regular-public</code> each run one <code>*-ci</code> target with <code>-s -x</code>. They re-run
+  tests that are also in the shards, with output visible.</li>
+<li><strong>test-platform-sensitive.</strong> Eight replicas of
+  <code>pytest -p no:cacheprovider -m platform_sensitive</code> with one BLAS thread.
+  One full-suite run lands on a single random x86_64 runner type; eight
+  replicas make sampling both the AVX-512 and non-AVX-512 types likely, not
+  certain.</li>
+<li><strong>gate.</strong> Fails only when a needed job's result is <code>failure</code> or
+  <code>cancelled</code>. A skipped job passes, so a change confined to paths outside the
+  filter passes the gate without running tests.</li>
+</ul>
+<h3 id="sharding-and-coverage">Sharding and coverage<a class="headerlink" href="#sharding-and-coverage" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart TD
+    A["pytest collects every test item"] --&gt; B["pytest_collection_modifyitems"]
+    B --&gt; C["parse_shard reads JAXGAM_TEST_SHARD"]
+    C --&gt;|"unset or blank"| D["run the whole suite"]
+    C --&gt;|"i/N"| E["Shard.owns per item&lt;br/&gt;shard_of: crc32 of nodeid mod N plus 1"]
+    C --&gt;|"malformed"| X["ValueError"]
+    E --&gt;|"owned"| F["kept items run&lt;br/&gt;--cov-branch --cov-fail-under=0"]
+    E --&gt;|"not owned"| G["pytest_deselected"]
+    F --&gt; H["COVERAGE_FILE coverage-data.i&lt;br/&gt;upload-artifact"]
+    H --&gt; I["coverage job downloads all shards"]
+    I --&gt; J["coverage combine"]
+    J --&gt; K["coverage xml"]
+    K --&gt; L["coverage report&lt;br/&gt;fail_under 80 on the combined total"]
+    L --&gt; M["Codecov upload"]</code></pre>
+<p>A test's shard depends only on its pytest node id, through <code>zlib.crc32</code>, which
+is stable across processes, platforms and Python versions (the built-in
+<code>hash</code> is salted per process). The N shards of one commit therefore partition
+the suite: every test runs exactly once. Assignment is per item, so two
+parametrizations of one test can land in different shards.
+<code>tests/test_sharding.py</code> pins two CRC-32 values so a change of hash fails
+loudly. Each shard records statement and branch coverage without a threshold;
+<code>fail_under = 80</code> in <code>pyproject.toml</code> applies to the combined data. Local
+<code>make test-cov</code> measures line coverage only, so its number differs from CI's.</p>
+<h3 id="docs-and-publish-workflows">Docs and publish workflows<a class="headerlink" href="#docs-and-publish-workflows" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>.github/workflows/docs.yml</code> runs on pushes to <code>main</code> that touch <code>docs/**</code>,
+  <code>mkdocs.yml</code> or <code>jaxgam/**</code>, or on manual dispatch. It installs
+  <code>mkdocs-material</code> and <code>mkdocstrings[python]</code> with pip on Python 3.11,
+  installs the package with <code>--no-deps</code> for docstring introspection, and runs
+  <code>mkdocs gh-deploy --force</code>. No Makefile target builds the docs.</li>
+<li><code>.github/workflows/publish.yml</code> runs when a release is published. The
+  <code>publish</code> job sets the <code>pyproject.toml</code> version from the tag (without a
+  leading <code>v</code>), runs <code>uv build</code> and publishes to PyPI; <code>backmerge</code> commits
+  the same version bump to <code>main</code>.</li>
+</ul>
+<h3 id="pre-commit-hooks">Pre-commit hooks<a class="headerlink" href="#pre-commit-hooks" title="Permanent link">&para;</a></h3>
+<p><code>.pre-commit-config.yaml</code> configures <code>ruff</code> with <code>--fix</code>, <code>ruff-format</code>
+(ruff-pre-commit v0.15.1) and <code>vulture jaxgam --min-confidence 80</code> (vulture
+v2.14). No hook runs tests. <code>make lint</code> and CI run the same tools without
+<code>--fix</code>.</p>
+<h2 id="key-types">Key types<a class="headerlink" href="#key-types" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>classDiagram
+    class ToleranceClass {
+        +rtol float
+        +atol float
+        +label str
+    }
+    class RBridge {
+        +mode str
+        +available() bool
+        +check_versions() tuple
+        +fit_gam(formula, data, family, method) dict
+        +source_slanczos(matrix, k, tol) dict
+        +linked_lapack() str
+        +source_linear_algebra() SourceLinearAlgebra
+        +fit_bam_discrete_fixed_sp(formula, data, sp) BamDiscreteFit
+        -_require_rpy2() None
+        -_to_r_dataframe(data) Any
+    }
+    class RBridgeError
+    class SourceLinearAlgebra {
+        +lapack_library str
+        +lapack_version str
+        +blas_library str
+        +openblas_config str
+        +lapack_is_openblas(prefix) bool
+    }
+    class BamDiscreteFit {
+        +coefficients ndarray
+        +fitted_values ndarray
+        +deviance float
+        +smoothing_params ndarray
+        +converged bool
+    }
+    class _AssertCollector {
+        +failures list~str~
+        +check(name, fn) None
+        +raise_if_any(label) None
+    }
+    class Shard {
+        +index int
+        +count int
+        +owns(nodeid) bool
+    }
+    Exception &lt;|-- RBridgeError
+    RBridge ..&gt; RBridgeError : raises
+    RBridge ..&gt; SourceLinearAlgebra : returns
+    RBridge ..&gt; BamDiscreteFit : returns</code></pre>
+<p><code>ToleranceClass</code> and <code>Shard</code> are frozen dataclasses; <code>SourceLinearAlgebra</code>
+and <code>BamDiscreteFit</code> stand for the roughly twenty frozen result dataclasses at
+the top of <code>tests/r_bridge.py</code>. <code>RBridge</code> holds the rpy2 handles <code>_ro</code>,
+<code>_mgcv</code>, <code>_base</code>, <code>_stats</code> and <code>_utils</code>, shared through <code>_r_packages()</code>.</p>
+<h2 id="rules-and-invariants">Rules and invariants<a class="headerlink" href="#rules-and-invariants" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>R values are copied.</strong> Every R-to-NumPy conversion in the bridge goes
+  through <code>_r_array</code>; never use <code>np.asarray</code> on an rpy2 object.
+  <code>tests/test_r_bridge.py</code> exercises the bridge's own contracts.</li>
+<li><strong>The pinned pair is R 4.5.2 with mgcv 1.9-3.</strong> <code>check_versions()</code> and
+  <code>_require_rpy2()</code> enforce it; <code>docker/renv.lock</code> and the <code>rocker/r-ver</code>
+  tag provide it. Changing either means updating <code>_REQUIRED_R_VERSION</code> or
+  <code>_REQUIRED_MGCV_VERSION</code> and re-validating every R comparison.</li>
+<li><strong>The default bridge launches no process.</strong>
+  <code>test_default_reference_never_launches_rscript</code> in
+  <code>tests/test_r_bridge.py</code> patches <code>subprocess.run</code> to fail.</li>
+<li><strong>Use the tolerance classes.</strong> Import <code>STRICT</code>, <code>MODERATE</code> or <code>LOOSE</code> from
+  <code>tests/tolerances.py</code> rather than writing literals.</li>
+<li><strong>Shards partition the suite.</strong> <code>tests/test_sharding.py</code> checks that each
+  node id has exactly one owner, the pinned CRC-32 values, comparable shard
+  sizes and the parsing of <code>JAXGAM_TEST_SHARD</code>.</li>
+<li><strong>Hard gates hold for every matrix cell, with or without R.</strong>
+  <code>TestHardGateInvariants</code> in <code>tests/test_validation_matrix.py</code>.</li>
+<li><strong>Replays are bounded per platform.</strong> A case not listed in a replay table
+  must need zero replays everywhere (<code>check_replay_bound</code>, tested by
+  <code>tests/test_replay_bounds.py</code>).</li>
+<li><strong>Reference results run with one BLAS thread</strong> in the image and in the
+  platform-sensitive target.</li>
+</ul>
+<h2 id="pitfalls">Pitfalls<a class="headerlink" href="#pitfalls" title="Permanent link">&para;</a></h2>
+<ul>
+<li>A test that constructs <code>RBridge()</code> outside the <code>r_bridge</code> fixture or an
+  <code>r_available()</code> gate errors instead of skipping on a machine without rpy2
+  (see the known cases above). Write <code>skipif(not r_available(), ...)</code> with the
+  call; <code>skipif(not r_available, ...)</code> never skips.</li>
+<li><code>tests/test_r_bridge.py</code> availability tests fail, rather than skip, when
+  rpy2 loads an R other than 4.5.2.</li>
+<li><code>make test</code> stops at the first failure and runs everything in one
+  container; CI runs eight shards without <code>-x</code>. A local <code>make test</code> is slow.</li>
+<li>Changes to <code>scripts/**</code> or <code>docker/renv.lock</code> alone do not trigger lint or
+  tests in CI, and the gate still passes.</li>
+<li><code>make test-local</code> sets no BLAS thread variables, so R comparisons on a
+  many-core machine can differ in the last bits from CI. Use the Docker
+  targets for R parity work.</li>
+<li>A new platform-sensitive tie case on a platform class without an entry
+  fails with its measured count; add a reviewed entry rather than widening a
+  tolerance.</li>
+<li>The module docstring of <code>tests/test_validation_matrix.py</code> and the
+  <code>TestHardGateInvariants</code> docstring cite design-document sections that are
+  no longer in the repository.</li>
+</ul>
+<h2 id="where-to-change-things">Where to change things<a class="headerlink" href="#where-to-change-things" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Add an R oracle:</strong> add a typed method to <code>RBridge</code> in
+  <code>tests/r_bridge.py</code> that starts with <code>self._require_rpy2()</code>, converts inputs
+  with <code>_to_r_vector</code>/<code>_to_r_matrix</code>/<code>_to_r_dataframe</code>, copies outputs with
+  <code>_r_array</code>, and returns a frozen dataclass or a dict. Add its own test to
+  <code>tests/test_r_bridge.py</code>.</li>
+<li><strong>Add a validation-matrix configuration:</strong> add an entry to
+  <code>SMOOTH_CONFIGS</code>, a <code>_make_*_data</code> generator and a branch in <code>_get_data</code>,
+  and decide its membership in <code>_r_tol</code>, <code>_fitted_tol</code> and
+  <code>_compare_fitted_not_coefs</code>. The hard gates pick it up automatically.</li>
+<li><strong>Add a family to the matrix:</strong> extend <code>FAMILIES</code> and the data generators.</li>
+<li><strong>Mark a test platform-sensitive:</strong> add <code>@pytest.mark.platform_sensitive</code>;
+  it then runs in the eight replicas as well as in a shard.</li>
+<li><strong>Add a per-platform replay table:</strong> follow <code>_REVIEWED_TIE_REPLAYS</code> in
+  <code>tests/test_execution/test_discrete_regular.py</code> and call
+  <code>check_replay_bound</code> inside an <code>_AssertCollector</code> check.</li>
+<li><strong>Change the shard count:</strong> edit the <code>shard</code> matrix list in
+  <code>.github/workflows/test.yml</code>; <code>TEST_SHARDS</code> follows <code>strategy.job-total</code>.</li>
+<li><strong>Add a focused CI job:</strong> add a <code>*-ci</code> target to the <code>Makefile</code>, a job to
+  <code>.github/workflows/test.yml</code> that needs <code>changes</code> and <code>lint</code>, and add the job to <code>gate</code>'s
+  <code>needs</code>.</li>
+<li><strong>Change pinned R packages:</strong> edit <code>docker/renv.lock</code> (and the
+  <code>rocker/r-ver</code> tag in the <code>Dockerfile</code> for R itself), then the version
+  constants in <code>tests/r_bridge.py</code>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

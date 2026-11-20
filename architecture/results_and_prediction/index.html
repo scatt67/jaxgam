@@ -1,0 +1,2580 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../fitting_operator/">
+      
+      
+        <link rel="next" href="../families_links_smooths/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Results and prediction - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#phase-3-results-and-prediction" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Results and prediction
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-four-types-and-what-they-keep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The four types and what they keep
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-each-route-builds-its-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How each route builds its result
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#immutability-and-copying" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Immutability and copying
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pickling-and-version-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pickling and version checks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-prediction-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The prediction core
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#standard-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standard errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prediction-budgets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prediction budgets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batched-prediction-with-predict_iter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batched prediction with predict_iter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unseen-and-missing-factor-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unseen and missing factor levels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prediction-policies-on-the-discretized-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prediction policies on the discretized route
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operator-route-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator-route prediction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#plot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plot
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-four-types-and-what-they-keep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The four types and what they keep
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-each-route-builds-its-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How each route builds its result
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#immutability-and-copying" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Immutability and copying
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pickling-and-version-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pickling and version checks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-prediction-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The prediction core
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#standard-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standard errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prediction-budgets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prediction budgets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batched-prediction-with-predict_iter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batched prediction with predict_iter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unseen-and-missing-factor-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unseen and missing factor levels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prediction-policies-on-the-discretized-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prediction policies on the discretized route
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operator-route-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator-route prediction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#plot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plot
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="phase-3-results-and-prediction">Phase 3: results and prediction<a class="headerlink" href="#phase-3-results-and-prediction" title="Permanent link">&para;</a></h1>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>This page covers what a fit returns and how it predicts: the result types
+<code>GAMResults</code>, <code>GAMInferenceResult</code> and <code>GAMPredictionResult</code>, the prediction
+core <code>GAMPredictor</code>, how each result is built from each route, copying,
+immutability and pickling, how new data become a prediction matrix, link and
+response scales, standard errors, batched prediction, behaviour for unseen
+factor levels, the discretized route's prediction policies, and <code>summary</code> and
+<code>plot</code>. Phase 3 code runs on the host in NumPy and SciPy.</p>
+<h2 id="where-the-code-is">Where the code is<a class="headerlink" href="#where-the-code-is" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/results.py</code></td>
+<td><code>_FitDiagnostics</code>, <code>GAMResults</code>, <code>GAMInferenceResult</code>, <code>GAMPredictionResult</code>, <code>StreamExactOptimizerDiagnostics</code>; the constructors <code>_from_fit</code>, <code>_from_stream_fit</code>, <code>_from_discrete</code>, <code>_from_operator_fit</code>; EDF, covariance and null-deviance helpers.</td>
+</tr>
+<tr>
+<td><code>jaxgam/inference/predictor.py</code></td>
+<td><code>GAMPredictor</code>, the frozen picklable prediction core; <code>PivotedQRFisherFactor</code>; prediction budget checks.</td>
+</tr>
+<tr>
+<td><code>jaxgam/inference/_core.py</code></td>
+<td><code>predict_core</code>, <code>prepare_prediction</code> (new data to linear predictor, offsets) and <code>finish_prediction</code> (response scale and standard errors).</td>
+</tr>
+<tr>
+<td><code>jaxgam/inference/operator_geometry.py</code></td>
+<td><code>OperatorPredictionGeometry</code>: operator-route prediction without dense random-effect columns.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/predict_matrix.py</code></td>
+<td><code>PredictSpec</code>, <code>build_predict_spec</code>, <code>build_predict_matrix</code>: the one encoder from new data to the constrained prediction matrix.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/design.py</code></td>
+<td><code>ModelSetup.build_predict_matrix</code> and <code>ModelSetup._lazy_predict_spec</code>, which builds and caches the dense route's <code>PredictSpec</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/constraints.py</code></td>
+<td><code>CoefficientMap</code> and <code>TermBlock</code>; <code>transform_X</code> applies a term's identifiability constraint to its raw basis block.</td>
+</tr>
+<tr>
+<td><code>jaxgam/data/continuous_request.py</code></td>
+<td><code>RequestCompressionSpec</code>, <code>FrozenRequestGrid</code>: request compression for <code>prediction_policy="mgcv_predict_bamd"</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/discrete/continuous_metadata.py</code></td>
+<td>The discretized route's retained metadata and <code>build_request_compression</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/summary/summary.py</code></td>
+<td><code>summary</code>, <code>GAMSummary</code>, the Wood (2013) smooth test, the random-effect test, <code>psum_chisq_davies</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/summary/_davies.py</code></td>
+<td>Numba port of Davies' algorithm from mgcv's <code>src/davies.c</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/plot/plot_gam.py</code></td>
+<td><code>plot_gam</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/execution/operator/bulk_variance.py</code></td>
+<td><code>BulkOperatorVariance</code>, used by <code>GAMPredictionResult.bulk_link_variance</code>.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<h3 id="the-four-types-and-what-they-keep">The four types and what they keep<a class="headerlink" href="#the-four-types-and-what-they-keep" title="Permanent link">&para;</a></h3>
+<p><code>GAMResults</code> and <code>GAMInferenceResult</code> share the frozen dataclass
+<code>_FitDiagnostics</code> (EDF vectors, deviance, score, scale, theta, smoothing
+parameters, convergence and route fields). <code>GAMPredictionResult</code> is a
+separate frozen dataclass with only scalar diagnostics plus scan and memory
+accounting. The last three hold a <code>GAMPredictor</code>, to which they delegate
+every prediction.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>GAMResults</code></th>
+<th><code>GAMInferenceResult</code></th>
+<th><code>GAMPredictionResult</code></th>
+<th><code>GAMPredictor</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Produced by</td>
+<td>dense, <code>result="full"</code></td>
+<td>dense, <code>result="inference"</code></td>
+<td>dense <code>result="prediction"</code>; the only mode on stream, discrete and operator</td>
+<td><code>to_predictor()</code> on any result</td>
+</tr>
+<tr>
+<td>Coefficients</td>
+<td>field</td>
+<td>from predictor</td>
+<td>from predictor</td>
+<td>field, read-only copy</td>
+</tr>
+<tr>
+<td><code>Vp</code> (Bayesian covariance)</td>
+<td>always</td>
+<td>always, via predictor</td>
+<td>only with <code>FitControl(uncertainty="covariance")</code></td>
+<td>optional</td>
+</tr>
+<tr>
+<td>Fisher factor for standard errors</td>
+<td>not needed</td>
+<td>not kept</td>
+<td>with <code>uncertainty="fisher"</code> (and a QR root alongside <code>Vp</code> on some streamed fits)</td>
+<td>optional</td>
+</tr>
+<tr>
+<td>Per-smooth <code>edf</code>, <code>edf1</code>, <code>null_deviance</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>no</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>edf_total</code>, <code>deviance</code>, <code>score</code>, <code>scale</code>, <code>theta</code>, <code>smoothing_params</code>, convergence and route fields</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes (<code>score</code> and <code>edf_total</code> may be <code>None</code> on the operator route)</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>setup</code> (<code>ModelSetup</code>: <code>X</code>, <code>y</code>, <code>weights</code>, <code>offset</code>, penalties, <code>coef_map</code>)</td>
+<td>yes</td>
+<td>no</td>
+<td>no</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>fitted_values</code>, <code>linear_predictor</code>, <code>training_data</code></td>
+<td>yes</td>
+<td>no</td>
+<td>no</td>
+<td>no</td>
+</tr>
+<tr>
+<td>Scan and memory diagnostics (<code>source_scans</code>, <code>batches_scanned</code>, <code>known_workspace_bytes</code>, <code>fit_peak_bytes</code>)</td>
+<td>no</td>
+<td>no</td>
+<td>yes</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>predict</code>, <code>predict_matrix</code>, <code>to_predictor</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+<td><code>predict</code>, <code>predict_matrix</code></td>
+</tr>
+<tr>
+<td><code>predict_iter</code></td>
+<td>no</td>
+<td>no</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>summary</code>, <code>plot</code></td>
+<td>yes</td>
+<td>no</td>
+<td>no</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>materialize_covariance</code>, <code>bulk_link_variance</code></td>
+<td>no</td>
+<td>no</td>
+<td>yes (<code>bulk_link_variance</code> on operator results only)</td>
+<td>no</td>
+</tr>
+</tbody>
+</table>
+<p><code>GAMResults</code> exposes the setup through properties: <code>X</code>, <code>y</code>, <code>weights</code>,
+<code>offset</code>, <code>coef_map</code>, <code>smooth_info</code>, <code>term_names</code>. <code>GAMInferenceResult</code> has
+<code>coefficients</code>, <code>Vp</code>, <code>family</code>, <code>formula</code>, <code>smooth_info</code> and <code>term_names</code> as
+properties reading the predictor. <code>tests/test_result_mode.py</code>
+(<code>test_inference_result_retains_no_banned_training_or_penalty_state</code>) and
+<code>tests/test_prediction_result.py</code>
+(<code>test_point_only_result_retains_no_rows_or_dense_covariance</code>) check what the
+lean types do not retain.</p>
+<h3 id="how-each-route-builds-its-result">How each route builds its result<a class="headerlink" href="#how-each-route-builds-its-result" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart TD
+    dense["dense route, GAM.fit"] --&gt; _from_fit["GAMResults._from_fit"]
+    _from_fit --&gt;|"result full"| GAMResults["GAMResults"]
+    _from_fit --&gt;|"result inference"| GAMInferenceResult["GAMInferenceResult"]
+    _from_fit --&gt;|"result prediction"| GAMPredictionResult["GAMPredictionResult"]
+    stream["stream route"] --&gt; _from_stream_fit["GAMPredictionResult._from_stream_fit"]
+    discrete["discrete route"] --&gt; _from_discrete["GAMPredictionResult._from_discrete"]
+    operator["operator route"] --&gt; _from_operator_fit["GAMPredictionResult._from_operator_fit"]
+    _from_stream_fit --&gt; GAMPredictionResult
+    _from_discrete --&gt; GAMPredictionResult
+    _from_operator_fit --&gt; GAMPredictionResult
+    rowroutes["stream, discrete or operator&lt;br/&gt;with result full or inference"] --&gt; refused["NotImplementedError"]
+    GAMResults --&gt;|"to_predictor builds a new one"| GAMPredictor["GAMPredictor"]
+    GAMInferenceResult --&gt;|"to_predictor returns its own"| GAMPredictor
+    GAMPredictionResult --&gt;|"to_predictor returns its own"| GAMPredictor</code></pre>
+<p>Only the dense route chooses among three types; the others always build a
+<code>GAMPredictionResult</code>, and refuse the other modes in <code>jaxgam/api.py</code> before
+any work.</p>
+<p><strong><code>GAMResults._from_fit</code> (dense).</strong> It deep-copies the family (after
+Newton or EFS has written the final theta into it), moves the coefficients
+and scale to NumPy with <code>to_numpy</code>, and reads <code>stable_rotation</code>, the
+<code>gam.reparam</code> block maps of a fit made in stable coordinates. Then, by
+<code>result_mode</code>:</p>
+<ul>
+<li><code>"prediction"</code>: maps the coefficients to public coordinates
+  (<code>_transform_coefficients_cpu</code>), keeps <code>edf_total</code> only, and, depending on
+  <code>FitControl.uncertainty</code>, keeps nothing, the lower Cholesky factor
+  <code>pr.L_fisher</code> with its coordinate maps (<code>_factor_transforms</code>), or a dense
+  <code>Vp</code> built from that factor. Building <code>Vp</code> raises <code>MemoryError</code> when
+  <code>3 p^2 * 8</code> bytes exceed <code>memory_budget_bytes</code>. This branch runs before any
+  per-smooth EDF or row output is computed.</li>
+<li><code>"inference"</code> and <code>"full"</code>: form <code>H^-1</code> from the Fisher factor by a
+  triangular solve (as mgcv's <code>chol2inv</code>), rotate it out of stable
+  coordinates (<code>_rotate_covariance</code>) and through the block transforms
+  (<code>_transform_covariance_cpu</code>), form <code>F = H^-1 X'WX</code> (or take the
+  Fisher-system hat matrix <code>pr.fisher_hat</code>), and compute per-smooth <code>edf</code>
+  (<code>_compute_per_smooth_edf</code>, the trace of each smooth's block of <code>F</code>) and
+  <code>edf1</code> (<code>_compute_per_smooth_edf1</code>, <code>2 edf - tr(F F)</code> per block, as in
+  <code>gam.fit3.post.proc</code> in mgcv's <code>R/mgcv.r</code>). <code>Vp</code> is <code>phi * H^-1</code> with
+  <code>phi = 1</code> for known-scale families. <code>null_deviance</code> comes from
+  <code>_compute_null_deviance</code>, which fits an intercept-plus-offset model by
+  IRLS (<code>_fit_null_intercept</code>) when there is a nonzero offset.
+  <code>"inference"</code> stops here and wraps a <code>GAMPredictor</code>; <code>"full"</code> also keeps
+  <code>mu</code>, <code>eta</code>, the <code>ModelSetup</code> and the smooth covariates
+  (<code>_extract_training_data</code>) for plotting.</li>
+</ul>
+<p><strong><code>GAMPredictionResult._from_stream_fit</code> (stream).</strong> It maps the streamed
+coefficients to public coordinates (<code>_prepared_transform_coefficients_cpu</code>),
+evaluates the REML score from the row-free stream state with the criterion
+variant that matches its coefficient factor (signed QR, pivoted QR or
+Cholesky), and overrides score, scale, theta, smoothing parameters, EDF and
+convergence from <code>selected_fit</code> when an outer optimizer ran. With
+uncertainty it keeps a <code>PivotedQRFisherFactor</code> when the state's Fisher factor
+is a <code>PivotedQRCoefficientFactor</code>, otherwise the lower Cholesky
+<code>fisher_factor</code>; with <code>"covariance"</code> it also builds <code>Vp</code> (<code>MemoryError</code> above
+<code>3 p^2 * 8</code> bytes, or <code>12 p^2 * 8</code> for the QR factor) and keeps the QR root
+beside it.</p>
+<p><strong><code>GAMPredictionResult._from_discrete</code> (discrete).</strong> It deep-copies the
+family, writes a final negative binomial theta into the copy, and builds the
+predictor from the <code>DiscreteFit</code>: its <code>predict_spec</code> (built on the compact
+setup), <code>covariance</code>, <code>fisher_factor</code> or <code>fisher_qr_factor</code>, and the
+<code>request_compression</code> used by <code>mgcv_predict_bamd</code>. It records the effective
+<code>prediction_policy</code>, the bounded <code>discretization</code> metadata,
+<code>discretization_strategy="mgcv_range_grid"</code>, the fit's scan counts and its
+memory plan.</p>
+<p><strong><code>GAMPredictionResult._from_operator_fit</code> (operator).</strong> It checks that the
+retained geometry fits <code>memory_budget_bytes</code> (<code>MemoryError</code>), builds an
+<code>OperatorPredictionGeometry</code> (the modest block's <code>PredictSpec</code>, the
+<code>IndexedRandomEffect</code> terms and their column offsets), and keeps no
+covariance. Fixed-sp operator results have <code>score=None</code>, <code>edf_total=None</code>,
+and <code>scale=None</code> for unknown-scale families. It also stores the source
+fingerprint, replay digest and family configuration that
+<code>bulk_link_variance</code> later checks. <code>_fit_operator_efs</code> in <code>jaxgam/api.py</code>
+replaces the score, its error bound, scale, <code>edf_total</code> and convergence fields
+with <code>dataclasses.replace</code>.</p>
+<h3 id="immutability-and-copying">Immutability and copying<a class="headerlink" href="#immutability-and-copying" title="Permanent link">&para;</a></h3>
+<ul>
+<li>All four types are frozen dataclasses: attributes cannot be reassigned.</li>
+<li><code>GAMPredictor.__post_init__</code> copies <code>coefficients</code>, <code>Vp</code>, the Fisher factor
+  and each Fisher transform, and marks them read-only; it rebuilds a
+  <code>PivotedQRFisherFactor</code>, whose own <code>__post_init__</code> validates and freezes
+  its arrays. So arrays read through <code>GAMInferenceResult</code>,
+  <code>GAMPredictionResult</code> or a predictor are read-only.</li>
+<li><code>GAMResults</code> freezes its attributes but not its array contents:
+  <code>GAMResults.coefficients</code> and <code>GAMResults.Vp</code> are writable NumPy arrays.</li>
+<li><code>GAMPredictionResult.__post_init__</code> copies <code>smoothing_params</code> and marks it
+  read-only.</li>
+<li><code>GAMResults.to_predictor()</code> builds a new <code>GAMPredictor</code> on every call. Its
+  arrays are copies, but it shares the result's <code>family</code> object and the
+  <code>PredictSpec</code> cached on <code>setup</code>; it sets no prediction budgets.
+  <code>GAMInferenceResult.to_predictor()</code> and <code>GAMPredictionResult.to_predictor()</code>
+  return the predictor they already hold, without copying.</li>
+<li><code>PredictSpec</code> is built by <code>build_predict_spec</code>, which shallow-copies every
+  smooth through <code>copy_for_prediction</code> (the base version in
+  <code>jaxgam/smooths/base.py</code> drops the <code>_X</code> and <code>_S</code> caches) and shares
+  constraint arrays by reference. <code>ModelSetup._lazy_predict_spec</code> builds it
+  once and caches it.</li>
+<li><code>tests/test_inference/test_predictor.py</code>
+  (<code>test_coefficients_and_covariance_are_owned_and_read_only</code>,
+  <code>test_family_snapshot_is_independent_and_keeps_final_nb_theta</code>) and
+  <code>tests/test_result_mode.py</code>
+  (<code>test_to_predictor_ownership_lazy_setup_and_memory_reduction</code>) cover these
+  rules.</li>
+</ul>
+<h3 id="pickling-and-version-checks">Pickling and version checks<a class="headerlink" href="#pickling-and-version-checks" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Every result type and <code>GAMPredictor</code> round-trips through the standard
+  <code>pickle</code> module with identical predictions
+  (<code>tests/test_execution/test_efs_public_api.py</code> for all three result types,
+  <code>tests/test_inference/test_predictor.py</code>, <code>tests/test_prediction_result.py</code>,
+  <code>tests/test_inference/test_operator_geometry.py</code> for operator results).</li>
+<li><code>GAMPredictor</code> stamps <code>_jaxgam_version</code> (from <code>jaxgam.__version__</code>) at
+  construction. Its <code>__setstate__</code> fills fields missing from older pickles
+  (<code>_fisher_qr_factor</code>, <code>_prediction_policy</code>, <code>_request_compression</code>,
+  <code>_operator_geometry</code>), restores the read-only flags, and warns with a
+  <code>UserWarning</code> ("not a cross-version format") when the stamped version
+  differs from the running one. Its docstring scopes pickles to "trusted,
+  same-version transient handoff".</li>
+<li>The version check lives only in <code>GAMPredictor</code>, so unpickling a
+  <code>GAMInferenceResult</code> or <code>GAMPredictionResult</code> warns through the predictor
+  it contains, and unpickling a <code>GAMResults</code> (which holds no predictor) does
+  not check the version.</li>
+<li><code>GAMPredictionResult.__setstate__</code> defaults a missing <code>discretization</code> to
+  <code>None</code>; <code>OperatorPredictionGeometry.__setstate__</code> re-freezes its
+  <code>PredictSpec</code>; <code>PivotedQRFisherFactor.__setstate__</code> re-runs its validation.</li>
+<li>A family with a link class defined in a local scope cannot be pickled with
+  <code>pickle</code>; <code>test_pickle_cloudpickle_and_version_stamp</code> shows <code>cloudpickle</code>
+  (a development dependency) handling it.</li>
+</ul>
+<h3 id="the-prediction-core">The prediction core<a class="headerlink" href="#the-prediction-core" title="Permanent link">&para;</a></h3>
+<p>All new-data prediction runs through <code>jaxgam/inference/_core.py</code>:</p>
+<ol>
+<li><code>prepare_prediction</code> rejects a <code>pred_type</code> other than <code>"response"</code> or
+   <code>"link"</code> (<code>ValueError</code>). It builds <code>X_p = spec.build_predict_matrix(newdata)</code>
+   and <code>eta = X_p @ coefficients</code>, or, with an operator geometry,
+   <code>eta = geometry.forward(newdata, coefficients)</code> and no matrix. An <code>offset</code>
+   must be one-dimensional with one finite value per row (<code>ValueError</code>) and
+   is added to <code>eta</code>; when none is given and the model was fitted with a
+   nonzero offset (<code>offset_was_nonzero</code>), it warns and leaves the offset out,
+   as <code>predict.gam</code> does for external offsets.</li>
+<li><code>finish_prediction</code> applies <code>link.linkinv(eta)</code> for <code>"response"</code>, or
+   returns <code>eta</code> for <code>"link"</code>, and computes standard errors when asked
+   (next section).</li>
+</ol>
+<p><code>build_predict_matrix</code> in <code>jaxgam/formula/predict_matrix.py</code> turns new data
+into the constrained matrix in the fitted column order:</p>
+<ul>
+<li><code>_to_dict</code> converts a DataFrame column by column, keeping factor columns
+  as pandas Series so categorical identity survives; all referenced
+  variables must have one length (<code>ValueError</code>).</li>
+<li>The parametric block is encoded with the factor levels and orderedness
+  stored at fit time (<code>factor_info</code>, <code>ordered_factors</code>), treatment contrasts
+  or <code>contr.poly</code> contrasts for ordered factors, and the training-time drop of
+  aliased columns (<code>parametric_keep_cols</code>).</li>
+<li>Each smooth <code>TermBlock</code> in the <code>CoefficientMap</code> evaluates its frozen basis
+  on the new data (<code>term.smooth.predict_matrix</code>), and
+  <code>CoefficientMap.transform_X</code> maps the raw block to constrained columns by
+  multiplying by <code>Z_centering</code> and deleting the <code>del_index</code> columns. The
+  <code>TermBlock</code> itself is passed, not its label, so two smooths with one label
+  use their own constraints.</li>
+<li>The blocks are stacked and the column count checked against
+  <code>total_coefs</code> (<code>RuntimeError</code>).</li>
+</ul>
+<p><code>GAMResults.predict</code> with <code>newdata=None</code> skips the matrix build and finishes
+the stored <code>linear_predictor</code> with the training <code>X</code>; any <code>offset</code> argument is
+ignored in that case. <code>GAMResults.predict</code> with new data calls <code>predict_core</code>
+directly, without the predictor or its budgets. <code>predict_matrix</code> is the
+equivalent of <code>predict.gam(type="lpmatrix")</code> in mgcv's <code>R/mgcv.r</code>; there is
+no <code>"terms"</code> prediction type.</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant GAMPredictionResult as GAMPredictionResult.predict
+    participant GAMPredictor as GAMPredictor._predict
+    participant RequestCompressionSpec as RequestCompressionSpec
+    participant prepare_prediction as prepare_prediction
+    participant PredictSpec as PredictSpec.build_predict_matrix
+    participant CoefficientMap as CoefficientMap.transform_X
+    participant finish_prediction as finish_prediction
+    GAMPredictionResult-&gt;&gt;GAMPredictor: newdata, pred_type, se_fit, offset
+    GAMPredictor-&gt;&gt;GAMPredictor: _check_pred_type and _check_prediction_budgets
+    GAMPredictor-&gt;&gt;GAMPredictor: RuntimeError if se_fit without Vp or Fisher factor
+    opt prediction_policy mgcv_predict_bamd
+        GAMPredictor-&gt;&gt;RequestCompressionSpec: freeze the whole request, then apply the grid
+    end
+    GAMPredictor-&gt;&gt;prepare_prediction: compressed or original newdata
+    prepare_prediction-&gt;&gt;PredictSpec: newdata
+    PredictSpec-&gt;&gt;PredictSpec: parametric block with fitted factor levels
+    loop each smooth TermBlock
+        PredictSpec-&gt;&gt;CoefficientMap: smooth.predict_matrix output and the TermBlock
+        CoefficientMap--&gt;&gt;PredictSpec: constrained block
+    end
+    PredictSpec--&gt;&gt;prepare_prediction: X_p
+    prepare_prediction-&gt;&gt;prepare_prediction: eta = X_p times coefficients, plus offset or warning
+    prepare_prediction--&gt;&gt;GAMPredictor: X_p and eta
+    GAMPredictor-&gt;&gt;finish_prediction: eta, X_p, link, Vp or Fisher factor
+    finish_prediction--&gt;&gt;GAMPredictionResult: prediction, or prediction and se</code></pre>
+<p>This is the general path. When the predictor holds a dense <code>Vp</code> and no QR
+factor, <code>_predict</code> calls <code>predict_core</code>, which runs the same
+<code>prepare_prediction</code> and <code>finish_prediction</code> pair. On the operator route
+<code>prepare_prediction</code> calls <code>OperatorPredictionGeometry.forward</code> instead of
+<code>PredictSpec</code>, so no matrix exists.</p>
+<h3 id="standard-errors">Standard errors<a class="headerlink" href="#standard-errors" title="Permanent link">&para;</a></h3>
+<p><code>se_fit=True</code> returns <code>(prediction, se)</code>. The link-scale standard error of row
+<code>i</code> is <code>sqrt(x_i' Vp x_i)</code>; <code>finish_prediction</code> gets it in one of two ways,
+and on the response scale multiplies it by <code>|mu_eta(eta)|</code> (the delta
+method).</p>
+<pre class="mermaid"><code>flowchart TD
+    request["predict with se_fit True"] --&gt; owner{"object predicting"}
+    owner --&gt;|"GAMResults, GAMInferenceResult,&lt;br/&gt;GAMResults.to_predictor"| vp_branch["Vp branch&lt;br/&gt;se = sqrt of row sums of X_p Vp times X_p"]
+    owner --&gt;|"GAMPredictionResult or its predictor"| uncertainty{"FitControl.uncertainty at fit"}
+    uncertainty --&gt;|"none, and always on operator"| no_provider["RuntimeError&lt;br/&gt;no uncertainty provider"]
+    uncertainty --&gt;|"fisher"| factor_kind{"retained factor"}
+    factor_kind --&gt;|"_fisher_factor, lower Cholesky"| cholesky["apply _fisher_transforms to X_p&lt;br/&gt;Z = solve_triangular of L and X_p transposed"]
+    factor_kind --&gt;|"_fisher_qr_factor"| qr["apply _fisher_transforms to X_p&lt;br/&gt;Z = root_transpose_inverse of X_p transposed"]
+    cholesky --&gt; factor_se["se = sqrt of _fisher_scale times column sums of Z squared"]
+    qr --&gt; factor_se
+    uncertainty --&gt;|"covariance"| vp_kept{"QR factor kept beside Vp"}
+    vp_kept --&gt;|"no"| vp_branch
+    vp_kept --&gt;|"yes"| qr
+    vp_branch --&gt; scale{"pred_type"}
+    factor_se --&gt; scale
+    scale --&gt;|"link"| link_se["return se"]
+    scale --&gt;|"response"| response_se["se times abs of mu_eta of eta"]
+    no_provider -.-&gt;|"later"| materialize_covariance["materialize_covariance builds Vp from a kept factor"]</code></pre>
+<p>Read from the top: full and inference results always carry <code>Vp</code>; prediction
+results carry what <code>FitControl.uncertainty</code> asked for at fit time.</p>
+<ul>
+<li>Lower Cholesky factors come from the dense route (<code>pr.L_fisher</code>), from
+  streamed fits whose Fisher factor is not a pivoted QR factor, and from
+  fixed-sp discrete Gaussian fits. <code>PivotedQRFisherFactor</code> comes from
+  streamed fits with a <code>PivotedQRCoefficientFactor</code>, from discrete Gaussian
+  working-model fits and from the discrete performance iteration.</li>
+<li><code>_fisher_transforms</code> maps the factor's fitting coordinates to public ones,
+  block by block, so <code>X_p</code> is moved into fitting coordinates before the
+  solve; <code>_fisher_scale</code> is <code>phi</code>.</li>
+<li><code>materialize_covariance(memory_budget_bytes)</code> returns the kept <code>Vp</code>, or
+  builds it from the kept factor (<code>MemoryError</code> above <code>3 p^2 * 8</code> bytes,
+  <code>12 p^2 * 8</code> for a QR factor; <code>RuntimeError</code> with no factor). It returns a
+  read-only array and does not change the result.</li>
+<li>The operator route keeps no uncertainty state (<code>_fit_operator</code> refuses
+  <code>uncertainty != "none"</code>). <code>bulk_link_variance</code> on an operator result
+  instead replays the training source, checks that its fingerprint, replay
+  digest and family configuration match the accepted fit (<code>RuntimeError</code>
+  otherwise), and returns a <code>BulkOperatorVariance</code> provider of approximate
+  link-scale variances with a calibration against exact values on selected
+  rows; see <a href="../fitting_operator/">Phase 2: operator fitting</a>.</li>
+</ul>
+<h3 id="prediction-budgets">Prediction budgets<a class="headerlink" href="#prediction-budgets" title="Permanent link">&para;</a></h3>
+<p>A predictor built by a prediction-mode result carries
+<code>_output_budget_bytes</code> and <code>_memory_budget_bytes</code> from <code>FitControl</code>.
+<code>_check_prediction_budgets</code> raises <code>MemoryError</code> before any work when the
+returned array (<code>n * 8</code> bytes, <code>2 n * 8</code> with standard errors, <code>n * p * 8</code>
+for <code>predict_matrix</code>) exceeds the output budget, or when the known workspace
+(<code>n * p * 8</code> times 1 for point prediction, 3 with <code>Vp</code>, 4 with a Cholesky
+factor, 7 with a QR factor; the operator geometry computes its own bound)
+exceeds the memory budget. The message suggests <code>predict_iter</code>. Predictors
+from <code>GAMResults.to_predictor()</code> and inference results have no budgets.</p>
+<h3 id="batched-prediction-with-predict_iter">Batched prediction with <code>predict_iter</code><a class="headerlink" href="#batched-prediction-with-predict_iter" title="Permanent link">&para;</a></h3>
+<p><code>GAMPredictionResult.predict_iter(source, batch_rows=None, *, pred_type,
+se_fit)</code> delegates to <code>GAMPredictor.predict_iter</code> with <code>batch_rows</code> defaulting
+to the fit's <code>FitControl.batch_rows</code>. <code>GAMResults</code> and <code>GAMInferenceResult</code>
+have no <code>predict_iter</code>; call it on their predictor.</p>
+<ul>
+<li>Checks made when <code>predict_iter</code> is called, before the first batch: a
+  <code>RowSource</code> (<code>TypeError</code>), a positive integer <code>batch_rows</code> (<code>ValueError</code>),
+  the prediction type, and the uncertainty provider (<code>RuntimeError</code>). Under
+  <code>mgcv_predict_bamd</code> it also scans the whole source once
+  (<code>RequestCompressionSpec.freeze_source</code>) to freeze the compression grid.</li>
+<li>The generator then hashes the source, scans it, and for each non-empty
+  batch yields <code>(row_positions, prediction)</code> or
+  <code>(row_positions, (prediction, se))</code>, computed by the same <code>_predict</code> as a
+  single call, with the batch's offset. Padded batches raise
+  <code>NotImplementedError</code>; row positions must be nonnegative integers
+  (<code>ValueError</code>); too many or too few rows, or a source whose row count or
+  fingerprint changed by the end, raise <code>RuntimeError</code>.</li>
+<li>A source that declares <code>has_explicit_offset=False</code> passes no offset for its
+  first non-empty batch, so a model fitted with an offset warns once; the
+  later batches pass the source's zero offsets.</li>
+<li>Each batch is one <code>predict</code> call for the budgets, so a large source is
+  predicted within the output budget by choosing <code>batch_rows</code>.</li>
+</ul>
+<h3 id="unseen-and-missing-factor-levels">Unseen and missing factor levels<a class="headerlink" href="#unseen-and-missing-factor-levels" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Unseen level</th>
+<th>Missing value (None or NaN)</th>
+<th>Code</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>s(g, bs="re")</code></td>
+<td>zero random-effect contribution, no warning</td>
+<td>zero contribution</td>
+<td><code>RandomEffectSmooth.predict_matrix</code> in <code>jaxgam/smooths/random_effects.py</code> sets non-finite indicator entries to 0; on the operator route <code>IndexedRandomEffect.evaluate</code> in <code>jaxgam/formula/operator/prepare.py</code> sets the amplitude to 0</td>
+</tr>
+<tr>
+<td>factor <code>by</code> variable</td>
+<td><code>NaN</code> row for the smooth block and a <code>UserWarning</code> ("factor levels ... not in original fit")</td>
+<td>the same, as a missing value is not a fitted level</td>
+<td><code>FactorBySmooth.predict_matrix</code> in <code>jaxgam/smooths/by_variable.py</code></td>
+</tr>
+<tr>
+<td>parametric factor</td>
+<td><code>ValueError</code> ("Parametric factor ... has new level(s)")</td>
+<td><code>NaN</code> row</td>
+<td><code>_build_parametric_matrix</code> and <code>_encode_factor</code> in <code>jaxgam/formula/predict_matrix.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>The random-effect rule is a deliberate divergence from mgcv, which returns
+<code>NA</code> for a missing group: a missing or unseen group predicts the population
+level. Tests: <code>tests/test_smooths/test_random_effects.py</code>,
+<code>tests/test_smooths/test_by_variable.py</code>, <code>tests/test_formula/test_design.py</code>,
+<code>tests/test_execution/test_discrete_prediction.py</code> (both discrete policies),
+and
+<code>test_symbolic_large_prediction_budget_avoids_expanded_rows_and_zeros_unknown_levels</code>
+in <code>tests/test_inference/test_operator_geometry.py</code>.</p>
+<h3 id="prediction-policies-on-the-discretized-route">Prediction policies on the discretized route<a class="headerlink" href="#prediction-policies-on-the-discretized-route" title="Permanent link">&para;</a></h3>
+<p><code>ContinuousDiscretizationControl.prediction_policy</code> decides how a discrete
+fit predicts; the result reports it in <code>prediction_policy</code> and the predictor
+in its <code>prediction_policy</code> property.</p>
+<ul>
+<li><code>"continuous_frozen_basis"</code> (default): new covariate values are evaluated
+  exactly by the compact setup's <code>PredictSpec</code>, with no rounding.</li>
+<li><code>"mgcv_predict_bamd"</code>: the predictor holds a <code>RequestCompressionSpec</code>
+  built by <code>build_request_compression</code> from the fitted variable groups and
+  the policy's <code>DiscretizationBudget</code>. Before the frozen bases are
+  evaluated, the whole request is compressed as <code>predict.bamd</code> does
+  (<code>R/bam.r</code>, through <code>discrete.mf</code> and <code>compress.df</code>): each group keeps its
+  own distinct rows when there are few enough, otherwise its metric
+  variables are rounded to an even grid over the request's own range. So a
+  prediction depends on the other rows in the same request, but not on how
+  <code>predict_iter</code> batches it. Factor-only groups pass through unchanged.
+  <code>predict_matrix</code> returns the matrix of the compressed request.
+  <code>freeze_request(newdata)</code> returns the <code>FrozenRequestGrid</code> for a request
+  (<code>None</code> under the exact policy). A source changed after its grid was
+  frozen raises <code>RuntimeError</code>. Compression beyond the budget raises
+  <code>MemoryError</code>.</li>
+<li>A model without smooth terms follows <code>"continuous_frozen_basis"</code> even when
+  <code>"mgcv_predict_bamd"</code> was requested (<code>effective_prediction_policy</code> in
+  <code>jaxgam/formula/discrete/continuous_metadata.py</code>); the requested policy stays in
+  <code>discretization.requested_prediction_policy</code>.</li>
+</ul>
+<p><code>tests/test_execution/test_discrete_prediction.py</code> covers both policies,
+their batching invariance and their agreement with pinned mgcv.</p>
+<h3 id="operator-route-prediction">Operator-route prediction<a class="headerlink" href="#operator-route-prediction" title="Permanent link">&para;</a></h3>
+<p><code>OperatorPredictionGeometry</code> keeps the modest block's <code>PredictSpec</code>, the
+coefficient positions of the modest columns, and each <code>IndexedRandomEffect</code>.
+<code>forward</code> evaluates rows in batches of <code>batch_rows</code>: the modest block through
+its <code>PredictSpec</code>, and each random effect as one coefficient index and one
+amplitude per row, never as dense indicator columns. <code>build_predict_matrix</code>
+forms a dense matrix only for an explicit <code>predict_matrix</code> call, which the
+budget check bounds. <code>slice_columns</code> passes only the required covariates.</p>
+<h3 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h3>
+<p><code>GAMResults.summary()</code> calls <code>summary</code> in <code>jaxgam/summary/summary.py</code> (a port
+of <code>summary.gam</code> in mgcv's <code>R/mgcv.r</code>), prints the returned <code>GAMSummary</code> and
+returns it. It needs the training-backed fields (<code>X</code>, <code>fitted_values</code>,
+<code>weights</code>, <code>Vp</code>, <code>edf</code>, <code>edf1</code>), which is why only <code>GAMResults</code> has it.</p>
+<ul>
+<li><strong>Parametric table.</strong> Estimates, standard errors from <code>diag(Vp)</code>, and a z
+  test for known-scale families or a t test with <code>n - edf_total</code> residual
+  degrees of freedom. Aliased parametric columns dropped at setup appear as
+  <code>NaN</code> rows (<code>dropped_param_names</code>).</li>
+<li><strong>Smooth table.</strong> For each smooth, <code>_test_stat</code> (a port of <code>testStat</code>)
+  computes the Wood (2013) statistic on the Fisher-weighted design block
+  <code>sqrt(W) X</code> with reference rank <code>min(k, edf1)</code>. The p-value uses a mixture
+  of chi-squares through <code>psum_chisq_davies</code> (a port of <code>psum.chisq</code>, which
+  calls Davies' method <code>_davies</code> and falls back to <code>_liu2</code>, a port of
+  <code>liu2</code>), or a plain chi-square or F tail for an integer rank. Known scale
+  reports <code>Chi.sq</code>, estimated scale <code>F</code>. Random-effect smooths with no null
+  space use <code>_re_test</code> (a port of <code>reTest</code> and <code>recov</code>), conditioning on the
+  other random effects through <code>_re_test_general</code> when there are several.</li>
+<li><strong>Model statistics.</strong> Adjusted R-squared (<code>_compute_r_squared</code>), deviance
+  explained (<code>_compute_deviance_explained</code>), scale, the REML score and
+  <code>theta</code>.</li>
+</ul>
+<p><code>GAMSummary.__str__</code> formats the tables as <code>print.summary.gam</code> does.
+<code>tests/test_summary/test_summary.py</code> compares the tables with mgcv.</p>
+<h3 id="plot">Plot<a class="headerlink" href="#plot" title="Permanent link">&para;</a></h3>
+<p><code>GAMResults.plot()</code> calls <code>plot_gam</code> in <code>jaxgam/plot/plot_gam.py</code> (the
+counterpart of <code>plot.gam</code> in mgcv's <code>R/plots.r</code>), which imports matplotlib
+only when called. It draws one panel per smooth term, one per level for a
+factor-<code>by</code> smooth: a one-dimensional smooth as its partial effect on the
+link scale with a band of <code>se_mult</code> (default 2) standard errors from the
+term's <code>Vp</code> block and a rug of the stored training covariate; a
+two-dimensional smooth as a filled contour; a random effect as a normal
+quantile plot of its coefficients (as <code>plot.random.effect</code>); higher
+dimensions as a labelled placeholder with a warning. Each panel's basis is
+evaluated with <code>smooth.predict_matrix</code> and <code>CoefficientMap.transform_X</code> on
+the term's own <code>TermBlock</code>. The <code>pages</code> argument is accepted and unused.
+<code>tests/test_plot/test_plot.py</code> covers it.</p>
+<h2 id="key-types">Key types<a class="headerlink" href="#key-types" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>classDiagram
+    class _FitDiagnostics {
+        +edf ndarray
+        +edf1 ndarray
+        +edf_total float
+        +deviance float
+        +null_deviance float
+        +score float
+        +scale float
+        +theta float
+        +smoothing_params ndarray
+        +converged bool
+        +execution_route str
+        +execution_fallback_reason str
+        +n int
+    }
+    class GAMResults {
+        +coefficients ndarray
+        +fitted_values ndarray
+        +linear_predictor ndarray
+        +Vp ndarray
+        +setup ModelSetup
+        +training_data dict
+        +predict(newdata, pred_type, se_fit, offset) ndarray
+        +predict_matrix(newdata) ndarray
+        +to_predictor() GAMPredictor
+        +summary() GAMSummary
+        +plot(select, pages, rug, se, shade) tuple
+    }
+    class GAMInferenceResult {
+        -_predictor GAMPredictor
+        +predict(newdata, pred_type, se_fit, offset) ndarray
+        +predict_matrix(newdata) ndarray
+        +to_predictor() GAMPredictor
+    }
+    class GAMPredictionResult {
+        -_predictor GAMPredictor
+        +deviance float
+        +score float
+        +edf_total float
+        +prediction_policy str
+        +source_scans int
+        +known_workspace_bytes int
+        +predict(newdata, pred_type, se_fit, offset) ndarray
+        +predict_iter(source, batch_rows, pred_type, se_fit) Iterator
+        +predict_matrix(newdata) ndarray
+        +to_predictor() GAMPredictor
+        +materialize_covariance(memory_budget_bytes) ndarray
+        +bulk_link_variance(training_source, calibration_data) tuple
+    }
+    class GAMPredictor {
+        +coefficients ndarray
+        +Vp ndarray
+        +family ExponentialFamily
+        +formula str
+        +offset_was_nonzero bool
+        -_predict_spec PredictSpec
+        -_fisher_factor ndarray
+        -_fisher_qr_factor PivotedQRFisherFactor
+        -_request_compression RequestCompressionSpec
+        -_operator_geometry OperatorPredictionGeometry
+        -_jaxgam_version str
+        +predict(newdata, pred_type, se_fit, offset) ndarray
+        +predict_matrix(newdata) ndarray
+        +predict_iter(source, batch_rows, pred_type, se_fit) Iterator
+        +freeze_request(newdata) FrozenRequestGrid
+    }
+    class PivotedQRFisherFactor {
+        +R ndarray
+        +pivots ndarray
+        +keep ndarray
+        +original_n_coef int
+        +root_transpose_inverse(rhs) ndarray
+        +hessian_inverse(rhs) ndarray
+    }
+    class PredictSpec {
+        +coef_map CoefficientMap
+        +smooth_info tuple
+        +factor_info dict
+        +parametric_keep_cols tuple
+        +total_coefs int
+        +build_predict_matrix(newdata) ndarray
+    }
+    class CoefficientMap {
+        +terms tuple
+        +total_coefs int
+        +transform_X(X_raw_block, term_label) ndarray
+    }
+    class OperatorPredictionGeometry {
+        +modest PredictSpec
+        +random_effects tuple
+        +n_coef int
+        +forward(data, coefficients) ndarray
+        +build_predict_matrix(data) ndarray
+    }
+    class RequestCompressionSpec {
+        +groups tuple
+        +budget DiscretizationBudget
+        +freeze(data) FrozenRequestGrid
+        +freeze_source(source, batch_rows) FrozenRequestGrid
+    }
+    _FitDiagnostics &lt;|-- GAMResults
+    _FitDiagnostics &lt;|-- GAMInferenceResult
+    GAMInferenceResult *-- GAMPredictor
+    GAMPredictionResult *-- GAMPredictor
+    GAMPredictor o-- PivotedQRFisherFactor
+    GAMPredictor *-- PredictSpec
+    GAMPredictor o-- OperatorPredictionGeometry
+    GAMPredictor o-- RequestCompressionSpec
+    PredictSpec *-- CoefficientMap
+    GAMResults ..&gt; PredictSpec : through setup</code></pre>
+<p>Solid diamonds are always present, hollow ones optional. <code>GAMPredictionResult</code>
+has many more diagnostic fields than shown (<code>score_scale</code>,
+<code>score_error_bound</code>, <code>batches_scanned</code>, <code>fit_peak_bytes</code>,
+<code>operator_diagnostics</code>, <code>discretization</code> and others). <code>plot</code> also takes
+keyword arguments passed to <code>plot_gam</code>.</p>
+<h2 id="rules-and-invariants">Rules and invariants<a class="headerlink" href="#rules-and-invariants" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>One encoder for prediction.</strong> Every prediction path, including
+  <code>predict_iter</code> and the full result, builds rows through
+  <code>build_predict_matrix</code> and <code>CoefficientMap.transform_X</code> (or the operator
+  geometry). Full, inference and predictor predictions are byte-identical:
+  <code>test_full_and_inference_predictions_are_byte_identical</code> in
+  <code>tests/test_result_mode.py</code> and
+  <code>test_predict_and_matrix_are_byte_identical_to_full_results</code> in
+  <code>tests/test_inference/test_predictor.py</code>.</li>
+<li><strong>Self-prediction reproduces the fit.</strong> <code>GAMResults.predict()</code> without new
+  data returns the stored fit; predicting the training data through the
+  matrix must agree (<code>tests/test_predict/test_predict.py</code>).</li>
+<li><strong>Prediction results keep no rows.</strong> No training arrays, setup or dense
+  covariance unless asked for (<code>tests/test_prediction_result.py</code>).</li>
+<li><strong>All missing-group paths agree.</strong> A missing or unseen random-effect group
+  gives a zero contribution on every route and every result type.</li>
+<li><strong>Batching does not change predictions.</strong> <code>predict_iter</code> equals one
+  concatenated <code>predict</code> call, also under <code>mgcv_predict_bamd</code>
+  (<code>test_predict_iter_matches_concrete_prediction_with_source_offsets</code> in
+  <code>tests/test_inference/test_predictor.py</code>,
+  <code>tests/test_execution/test_discrete_prediction.py</code>).</li>
+<li><strong>Phase 3 has no JAX import.</strong> <code>jaxgam/inference/</code>, <code>jaxgam/summary/</code> and
+  <code>jaxgam/plot/</code> import none; <code>jaxgam/results.py</code> converts every device
+  array with <code>to_numpy</code> before covariance or EDF work.</li>
+</ul>
+<h2 id="pitfalls">Pitfalls<a class="headerlink" href="#pitfalls" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>GAMResults</code> array fields are writable even though the dataclass is
+  frozen; writing into <code>coefficients</code> changes later predictions of that
+  result (but not of a predictor already taken from it, which owns a copy).</li>
+<li><code>GAMResults.predict(offset=...)</code> without <code>newdata</code> ignores the offset.</li>
+<li>A prediction result made without <code>uncertainty="fisher"</code> or
+  <code>"covariance"</code> cannot give standard errors; refitting is the only remedy.</li>
+<li>The <code>FitControl</code> docstring says <code>uncertainty="fisher"</code> retains a Cholesky
+  factor; on QR-solver and discrete working-model fits it retains a
+  <code>PivotedQRFisherFactor</code> instead.</li>
+<li>Discrete <code>mgcv_predict_bamd</code> predictions of one row change when other rows
+  are added to the same request. This is mgcv's behaviour, not a bug.</li>
+<li>Pickles are not a storage format: a version mismatch only warns.</li>
+<li>Operator results report <code>score=None</code> and <code>edf_total=None</code> for fixed <code>sp</code>;
+  code that formats results must allow <code>None</code>.</li>
+</ul>
+<h2 id="where-to-change-things">Where to change things<a class="headerlink" href="#where-to-change-things" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>To do this</th>
+<th>Edit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Keep a new field on a result</td>
+<td>the dataclass in <code>jaxgam/results.py</code> and every constructor that builds it (<code>_from_fit</code>, <code>_from_stream_fit</code>, <code>_from_discrete</code>, <code>_from_operator_fit</code>)</td>
+</tr>
+<tr>
+<td>Change what prediction needs from setup</td>
+<td><code>PredictSpec</code> and <code>build_predict_spec</code> in <code>jaxgam/formula/predict_matrix.py</code>, and a smooth's <code>copy_for_prediction</code> if it holds new caches</td>
+</tr>
+<tr>
+<td>Change prediction arithmetic or offsets</td>
+<td><code>prepare_prediction</code> and <code>finish_prediction</code> in <code>jaxgam/inference/_core.py</code></td>
+</tr>
+<tr>
+<td>Add an uncertainty provider</td>
+<td><code>GAMPredictor</code> fields, <code>finish_prediction</code>, <code>_check_prediction_budgets</code>, and the constructor that retains it</td>
+</tr>
+<tr>
+<td>Change batched prediction</td>
+<td><code>GAMPredictor.predict_iter</code> and <code>_predict_iter</code> in <code>jaxgam/inference/predictor.py</code></td>
+</tr>
+<tr>
+<td>Change unseen-level behaviour</td>
+<td>the smooth's <code>predict_matrix</code> (<code>jaxgam/smooths/random_effects.py</code>, <code>jaxgam/smooths/by_variable.py</code>) or <code>_build_parametric_matrix</code>, and <code>IndexedRandomEffect.evaluate</code> for the operator route</td>
+</tr>
+<tr>
+<td>Change discrete request compression</td>
+<td><code>jaxgam/data/continuous_request.py</code> and <code>build_request_compression</code> in <code>jaxgam/formula/discrete/continuous_metadata.py</code></td>
+</tr>
+<tr>
+<td>Change summary tables</td>
+<td><code>summary</code> and its helpers in <code>jaxgam/summary/summary.py</code></td>
+</tr>
+<tr>
+<td>Change plots</td>
+<td><code>plot_gam</code> in <code>jaxgam/plot/plot_gam.py</code></td>
+</tr>
+<tr>
+<td>Add pickle compatibility for a new predictor field</td>
+<td>give it a default and add it to <code>GAMPredictor.__setstate__</code></td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

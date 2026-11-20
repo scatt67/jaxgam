@@ -1,0 +1,2318 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../testing_and_ci/">
+      
+      
+        <link rel="next" href="../../citations/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Numerics and platform - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#numerics-and-platform-behaviour" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Numerics and platform
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-import-jaxgam-does" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What import jaxgam does
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-accelerate-guard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Accelerate guard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#which-library-serves-which-call" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which library serves which call
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-pinned-lapack-provider" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The pinned LAPACK provider
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#source-arithmetic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Source arithmetic
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgamjax_utilspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        jaxgam/jax_utils.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#numba" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Numba
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#determinism-across-machines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Determinism across machines
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment variables
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#devices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Devices
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-code-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the code is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-import-jaxgam-does" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What import jaxgam does
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-accelerate-guard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Accelerate guard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#which-library-serves-which-call" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which library serves which call
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-pinned-lapack-provider" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The pinned LAPACK provider
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#source-arithmetic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Source arithmetic
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgamjax_utilspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        jaxgam/jax_utils.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#numba" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Numba
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#determinism-across-machines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Determinism across machines
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment variables
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#devices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Devices
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rules-and-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rules and invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-change-things" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to change things
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="numerics-and-platform-behaviour">Numerics and platform behaviour<a class="headerlink" href="#numerics-and-platform-behaviour" title="Permanent link">&para;</a></h1>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>This page collects the numerical and platform decisions that cut across the
+package: what <code>import jaxgam</code> configures, which linear-algebra library serves
+which call, the pinned LAPACK provider that reproduces mgcv's arithmetic for
+selected routines, the scalar kernels that reproduce mgcv's compiled C loops,
+the Apple Accelerate guard, thread pinning and determinism, environment
+variables, device handling, and the rules for JAX and NumPy-only code.</p>
+<h2 id="where-the-code-is">Where the code is<a class="headerlink" href="#where-the-code-is" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/__init__.py</code></td>
+<td>Enables float64, configures the persistent compilation cache, runs the Accelerate warning, exports the public names.</td>
+</tr>
+<tr>
+<td><code>jaxgam/platform_guard.py</code></td>
+<td><code>warn_if_accelerate_lapack</code> and <code>accelerate_warning_applies</code>: the Apple silicon Accelerate warning.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/source_lapack.py</code></td>
+<td>The pinned LAPACK provider: loads <code>scipy-openblas32==0.3.26.0.4</code> with <code>ctypes</code>, pins it to one thread, and exposes source-exact ports of mgcv's LAPACK and BLAS calls. Also the NumPy/SciPy Accelerate probes.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/source_penalty_coordinates.py</code></td>
+<td>Penalty coordinates in pinned mgcv's gauge: R's <code>colMeans</code> centering reflector, <code>qr.qty</code> absorption, and lower-triangle DSYEVR eigensolves on the provider.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/source_arithmetic.py</code></td>
+<td>Numba kernels that keep mgcv's C loop order and fused multiply-add rounding, and element-wise calls to the C library's <code>exp</code>, <code>log</code>, <code>log10</code> and <code>pow</code>.</td>
+</tr>
+<tr>
+<td><code>jaxgam/jax_utils.py</code></td>
+<td>NumPy/JAX array dispatch, the Phase 1 to 2 and Phase 2 to 3 transfers, and JIT-compiled linear-algebra helpers.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/cubic.py</code>, <code>jaxgam/smooths/utils.py</code>, <code>jaxgam/summary/_davies.py</code></td>
+<td>The other Numba users.</td>
+</tr>
+<tr>
+<td><code>jaxgam/api.py</code></td>
+<td><code>_resolve_device</code>, which maps <code>device=</code> to a JAX device.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<h3 id="what-import-jaxgam-does">What <code>import jaxgam</code> does<a class="headerlink" href="#what-import-jaxgam-does" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart TD
+    A["import jaxgam"] --&gt; B["import jax"]
+    B --&gt; C["__version__ from installed metadata&lt;br/&gt;or 0+unknown"]
+    C --&gt; D["jax.config.update jax_enable_x64 True"]
+    D --&gt; E{"JAXGAM_NO_COMPILATION_CACHE&lt;br/&gt;non-empty?"}
+    E --&gt;|"yes"| H["no cache configuration by jaxgam"]
+    E --&gt;|"no"| F{"JAX_COMPILATION_CACHE_DIR set?"}
+    F --&gt;|"no"| G["jax_compilation_cache_dir set to&lt;br/&gt;home/.cache/jaxgam/jax"]
+    F --&gt;|"yes"| G2["directory left to JAX, which reads the variable"]
+    G --&gt; K["jax_persistent_cache_min_compile_time_secs set to 0"]
+    G2 --&gt; K
+    H --&gt; W["warn_if_accelerate_lapack"]
+    K --&gt; W
+    W --&gt; X["import GAM, controls, results, GAMPredictor"]</code></pre>
+<p>Read top to bottom: float64 is enabled before any other jaxgam module is
+imported, so no module-level compilation runs in float32. The Accelerate check
+runs once, after the JAX configuration and before the public classes are
+imported. Importing <code>jaxgam</code> loads <code>jaxgam.fitting</code> but not
+<code>jaxgam.execution</code>, and does not load the pinned provider.</p>
+<p><strong>Float64.</strong> <code>jax_enable_x64</code> is set to <code>True</code> in <code>jaxgam/__init__.py</code>. Four
+fitting modules (<code>jaxgam/fitting/discrete/working_model.py</code>,
+<code>jaxgam/fitting/stream/efs_factor.py</code>, <code>jaxgam/fitting/discrete/working.py</code>,
+<code>jaxgam/fitting/stream/nb_theta.py</code>) set it again at import.</p>
+<p><strong>Persistent compilation cache.</strong> By default compiled XLA executables are
+cached in <code>~/.cache/jaxgam/jax</code>, and the minimum compile time for caching is
+set to 0 seconds so that small programs are cached too. Importing <code>jaxgam</code>
+already writes entries to the cache. The behaviour is controlled only by
+environment variables read at import:</p>
+<ul>
+<li><strong>Redirect:</strong> set <code>JAX_COMPILATION_CACHE_DIR</code> before importing <code>jaxgam</code>.
+  jaxgam then sets no directory (JAX reads the variable itself) but still sets
+  the threshold to 0.</li>
+<li><strong>Disable jaxgam's configuration:</strong> set <code>JAXGAM_NO_COMPILATION_CACHE</code> to any
+  non-empty value, including <code>0</code>; the test is truthiness of the string. If
+  <code>JAX_COMPILATION_CACHE_DIR</code> is also set, JAX still caches there with its own
+  default threshold (1 second in the installed JAX).</li>
+<li><strong>Not a redirect:</strong> a <code>jax.config.update("jax_compilation_cache_dir", ...)</code>
+  made before <code>import jaxgam</code> is overwritten by the default; one made after
+  the import changes the setting but, in a check with jax 0.9.0.1, entries
+  were not written to the new directory, because the import had already
+  initialized the cache.</li>
+</ul>
+<h3 id="the-accelerate-guard">The Accelerate guard<a class="headerlink" href="#the-accelerate-guard" title="Permanent link">&para;</a></h3>
+<p><code>jaxgam/platform_guard.py</code> explains the problem in its module docstring: on
+Apple silicon the default NumPy and SciPy wheels link Apple Accelerate, and
+JAX's CPU LAPACK kernels take their function pointers from SciPy. When several
+LAPACK calls run concurrently inside one compiled computation, the process
+heap can be corrupted, and no JAX or XLA setting prevents it; the OpenBLAS
+builds of NumPy and SciPy do. The warning text says this was observed with
+about 100 smooths (about 1,000 coefficients) and not with 50 or fewer, that
+Linux is unaffected, and gives <code>uv</code> and <code>pip</code> commands that reinstall the
+OpenBLAS builds of the installed NumPy and SciPy versions.</p>
+<p><code>accelerate_warning_applies()</code> returns true only when all of these hold, in
+this order:</p>
+<ol>
+<li><code>os.environ.get("JAXGAM_ALLOW_ACCELERATE") != "1"</code> (exactly the string
+   <code>1</code> silences it; <code>0</code> or <code>true</code> do not);</li>
+<li><code>sys.platform == "darwin"</code> and <code>platform.machine() == "arm64"</code>;</li>
+<li><code>accelerate_lapack_in_process()</code> in <code>jaxgam/smooths/source_lapack.py</code>:
+   NumPy's or SciPy's build configuration names <code>accelerate</code> as its LAPACK;</li>
+<li><code>jax.default_backend() == "cpu"</code>. The backend is queried only after the
+   first three hold, so elsewhere importing jaxgam never initializes a JAX
+   backend.</li>
+</ol>
+<p><code>warn_if_accelerate_lapack()</code> issues a <code>RuntimeWarning</code> at most once per
+process. <code>tests/test_platform_guard.py</code> covers each condition, the once-only
+behaviour and the opt-out value.</p>
+<h3 id="which-library-serves-which-call">Which library serves which call<a class="headerlink" href="#which-library-serves-which-call" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart LR
+    subgraph P1["Phase 1 setup and Phase 3, NumPy"]
+        NS["numpy.linalg and scipy.linalg calls"]
+        SL["source_lapack.py routines"]
+        SA["source_arithmetic.py kernels"]
+    end
+    subgraph P2["Phase 2 fit"]
+        JK["fitting/ kernels&lt;br/&gt;jnp.linalg and jax.scipy.linalg"]
+        HC["host calls between compiled steps&lt;br/&gt;stable_reparam, factor_working_model"]
+    end
+    NS --&gt; VB["BLAS and LAPACK vendored by NumPy and SciPy&lt;br/&gt;OpenBLAS, or Accelerate on default macOS wheels"]
+    JK --&gt; XK["JAX CPU LAPACK kernels"]
+    XK --&gt;|"function pointers from SciPy"| VB
+    SL --&gt; PW["scipy-openblas32 0.3.26.0.4&lt;br/&gt;loaded RTLD_LOCAL, one thread"]
+    HC --&gt; PW
+    SA --&gt; LM["C libm through ctypes pointers&lt;br/&gt;and Numba loops with explicit FMA"]
+    SL -.-&gt;|"SciPy built on Accelerate:&lt;br/&gt;selected eigensolves"| VB</code></pre>
+<p>Ordinary setup and post-estimation linear algebra goes to whatever NumPy and
+SciPy vendor. Kernels in the fit go to JAX's CPU LAPACK kernels, which share
+SciPy's LAPACK. Only the routines listed below go to the pinned provider, both
+when called from setup and when the fit calls them on the host. The dashed
+edge is the Accelerate exception described further down.</p>
+<h3 id="the-pinned-lapack-provider">The pinned LAPACK provider<a class="headerlink" href="#the-pinned-lapack-provider" title="Permanent link">&para;</a></h3>
+<p><strong>Why it exists.</strong> Several smooth constructors are sensitive to exactly
+which null-space coordinates and eigenvector gauge their LAPACK returns: the
+cubic shrinkage penalty, the thin-plate and Gaussian-process Lanczos bases,
+tensor-margin factorizations, and penalty coordinates in rank-deficient
+fits. Small differences there cascade into different bases and coefficients.
+<code>jaxgam/smooths/source_lapack.py</code> therefore binds the needed LAPACKE and CBLAS
+entry points from one declared package, <code>scipy-openblas32==0.3.26.0.4</code>
+(OpenBLAS 0.3.26, LP64), because that is the OpenBLAS release the pinned
+Linux R 4.5.2 links. The wheel is an unconditional runtime dependency in
+<code>pyproject.toml</code>. The module never searches for R or a system BLAS and does
+not replace NumPy's or SciPy's backend.</p>
+<p><strong>Locating, loading and verifying.</strong> <code>_source_lapack()</code> is cached with
+<code>functools.lru_cache(maxsize=1)</code> and runs on first use, not at import. It
+calls <code>_declared_provider</code>, which:</p>
+<ol>
+<li>checks <code>importlib.metadata.version("scipy-openblas32")</code> equals
+   <code>_PROVIDER_VERSION</code> (<code>0.3.26.0.4</code>), else <code>RuntimeError</code>;</li>
+<li>finds the package with <code>importlib.util.find_spec</code> (without running the
+   wheel's <code>__init__</code>, which would load OpenBLAS with <code>RTLD_GLOBAL</code>) and
+   resolves <code>lib/libscipy_openblas.dylib</code> on macOS, <code>lib/libscipy_openblas.so</code>
+   on Linux, or the single DLL on Windows (<code>_provider_library_path</code>);</li>
+<li>opens it with <code>ctypes.CDLL(path, ctypes.RTLD_LOCAL)</code>, so its symbols do not
+   leak into the process namespace;</li>
+<li>reads <code>scipy_openblas_get_config</code> and requires the prefix
+   <code>"OpenBLAS 0.3.26 "</code> and the LP64 ABI (no <code>USE64BITINT</code>);</li>
+<li>pins the thread count with <code>_pin_single_thread</code>.</li>
+</ol>
+<p><code>_source_lapack</code> then binds 13 symbols with explicit <code>argtypes</code> and
+<code>restype</code> and returns a frozen <code>_SourceLapack</code>.</p>
+<p><strong>One thread.</strong> The wheel is a threaded OpenBLAS whose default thread count
+follows <code>OPENBLAS_NUM_THREADS</code> or the core count, and threaded reductions
+change last-bit results. <code>_pin_single_thread</code> calls
+<code>scipy_openblas_set_num_threads(1)</code> once at load and checks
+<code>scipy_openblas_get_num_threads() == 1</code>, so every provider result is the
+single-thread arithmetic validated against pinned R, whatever the caller's
+environment. The setting is local to this library: NumPy's and SciPy's thread
+counts are unchanged.</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant S as CubicShrinkageSmooth
+    participant F as cubic_shrinkage_penalty
+    participant L as _source_lapack
+    participant D as _declared_provider
+    participant W as libscipy_openblas
+    S-&gt;&gt;F: _apply_shrinkage calls it with S and shrink
+    F-&gt;&gt;F: _check_input_shape and cubic_shrinkage_workspace_bound
+    F-&gt;&gt;L: get the provider
+    alt first call in the process
+        L-&gt;&gt;D: declared package scipy-openblas32
+        D-&gt;&gt;D: metadata version is 0.3.26.0.4
+        D-&gt;&gt;D: _provider_library_path with find_spec
+        D-&gt;&gt;W: ctypes.CDLL with RTLD_LOCAL
+        D-&gt;&gt;W: scipy_openblas_get_config
+        W--&gt;&gt;D: OpenBLAS 0.3.26 prefix, LP64
+        D-&gt;&gt;W: _pin_single_thread sets and checks one thread
+        D--&gt;&gt;L: _DeclaredProvider and the CDLL
+        L-&gt;&gt;L: bind LAPACKE and CBLAS symbols
+    end
+    L--&gt;&gt;F: cached _SourceLapack
+    F-&gt;&gt;W: dsyevr_work workspace query with lwork -1
+    F-&gt;&gt;F: _query_length caps lwork and liwork
+    F-&gt;&gt;W: dsyevr_work
+    W--&gt;&gt;F: ascending eigenpairs
+    F-&gt;&gt;F: reverse to descending, shrink the two null values
+    F-&gt;&gt;W: dgemm
+    F--&gt;&gt;S: shrunk penalty</code></pre>
+<p>The load block runs once per process; later calls go straight to the cached
+<code>_SourceLapack</code>. Every routine follows the same pattern: validate shapes and
+finiteness, check a workspace bound before allocating, query LAPACK
+workspace, then call.</p>
+<p><strong>Routines and callers.</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Routines</th>
+<th>mgcv source it reproduces</th>
+<th>Package callers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cubic_shrinkage_penalty</code></td>
+<td>DSYEVR, DGEMM</td>
+<td>the <code>cs</code> eigentransform in <code>smooth.construct.cs.smooth.spec</code> (<code>R/smooth.r</code>)</td>
+<td><code>CubicShrinkageSmooth</code> in <code>jaxgam/smooths/cubic.py</code> (setup)</td>
+</tr>
+<tr>
+<td><code>natural_cubic_system_solve</code></td>
+<td>DPTSV</td>
+<td><code>getFS</code> (<code>src/mgcv.c</code>)</td>
+<td><code>CubicRegressionSmooth._compute_natural_f_and_penalty</code> (setup)</td>
+</tr>
+<tr>
+<td><code>source_lanczos</code> (with <code>source_trisymeig</code>)</td>
+<td>DSYMV, DDOT, DAXPY, DSTEDC</td>
+<td><code>Rlanczos</code> and <code>mgcv_trisymeig</code> (<code>src/mat.c</code>), called by <code>slanczos</code></td>
+<td><code>_source_tprs_knot_basis</code> in <code>jaxgam/smooths/tprs.py</code>, <code>GaussianProcessSmooth.setup</code>, <code>jaxgam/formula/operator/radial.py</code> (setup)</td>
+</tr>
+<tr>
+<td><code>source_project_rows</code></td>
+<td>DGEMV per row</td>
+<td><code>predict_tprs</code> (<code>src/tprs.c</code>)</td>
+<td><code>TPRSSmooth._project_design_rows</code> (setup and prediction)</td>
+</tr>
+<tr>
+<td><code>source_r_matprod</code>, <code>source_matprod</code></td>
+<td>DGEMV or DGEMM</td>
+<td>R's <code>%*%</code></td>
+<td><code>GaussianProcessSmooth._build_design</code>; tensor margins in <code>jaxgam/smooths/tensor.py</code></td>
+</tr>
+<tr>
+<td><code>source_svd</code></td>
+<td>DGESDD</td>
+<td>R's <code>svd</code></td>
+<td>tensor-margin reparameterization in <code>jaxgam/smooths/tensor.py</code></td>
+</tr>
+<tr>
+<td><code>SourceConstraintQR</code></td>
+<td>DNRM2, DSCAL, DDOT, DAXPY</td>
+<td><code>qr(t(C))</code> and <code>qr.qty</code> for one constraint column</td>
+<td>tensor margins; <code>jaxgam/formula/operator/modest.py</code></td>
+</tr>
+<tr>
+<td><code>source_pivoted_qr</code></td>
+<td>DGEQP3</td>
+<td><code>mgcv_qr</code> as used by <code>gdiPK</code> (<code>src/gdi.c</code>)</td>
+<td><code>jaxgam/formula/rank_coordinates.py</code>, whose map builders are called only from tests</td>
+</tr>
+<tr>
+<td><code>source_pivoted_cholesky</code></td>
+<td>DPSTRF</td>
+<td>R's <code>chol(pivot=TRUE)</code> in <code>Sl.fitChol</code> (<code>R/fast-REML.r</code>)</td>
+<td><code>factor_working_model</code> in <code>jaxgam/execution/discrete/working_model.py</code> (during the discretized fit)</td>
+</tr>
+<tr>
+<td><code>_source_symmetric_eigen</code>, <code>source_symmetric_eigh</code>, <code>source_symmetric_max_eigenvalue</code> (in <code>jaxgam/smooths/source_penalty_coordinates.py</code>)</td>
+<td>DSYEVR</td>
+<td>R's <code>eigen</code> on penalties</td>
+<td><code>stable_reparam</code> in <code>jaxgam/penalties/stable_reparam.py</code> (setup, and on the host between compiled dense REML evaluations through <code>jaxgam/fitting/stable_log_det.py</code>); <code>_symmetric_eigh</code> in <code>jaxgam/formula/fitting_prepare.py</code>; <code>build_working_penalty_blocks</code> in <code>jaxgam/formula/discrete/working_penalties.py</code>; tensor penalty normalization</td>
+</tr>
+</tbody>
+</table>
+<p><code>source_frobenius_norm</code> is not a provider call: it reproduces
+<code>gdi.c::frobenius_norm</code> as one column-major running sum in NumPy.</p>
+<p>During the discretized fit the provider is called between two compiled JAX
+executables: a compiled step builds the Hessian and penalty inputs,
+<code>factor_working_model</code> copies them to the host and factors them with DPSTRF,
+and the factors go back with <code>jax.device_put</code> to the compiled proposal. See
+<a href="../fitting_discrete/">The discretized fit</a>.</p>
+<p><strong>On a SciPy built with Accelerate.</strong> <code>scipy_uses_accelerate_lapack()</code> routes
+a few eigensolves to SciPy's own LAPACK instead, because the audited SciPy
+Accelerate build preserves R's separate libRlapack gauge more closely there:
+the eigensolve inside <code>cubic_shrinkage_penalty</code> (its DGEMM still uses the
+provider), <code>_symmetric_eigh</code> in <code>jaxgam/formula/fitting_prepare.py</code>, <code>_dsyevr</code>
+in <code>jaxgam/penalties/stable_reparam.py</code>, and the largest-eigenvalue
+normalization of <code>cr</code>/<code>cs</code> tensor margins in <code>jaxgam/smooths/tensor.py</code>. All
+other provider routines are used on every platform. On such a machine the
+Accelerate warning also fires.</p>
+<h3 id="source-arithmetic">Source arithmetic<a class="headerlink" href="#source-arithmetic" title="Permanent link">&para;</a></h3>
+<p><code>jaxgam/smooths/source_arithmetic.py</code> reproduces mgcv's compiled scalar loops
+(<code>tprs.c</code>, <code>mat.c</code>, <code>matrix.c</code>), which accumulate <code>s += a*b</code> in fixed index
+order. How those statements round depends on how R's mgcv shared object was
+compiled: the module records that the aarch64 Linux and macOS arm64 builds
+contract them into fused multiply-adds and the x86-64 Linux build does not.
+<code>SOURCE_FMA_CONTRACTION</code> is therefore true on <code>aarch64</code>/<code>arm64</code> machines.
+The kernels (<code>sequential_dot</code>, <code>column_squares</code>, <code>squared_distances</code>,
+<code>knot_squared_distances</code>, <code>matmult_tn</code>, <code>qt_factor</code>, the Householder and
+Lanczos helpers, <code>ritz_accumulate</code>) are <code>numba.njit</code> functions compiled
+without <code>fastmath</code>, so LLVM neither reorders nor contracts plain expressions;
+the fused form uses the <code>llvm.fma</code> intrinsic through <code>_fused</code>.</p>
+<p><code>libm_exp</code>, <code>libm_log</code>, <code>libm_log10</code> and <code>r_pow</code> call the C math library
+element by element through ctypes function pointers inside Numba loops.
+NumPy's own <code>exp</code>/<code>log</code>/<code>power</code> may dispatch to SIMD implementations (AVX-512
+on x86_64) whose last bits differ from libm, which is what R calls. <code>r_pow</code>
+also reproduces <code>R_pow</code>'s special cases. These are used across setup and the
+host side of the fit (for example <code>jaxgam/penalties/stable_reparam.py</code>,
+<code>jaxgam/execution/discrete/working_model.py</code>, <code>jaxgam/execution/operator/system.py</code>).</p>
+<p><code>jaxgam/smooths/source_penalty_coordinates.py</code> builds R's sum-to-zero
+centering reflector from column means accumulated in <code>np.longdouble</code> in row
+order (as R's <code>colMeans</code> does), applies it with BLAS <code>ddot</code>/<code>daxpy</code> in R's
+<code>qr.qty</code> order (<code>source_centered_penalties</code>, used by the dense design;
+<code>source_centered_smooth</code>, used for <code>te()</code> centering in
+<code>jaxgam/smooths/constraints.py</code>), and runs DSYEVR on the lower triangle of the
+provider. Its purpose is to keep R's penalty coordinate gauge, which decides
+the canonical coefficients at rank ties and the small eigenvalues of
+penalty determinants.</p>
+<p>Inside JAX kernels, <code>_materialize_source_operation</code> in <code>jaxgam/jax_utils.py</code>
+applies <code>nextafter(x, x)</code> (an exact identity with an identity derivative) to
+stop XLA from contracting arithmetic across a source vector-operation
+boundary. It is used in <code>jaxgam/links/links.py</code>,
+<code>jaxgam/fitting/family_execution.py</code> and <code>jaxgam/fitting/stream/nb_kernels.py</code>.</p>
+<h3 id="jaxgamjax_utilspy"><code>jaxgam/jax_utils.py</code><a class="headerlink" href="#jaxgamjax_utilspy" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>array_module(x)</code> returns <code>jax.numpy</code> for a JAX array and <code>numpy</code>
+  otherwise; <code>is_jax_array</code> is the test. Families and links use them so one
+  implementation serves both NumPy and JAX inputs.</li>
+<li><code>to_jax(*arrays, device=None)</code> is the Phase 1 to 2 boundary:
+  <code>jax.device_put(jnp.asarray(a, dtype=jnp.float64), device)</code>. <code>to_numpy</code> is
+  the Phase 2 to 3 boundary: <code>np.asarray</code>.</li>
+<li>JIT-compiled helpers: <code>cho_factor</code> (plain Cholesky, with a
+  diagonal-relative jitter of <code>1e-12</code> then <code>1e-6</code> only when the plain factor
+  fails or a relative pivot is below <code>1e-12</code>, selected by <code>jax.lax.cond</code>),
+  <code>penalized_cholesky</code>, <code>penalized_solve</code>, <code>numerical_rank</code> (pivoted QR),
+  <code>build_S_lambda</code>, <code>block_log_det_S</code>, <code>stable_log_pseudo_det</code>, and
+  <code>StableLogDetTerms</code>, a pytree carrying host <code>gam.reparam</code> log-determinant
+  terms into the compiled criterion.</li>
+</ul>
+<h3 id="numba">Numba<a class="headerlink" href="#numba" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/smooths/source_arithmetic.py</code></td>
+<td>Source-ordered FMA kernels (disk-cached with <code>cache=True</code>) and libm loops (compiled per process, not cached, because they embed process addresses).</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/cubic.py</code></td>
+<td><code>_compiled_source_cubic_basis</code>: a fused-multiply-add row loop for the cubic basis on macOS arm64.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/utils.py</code></td>
+<td><code>row_tensor</code> and <code>interaction_matrix</code> (row-wise Kronecker products for tensor and random-effect designs), and <code>_slanczos_jit</code>, an older Lanczos with no package caller.</td>
+</tr>
+<tr>
+<td><code>jaxgam/summary/_davies.py</code></td>
+<td>Port of mgcv's <code>src/davies.c</code> for weighted chi-square tail probabilities.</td>
+</tr>
+</tbody>
+</table>
+<p>No kernel uses Numba's <code>parallel=True</code> or fastmath options, or its parallel range loops.</p>
+<h3 id="determinism-across-machines">Determinism across machines<a class="headerlink" href="#determinism-across-machines" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The provider runs on one thread whatever the environment says.</li>
+<li>The Docker test image sets <code>OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1</code>. The
+  embedded R, SciPy and the provider all link threaded OpenBLAS, whose
+  reduction order changes with the core count, so without the pin R reference
+  values would differ between a local image and a CI runner.
+  <code>make test-platform-sensitive-ci</code> passes the same variables; <code>make
+  test-local</code> sets none.</li>
+<li>Apart from the provider pin, jaxgam sets no JAX, XLA, OpenMP or BLAS thread
+  count.</li>
+<li>FMA contraction is chosen per machine (<code>SOURCE_FMA_CONTRACTION</code>), and
+  element-wise transcendental functions use libm, not NumPy's SIMD loops.</li>
+<li>Residual differences remain and are acknowledged in the tests rather than
+  hidden: tests that depend on SIMD maths or the OpenBLAS kernel family carry
+  <code>@pytest.mark.platform_sensitive</code> and run on eight CI replicas, and the
+  discretized-fit tie replays have per-platform reviewed bounds keyed by
+  <code>cpu_platform_class()</code>. <code>tests/r_number_format.py</code> models R's number
+  formatting with the platform's <code>long double</code> width (53, 64 or 113 bits).
+  See <a href="../testing_and_ci/">Testing and CI</a>.</li>
+</ul>
+<h3 id="environment-variables">Environment variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Read by</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>JAXGAM_NO_COMPILATION_CACHE</code></td>
+<td><code>jaxgam/__init__.py</code> at import</td>
+<td>Any non-empty value skips jaxgam's cache configuration.</td>
+</tr>
+<tr>
+<td><code>JAX_COMPILATION_CACHE_DIR</code></td>
+<td><code>jaxgam/__init__.py</code> at import, and JAX</td>
+<td>Cache directory; when set, jaxgam does not set one.</td>
+</tr>
+<tr>
+<td><code>JAXGAM_ALLOW_ACCELERATE</code></td>
+<td><code>jaxgam/platform_guard.py</code></td>
+<td>Exactly <code>1</code> suppresses the Accelerate warning.</td>
+</tr>
+<tr>
+<td><code>OPENBLAS_NUM_THREADS</code>, <code>OMP_NUM_THREADS</code></td>
+<td>OpenBLAS in NumPy, SciPy and R (not the provider)</td>
+<td>Set to 1 in the Docker image and the platform-sensitive target.</td>
+</tr>
+<tr>
+<td><code>JAXGAM_TEST_SHARD</code></td>
+<td><code>tests/conftest.py</code> (<code>SHARD_ENV</code> in <code>tests/sharding.py</code>)</td>
+<td><code>i/N</code> keeps shard i of N; unset or blank runs everything.</td>
+</tr>
+<tr>
+<td><code>COVERAGE_FILE</code></td>
+<td>coverage.py</td>
+<td>Set per shard by <code>make test-cov-shard-ci</code>.</td>
+</tr>
+<tr>
+<td><code>R_HOME</code>, <code>LD_LIBRARY_PATH</code>, <code>UV_PYTHON_PREFERENCE</code></td>
+<td>rpy2, the loader, uv</td>
+<td>Set in the <code>Dockerfile</code>.</td>
+</tr>
+<tr>
+<td><code>JAXGAM_BENCHMARK_TASK_TMPDIR</code>, <code>JAXGAM_SOURCE_COMMIT</code>, <code>JAXGAM_IMAGE_DIGEST</code>, <code>JAXGAM_BENCHMARK_SOURCE_COMMIT</code>, <code>JAXGAM_BENCHMARK_IMAGE_ID</code></td>
+<td>scripts under <code>scripts/</code></td>
+<td>Benchmark isolation and provenance only.</td>
+</tr>
+</tbody>
+</table>
+<p>The package itself reads only the first three. No code reads <code>MGCV_SOURCE</code>.</p>
+<h3 id="devices">Devices<a class="headerlink" href="#devices" title="Permanent link">&para;</a></h3>
+<p><code>GAM(..., device=...)</code> accepts <code>None</code>, <code>"cpu"</code> or <code>"gpu"</code>; anything else is a
+<code>ValueError</code>. <code>_resolve_device</code> in <code>jaxgam/api.py</code> maps <code>"cpu"</code> to
+<code>jax.devices("cpu")[0]</code> and <code>"gpu"</code> to <code>jax.devices("gpu")[0]</code>, raising
+<code>RuntimeError</code> when no GPU backend exists; <code>None</code> leaves placement to JAX's
+default device. The device is passed to <code>to_jax</code>/<code>jax.device_put</code> on the
+dense, streamed and discretized routes. The operator route rejects any device
+other than CPU with <code>NotImplementedError</code>. Provider calls, setup and
+post-estimation always run on the host CPU. No CI job runs on a GPU.</p>
+<h2 id="key-types">Key types<a class="headerlink" href="#key-types" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>classDiagram
+    class _DeclaredProvider {
+        +package str
+        +version str
+        +config str
+        +library_path Path
+        +library_name str
+        +num_threads Callable
+        +get_openblas_config() str
+        +get_lib_dir() str
+        +get_library() str
+    }
+    class _SourceLapack {
+        +module _DeclaredProvider
+        +library CDLL
+        +dsyevr_work object
+        +dgemm object
+        +dptsv object
+        +dgeqp3_work object
+        +dsymv object
+        +ddot object
+        +daxpy object
+        +dgemv object
+        +dnrm2 object
+        +dscal object
+        +dstedc_work object
+        +dgesdd_work object
+        +dpstrf_work object
+    }
+    class SourcePivotedCholesky {
+        +upper ndarray
+        +pivots ndarray
+        +rank int
+    }
+    class SourceConstraintQR {
+        +vector ndarray
+        +qraux float
+        +from_column(column) SourceConstraintQR
+        +qty_rows(rows) ndarray
+        +absorb_rows(rows) ndarray
+        +basis() ndarray
+        +absorb_penalty(S) ndarray
+    }
+    class StableLogDetTerms {
+        +rho0 Array
+        +det Array
+        +det1 Array
+        +det2 Array
+        +det_change Array
+        +log_det(rho_block) Array
+    }
+    _SourceLapack *-- _DeclaredProvider
+    SourceConstraintQR ..&gt; _SourceLapack : dnrm2, dscal, ddot, daxpy</code></pre>
+<p>All are frozen dataclasses. <code>_SourceLapack</code> holds the <code>ctypes</code> function
+handles; <code>source_pivoted_cholesky</code> returns a <code>SourcePivotedCholesky</code> (upper
+factor as R's <code>La_chol</code> returns it, zero-based pivots, DPSTRF's rank).
+<code>StableLogDetTerms</code> (in <code>jaxgam/jax_utils.py</code>) is a registered pytree; its
+<code>log_det</code> returns NaN away from <code>rho0</code> so host terms cannot be used at the
+wrong smoothing parameters.</p>
+<h2 id="rules-and-invariants">Rules and invariants<a class="headerlink" href="#rules-and-invariants" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Float64 everywhere.</strong> JAX code relies on <code>jax_enable_x64</code> from
+  <code>jaxgam/__init__.py</code>; <code>to_jax</code> casts to float64. Do not introduce float32
+  arrays.</li>
+<li><strong>Phase 1 modules import no JAX.</strong> <code>jaxgam/formula/</code>, <code>jaxgam/smooths/</code>,
+  <code>jaxgam/penalties/</code> and <code>jaxgam/data/</code> use NumPy, SciPy and Numba only.
+  Because any <code>import jaxgam.&lt;module&gt;</code> first runs <code>jaxgam/__init__.py</code> (which
+  imports JAX), the tests stub the package in a subprocess and assert that no
+  <code>jax</code> module was loaded: <code>tests/test_data/test_discretize.py</code>,
+  <code>tests/test_data/test_continuous_discretize.py</code>,
+  <code>tests/test_data/test_continuous_frame.py</code>,
+  <code>tests/test_data/test_continuous_request.py</code>,
+  <code>tests/test_formula/test_continuous_setup.py</code>,
+  <code>tests/test_formula/test_continuous_design.py</code>,
+  <code>tests/test_formula/test_continuous_metadata.py</code> and
+  <code>tests/test_formula/test_rank_coordinates.py</code>. There is no such
+  check for <code>smooths/</code> or <code>penalties/</code>.</li>
+<li><strong>JAX kernels are pure and traceable.</strong> Kernels in <code>jaxgam/fitting/</code> branch
+  with <code>jax.lax.cond</code> and loop with <code>jax.lax.while_loop</code>, <code>scan</code> or
+  <code>fori_loop</code>; Python-level iteration, step control and cross-batch reductions
+  live in the host drivers in <code>jaxgam/execution/</code> (and in host parts of
+  <code>jaxgam/fitting/newton.py</code> and <code>jaxgam/fitting/stable_log_det.py</code>). See
+  <a href="../fitting_dense/">The dense fit</a>.</li>
+<li><strong>The provider stays single-threaded and local.</strong> Load it only through
+  <code>_source_lapack()</code>; never import <code>scipy_openblas32</code> (its <code>__init__</code> loads
+  the library globally). <code>tests/test_smooths/test_source_lapack.py</code> checks
+  that the pin leaves NumPy's and SciPy's thread counts unchanged, that
+  outputs are identical with 1 and 8 caller threads, and that a missing or
+  refused thread control raises.</li>
+<li><strong>Provider version and identity are checked at load.</strong> A different wheel
+  version, an unexpected config string or an ILP64 build raises
+  <code>RuntimeError</code>.</li>
+<li><strong>Workspace is bounded before allocation.</strong> <code>source_lanczos</code>,
+  <code>source_pivoted_cholesky</code> and <code>cubic_shrinkage_penalty</code> check
+  <code>*_workspace_bound</code> against <code>available_workspace_bytes</code> and raise
+  <code>MemoryError</code> first.</li>
+<li><strong>The Accelerate warning fires at most once per process</strong> and only on Apple
+  silicon with an Accelerate NumPy or SciPy and a CPU backend
+  (<code>tests/test_platform_guard.py</code>).</li>
+</ul>
+<h2 id="pitfalls">Pitfalls<a class="headerlink" href="#pitfalls" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>JAXGAM_NO_COMPILATION_CACHE=0</code> disables the cache configuration; the
+  variable is tested for being non-empty, not for a true value.</li>
+<li>Setting the cache directory with <code>jax.config.update</code> does not work around
+  jaxgam's default; use <code>JAX_COMPILATION_CACHE_DIR</code> before import.</li>
+<li><code>make test-local</code> runs with your machine's BLAS thread count, so last-bit
+  comparisons with R can differ from CI.</li>
+<li>On an Accelerate SciPy, some eigensolves deliberately bypass the provider;
+  a gauge difference seen only on macOS may come from that routing, not from
+  the provider.</li>
+<li><code>SOURCE_FMA_CONTRACTION</code> follows the machine, so an x86_64 and an arm64 run
+  of the same source test exercise different arithmetic. Native x86-64 CI is
+  the authority for the non-fused path.</li>
+<li><code>device="gpu"</code> moves the compiled fit to the GPU but not the host provider
+  calls; the discretized route copies factor inputs to the host every trial.</li>
+</ul>
+<h2 id="where-to-change-things">Where to change things<a class="headerlink" href="#where-to-change-things" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Bind another LAPACK or BLAS routine:</strong> add the symbol and its <code>argtypes</code>
+  in <code>_source_lapack</code> and a field to <code>_SourceLapack</code> in
+  <code>jaxgam/smooths/source_lapack.py</code>, then a public wrapper that validates
+  inputs, bounds workspace and calls it. Add a pinned-R comparison in
+  <code>tests/test_smooths/test_source_lapack.py</code>.</li>
+<li><strong>Change the provider version:</strong> <code>_PROVIDER_VERSION</code> and <code>_OPENBLAS_PREFIX</code>
+  in <code>jaxgam/smooths/source_lapack.py</code> and the pin in <code>pyproject.toml</code>; the
+  version must match the OpenBLAS that pinned R links.</li>
+<li><strong>Reproduce another mgcv C loop:</strong> add a <code>numba.njit</code> kernel to
+  <code>jaxgam/smooths/source_arithmetic.py</code> using <code>_madd</code>/<code>_msub</code> and
+  <code>SOURCE_FMA_CONTRACTION</code>, with tests in
+  <code>tests/test_smooths/test_source_arithmetic.py</code>.</li>
+<li><strong>Change the compilation cache default or the Accelerate check:</strong>
+  <code>jaxgam/__init__.py</code> and <code>jaxgam/platform_guard.py</code>.</li>
+<li><strong>Add an environment variable:</strong> read it in one place, document it in the
+  table above, and add a test.</li>
+<li><strong>Change device placement:</strong> <code>_resolve_device</code> in <code>jaxgam/api.py</code> and the
+  <code>device=</code> arguments of <code>FittingData.from_setup</code> and the route functions.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,2245 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../streamed/">
+      
+      
+        <link rel="next" href="../operator/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Discretized fitting - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#discretized-fitting" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Discretized fitting
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#a-minimal-fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A minimal fit
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-grid-size-m" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The grid size m
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#families-and-links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Families and links
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixed-or-estimated-smoothing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed or estimated smoothing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#random-effects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Random effects
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#negative-binomial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Negative binomial
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#budgets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Budgets
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Budgets">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#row-selectors-on-disk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Row selectors on disk
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prediction-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prediction policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Other options
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-you-get-back" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What you get back
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What you get back">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#telling-whether-the-fit-converged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Telling whether the fit converged
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related pages
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#a-minimal-fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A minimal fit
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-grid-size-m" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The grid size m
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#families-and-links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Families and links
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixed-or-estimated-smoothing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed or estimated smoothing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#random-effects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Random effects
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#negative-binomial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Negative binomial
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#budgets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Budgets
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Budgets">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#row-selectors-on-disk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Row selectors on disk
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prediction-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prediction policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Other options
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-you-get-back" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What you get back
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What you get back">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#telling-whether-the-fit-converged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Telling whether the fit converged
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related pages
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="discretized-fitting">Discretized fitting<a class="headerlink" href="#discretized-fitting" title="Permanent link">&para;</a></h1>
+<p>The discretized route is jaxgam's counterpart of mgcv's
+<code>bam(discrete=TRUE)</code>. Select it with <code>FitControl(execution="discrete")</code>. It
+fits from a row source and stores each part of the model matrix once per
+distinct covariate value, instead of once per row.</p>
+<p><strong>What discretization does.</strong> Each smooth's covariates are reduced to their
+distinct values. When a covariate has more distinct values than a grid allows
+(1,000 for a smooth of one variable, by default), its values are first
+rounded to an evenly spaced grid over their observed range. The basis is then
+evaluated once per distinct value, and each row keeps only an index into that
+small table. Memory for the model matrix then grows with the number of
+distinct values, not with the number of rows.</p>
+<p>This is a different estimator from the default fit, as <code>bam</code> is from <code>gam</code> in
+mgcv: the covariates may be rounded, and the smoothing parameters are chosen
+by <code>bam</code>'s performance iteration rather than by the nested REML optimization
+of the default fit. Expect close, not identical, results.</p>
+<p><strong>Use it when</strong></p>
+<ul>
+<li>you have many rows, and want what <code>bam(discrete=TRUE)</code> would give you;</li>
+<li>the model needs smooth types the <a href="../streamed/">streamed route</a> does not
+  accept: thin plate, cyclic, Gaussian process, random-effect and tensor
+  smooths, <code>by=</code> variables and factor terms all work here.</li>
+</ul>
+<p><strong>Do not use it when</strong></p>
+<ul>
+<li>you need the exact default-fit estimate, <code>summary()</code> or <code>plot()</code>: use the
+  default fit;</li>
+<li>your random effects have very many levels and dominate the model: see the
+  <a href="../operator/">operator route</a>.</li>
+</ul>
+<p>The setup block makes the data and the row sources used throughout the page.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">tempfile</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="kn">from</span><span class="w"> </span><span class="nn">jaxgam</span><span class="w"> </span><span class="kn">import</span> <span class="n">GAM</span><span class="p">,</span> <span class="n">ContinuousDiscretizationControl</span><span class="p">,</span> <span class="n">FitControl</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="kn">from</span><span class="w"> </span><span class="nn">jaxgam.data</span><span class="w"> </span><span class="kn">import</span> <span class="n">DataFrameRowSource</span><span class="p">,</span> <span class="n">DiscretizationBudget</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="kn">from</span><span class="w"> </span><span class="nn">jaxgam.families</span><span class="w"> </span><span class="kn">import</span> <span class="n">NegativeBinomial</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="n">n</span> <span class="o">=</span> <span class="mi">20_000</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="n">x</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="n">z</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="n">g</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">integers</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="n">eta</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">x</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">z</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span> <span class="o">+</span> <span class="n">rng</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">scale</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="mi">20</span><span class="p">)[</span><span class="n">g</span><span class="p">]</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="n">data</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="p">{</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>        <span class="s2">"x"</span><span class="p">:</span> <span class="n">x</span><span class="p">,</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>        <span class="s2">"z"</span><span class="p">:</span> <span class="n">z</span><span class="p">,</span>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>        <span class="s2">"g"</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Categorical</span><span class="p">(</span><span class="n">g</span><span class="p">),</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>        <span class="s2">"y"</span><span class="p">:</span> <span class="n">eta</span> <span class="o">+</span> <span class="n">rng</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">scale</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="n">n</span><span class="p">),</span>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>        <span class="s2">"count"</span><span class="p">:</span> <span class="n">rng</span><span class="o">.</span><span class="n">poisson</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="mf">0.5</span> <span class="o">*</span> <span class="n">eta</span><span class="p">)),</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>    <span class="p">}</span>
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="p">)</span>
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="n">source</span> <span class="o">=</span> <span class="n">DataFrameRowSource</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">response</span><span class="o">=</span><span class="s2">"y"</span><span class="p">)</span>
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="n">counts</span> <span class="o">=</span> <span class="n">DataFrameRowSource</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">response</span><span class="o">=</span><span class="s2">"count"</span><span class="p">)</span>
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="n">newdata</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">"x"</span><span class="p">:</span> <span class="p">[</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">],</span> <span class="s2">"z"</span><span class="p">:</span> <span class="p">[</span><span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">],</span> <span class="s2">"g"</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Categorical</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">])})</span>
+</code></pre></div>
+<p>See <a href="../row_sources/">Row sources</a> for the built-in sources, prior weights and
+offsets.</p>
+<h2 id="a-minimal-fit">A minimal fit<a class="headerlink" href="#a-minimal-fit" title="Permanent link">&para;</a></h2>
+<p>A discretized fit needs four things:</p>
+<ol>
+<li>a row source as the data;</li>
+<li>an explicit <code>ContinuousDiscretizationControl</code> (the discretization policy);</li>
+<li>either <code>sp=</code> or <code>smoothing_strategy="working_model_reml"</code>;</li>
+<li><code>result="prediction"</code>.</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">control</span> <span class="o">=</span> <span class="n">FitControl</span><span class="p">(</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="n">execution</span><span class="o">=</span><span class="s2">"discrete"</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">discretization</span><span class="o">=</span><span class="n">ContinuousDiscretizationControl</span><span class="p">(),</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">smoothing_strategy</span><span class="o">=</span><span class="s2">"working_model_reml"</span><span class="p">,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">)</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">fit</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x, bs='cr') + s(z, bs='cr')"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">control</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="p">)</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">execution_route</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">converged</span><span class="p">)</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="c1"># discrete True</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">convergence_info</span><span class="p">)</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="c1"># Gaussian working-model REML converged after 12 iterations and 11 proposals</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">newdata</span><span class="p">))</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="c1"># [0.63771438 0.05804595]</span>
+</code></pre></div>
+<p>Leaving out any of the four raises an error:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">policy</span> <span class="o">=</span> <span class="n">ContinuousDiscretizationControl</span><span class="p">()</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">attempts</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="s2">"no policy"</span><span class="p">:</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">FitControl</span><span class="p">(</span><span class="n">execution</span><span class="o">=</span><span class="s2">"discrete"</span><span class="p">),</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="s2">"no strategy and no sp"</span><span class="p">:</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">GAM</span><span class="p">(</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>        <span class="s2">"y ~ s(x, bs='cr')"</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>        <span class="n">control</span><span class="o">=</span><span class="n">FitControl</span><span class="p">(</span><span class="n">execution</span><span class="o">=</span><span class="s2">"discrete"</span><span class="p">,</span> <span class="n">discretization</span><span class="o">=</span><span class="n">policy</span><span class="p">),</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">),</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    <span class="s2">"default result"</span><span class="p">:</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x, bs='cr')"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">control</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">source</span><span class="p">),</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="s2">"DataFrame data"</span><span class="p">:</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x, bs='cr')"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">control</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>        <span class="n">data</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="p">),</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="p">}</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">attempt</span> <span class="ow">in</span> <span class="n">attempts</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>    <span class="k">try</span><span class="p">:</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>        <span class="n">attempt</span><span class="p">()</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>    <span class="k">except</span> <span class="p">(</span><span class="ne">ValueError</span><span class="p">,</span> <span class="ne">TypeError</span><span class="p">,</span> <span class="ne">NotImplementedError</span><span class="p">)</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">error</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">error</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>no policy: ValueError: execution='discrete' requires an explicit discretization policy.
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>no strategy and no sp: NotImplementedError: Discrete fitting requires explicit fixed sp or opt-in smoothing_strategy='working_model_reml'.
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>default result: NotImplementedError: Discrete fitting currently supports result='prediction' only; full and inference results retain unsupported row diagnostics.
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>DataFrame data: TypeError: FitControl(execution='discrete') requires a replayable RowSource.
+</code></pre></div>
+<p>Passing <code>fit(weights=...)</code> or <code>fit(offset=...)</code> raises <code>ValueError: weights
+and offset must be owned by the RowSource for execution='discrete'; do not
+pass separate arrays.</code></p>
+<h2 id="the-grid-size-m">The grid size <code>m</code><a class="headerlink" href="#the-grid-size-m" title="Permanent link">&para;</a></h2>
+<p><code>ContinuousDiscretizationControl(m=...)</code> sets the grid. The covariates of one
+<code>s()</code> term are discretized together as a group; each <code>te()</code> or <code>ti()</code> margin
+and each <code>by</code> variable is its own group.</p>
+<ul>
+<li><code>m=None</code> (the default): 1,000 grid points per variable for a group of one
+  variable, 100 for two, 25 for three or more. These are mgcv's defaults.</li>
+<li>an integer: used as given for a group of one variable; for a group of <code>d</code>
+  variables, <code>round(m ** (1 / d)) + 1</code> points per variable.</li>
+<li>a tuple: one value per smooth term, in formula order.</li>
+</ul>
+<p>A group is rounded only when it has more distinct rows than its grid can
+hold. Otherwise its values are kept exactly. On small data nothing is
+rounded, and a fixed-<code>sp</code> fit then matches the default fit:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">small</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:</span><span class="mi">800</span><span class="p">]</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">fixed</span> <span class="o">=</span> <span class="n">FitControl</span><span class="p">(</span><span class="n">execution</span><span class="o">=</span><span class="s2">"discrete"</span><span class="p">,</span> <span class="n">discretization</span><span class="o">=</span><span class="n">policy</span><span class="p">)</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">discrete_fit</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x, bs='cr') + s(z, bs='cr')"</span><span class="p">,</span> <span class="n">sp</span><span class="o">=</span><span class="p">[</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">],</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>                   <span class="n">control</span><span class="o">=</span><span class="n">fixed</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="n">DataFrameRowSource</span><span class="p">(</span><span class="n">small</span><span class="p">,</span> <span class="n">response</span><span class="o">=</span><span class="s2">"y"</span><span class="p">),</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">dense_fit</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x, bs='cr') + s(z, bs='cr')"</span><span class="p">,</span> <span class="n">sp</span><span class="o">=</span><span class="p">[</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">])</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">small</span><span class="p">)</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="nb">print</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">discrete_fit</span><span class="o">.</span><span class="n">coefficients</span> <span class="o">-</span> <span class="n">dense_fit</span><span class="o">.</span><span class="n">coefficients</span><span class="p">))</span> <span class="o">&lt;</span> <span class="mf">1e-12</span><span class="p">)</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># True</span>
+</code></pre></div>
+<p><code>fit.discretization.groups</code> records each group's decision:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">for</span> <span class="n">group</span> <span class="ow">in</span> <span class="n">fit</span><span class="o">.</span><span class="n">discretization</span><span class="o">.</span><span class="n">groups</span><span class="p">:</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">group</span><span class="o">.</span><span class="n">variables</span><span class="p">,</span> <span class="n">group</span><span class="o">.</span><span class="n">points_per_metric</span><span class="p">,</span> <span class="n">group</span><span class="o">.</span><span class="n">discretized</span><span class="p">,</span> <span class="n">group</span><span class="o">.</span><span class="n">n_unique</span><span class="p">)</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1"># ('x',) 1000 True 1000</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># ('z',) 1000 True 1000</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># ('y',) 1000 True 808</span>
+</code></pre></div>
+<p>Here both covariates had more than 1,000 distinct values, so each was rounded
+to its 1,000-point grid. The list also has a group for the response and one
+for each parametric variable, which the setup frame compresses as mgcv's does.</p>
+<p>Because the basis is built on the distinct values, an <code>m</code> smaller than a
+smooth's <code>k</code> fails, for example <code>ValueError: Basis dimension k=10 exceeds
+number of unique data values (5). Reduce k or add more distinct data.</code> for
+<code>m=5</code> and <code>k=10</code>.</p>
+<h2 id="families-and-links">Families and links<a class="headerlink" href="#families-and-links" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th>Links</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gaussian</td>
+<td>identity</td>
+</tr>
+<tr>
+<td>Poisson</td>
+<td>log, identity, sqrt</td>
+</tr>
+<tr>
+<td>Binomial</td>
+<td>logit, probit, cloglog, log</td>
+</tr>
+<tr>
+<td>Gamma</td>
+<td>inverse, identity, log</td>
+</tr>
+<tr>
+<td>Negative binomial</td>
+<td>log, identity, sqrt</td>
+</tr>
+</tbody>
+</table>
+<p>Gaussian identity models read the source twice; smoothing selection then
+works on the stored statistics without further scans. The other families use
+<code>bam</code>'s performance iteration (mgcv's <code>bgam.fitd</code>): each iteration reads the
+source once, forms the working weights and working response, and takes one
+smoothing-parameter step. The Gamma scale is estimated; Poisson and Binomial
+use a scale of one. Anything else raises, for example <code>NotImplementedError:
+Discrete fitting supports Gaussian identity, the Poisson (log, identity,
+sqrt), Binomial (logit, probit, cloglog, log) and Gamma (inverse, identity,
+log) families, and the negative binomial (log, identity, sqrt); got
+Gaussian(link=LogLink).</code></p>
+<h2 id="fixed-or-estimated-smoothing">Fixed or estimated smoothing<a class="headerlink" href="#fixed-or-estimated-smoothing" title="Permanent link">&para;</a></h2>
+<p>An explicit <code>sp=</code> always gives a fixed-smoothing fit (<code>lambda_strategy</code> is
+<code>"fixed"</code>), whatever <code>smoothing_strategy</code> says. Without <code>sp</code>,
+<code>smoothing_strategy="working_model_reml"</code> selects the smoothing parameters by
+<code>bam</code>'s method: one Newton proposal on each iteration's working model
+(mgcv's <code>Sl.fitChol</code>), until the penalized deviance stops changing.</p>
+<p><code>optimizer="efs"</code> does not apply here: without <code>sp</code> it raises
+<code>NotImplementedError: optimizer='efs' does not apply to discrete fitting;
+smoothing_strategy='working_model_reml' selects its smoothing parameters.</code>
+With <code>sp</code> it has no effect.</p>
+<div class="admonition note">
+<p class="admonition-title">Compare fits by deviance and fitted values</p>
+<p>With many smooths the REML criterion is often flat in some direction
+(for example when one smoothing parameter heads towards a very large
+value), and the point where the search stops is then not sharply
+determined. This is true of <code>bam</code> too: the tests record cases where
+mgcv's own selected smoothing parameters move under input changes at
+rounding level. Compare the deviance and the fitted values, not the
+smoothing parameters.</p>
+</div>
+<p>The discretized fit above against the default fit on the same rows:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">dense</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x, bs='cr') + s(z, bs='cr')"</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">deviance</span><span class="p">,</span> <span class="n">dense</span><span class="o">.</span><span class="n">deviance</span><span class="p">)</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nb">print</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">data</span><span class="p">)</span> <span class="o">-</span> <span class="n">dense</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">data</span><span class="p">))))</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">smoothing_params</span><span class="p">,</span> <span class="n">dense</span><span class="o">.</span><span class="n">smoothing_params</span><span class="p">)</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># 7414.301445351851 7414.480596587477</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1"># 0.0011857272687984428</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1"># [  53.3540798 6202.072597 ] [  52.70551092 6139.62446449]</span>
+</code></pre></div>
+<h2 id="random-effects">Random effects<a class="headerlink" href="#random-effects" title="Permanent link">&para;</a></h2>
+<p>Factors are not inferred from the data type on this route. Every factor (a
+parametric factor, a <code>by</code> factor, or the grouping variable of <code>bs="re"</code>) must
+be listed in <code>factor_names</code>; any other column is treated as a numeric
+covariate:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">with_factor</span> <span class="o">=</span> <span class="n">FitControl</span><span class="p">(</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="n">execution</span><span class="o">=</span><span class="s2">"discrete"</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="n">discretization</span><span class="o">=</span><span class="n">ContinuousDiscretizationControl</span><span class="p">(</span><span class="n">factor_names</span><span class="o">=</span><span class="p">(</span><span class="s2">"g"</span><span class="p">,)),</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="n">smoothing_strategy</span><span class="o">=</span><span class="s2">"working_model_reml"</span><span class="p">,</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="p">)</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="n">fit_re</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x, bs='cr') + s(g, bs='re')"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">with_factor</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="p">)</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit_re</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="n">fit_re</span><span class="o">.</span><span class="n">smoothing_params</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="c1"># True (2,)</span>
+</code></pre></div>
+<p>Without the declaration a categorical column raises <code>TypeError: Metric column
+'g' must be real numeric data, got dtype category. Variables not listed in
+factor_names are discretized as metric. ...</code>. An integer-coded grouping
+column that is not declared is silently treated as one numeric covariate.
+List only columns the formula uses: a name it does not use raises
+<code>ValueError: factor_names must be distinct referenced variables</code>.</p>
+<p>A random-effect level that is missing from the prediction data or was not
+seen in training contributes zero to the prediction (where mgcv's
+<code>predict.bam</code> gives <code>NA</code> for a missing group). A multi-variable random effect
+such as <code>s(x, g, bs="re")</code> is refused (see Limits).</p>
+<h2 id="negative-binomial">Negative binomial<a class="headerlink" href="#negative-binomial" title="Permanent link">&para;</a></h2>
+<p>With <code>family="nb"</code> theta is estimated by mgcv's <code>estimate.theta</code> at every
+iteration from the second. Each estimate reads the source several times, so
+the fit makes many more scans. <code>NegativeBinomial(theta, fixed=True)</code> holds
+theta:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">estimated</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"count ~ s(x, bs='cr') + s(z, bs='cr')"</span><span class="p">,</span> <span class="n">family</span><span class="o">=</span><span class="s2">"nb"</span><span class="p">,</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>                <span class="n">control</span><span class="o">=</span><span class="n">control</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">counts</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">held</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"count ~ s(x, bs='cr') + s(z, bs='cr')"</span><span class="p">,</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>           <span class="n">family</span><span class="o">=</span><span class="n">NegativeBinomial</span><span class="p">(</span><span class="mf">3.0</span><span class="p">,</span> <span class="n">fixed</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>           <span class="n">control</span><span class="o">=</span><span class="n">control</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">counts</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="nb">print</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">estimated</span><span class="o">.</span><span class="n">theta</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">estimated</span><span class="o">.</span><span class="n">source_scans</span><span class="p">)</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="nb">print</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">held</span><span class="o">.</span><span class="n">theta</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">held</span><span class="o">.</span><span class="n">source_scans</span><span class="p">)</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="c1"># 13.45 45</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="c1"># 3.0 10</span>
+</code></pre></div>
+<h2 id="budgets">Budgets<a class="headerlink" href="#budgets" title="Permanent link">&para;</a></h2>
+<p>Two kinds of limit apply. The <code>DiscretizationBudget</code> (passed as
+<code>ContinuousDiscretizationControl(budget=...)</code>) bounds the setup pass that
+builds the compact tables. <code>FitControl.memory_budget_bytes</code> bounds the fit.
+Each is a check made before allocation, against arrays the code knows it will
+need, and each raises <code>MemoryError</code> naming the step that did not fit.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Message names</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DiscretizationBudget.max_table_bytes</code></td>
+<td>64 MiB</td>
+<td>"table", "lookup", "basis setup", "predictor workspace" or "metadata"</td>
+</tr>
+<tr>
+<td><code>DiscretizationBudget.max_selector_bytes</code></td>
+<td>256 MiB</td>
+<td>"selector"</td>
+</tr>
+<tr>
+<td><code>DiscretizationBudget.max_batch_bytes</code></td>
+<td>64 MiB</td>
+<td>"batch workspace" (grows with <code>FitControl.batch_rows</code>)</td>
+</tr>
+<tr>
+<td><code>DiscretizationBudget.max_unique_rows</code></td>
+<td>1,000,000</td>
+<td>"uniquecombs rows exceed row cap" (the message reports bytes, not rows)</td>
+</tr>
+<tr>
+<td><code>FitControl.memory_budget_bytes</code></td>
+<td>512 MiB</td>
+<td>"Discrete fit workspace requires ..."</td>
+</tr>
+</tbody>
+</table>
+<p>The default table budget fits the cubic regression splines above but not, at
+this data size, the default thin plate smooth <code>s(x)</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">try</span><span class="p">:</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x)"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">control</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">except</span> <span class="ne">MemoryError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">error</span><span class="p">)</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># compact smooth predictor workspace exceeds budget: requires 89472425 bytes,</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="c1"># budget is 67108864.</span>
+</code></pre></div>
+<p>The byte count varies slightly between runs. Raise the table budget, or use a
+coarser grid:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">larger_table</span> <span class="o">=</span> <span class="n">ContinuousDiscretizationControl</span><span class="p">(</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="n">budget</span><span class="o">=</span><span class="n">DiscretizationBudget</span><span class="p">(</span><span class="n">max_table_bytes</span><span class="o">=</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">)</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="p">)</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">fit_tp</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x)"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">FitControl</span><span class="p">(</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="n">execution</span><span class="o">=</span><span class="s2">"discrete"</span><span class="p">,</span> <span class="n">discretization</span><span class="o">=</span><span class="n">larger_table</span><span class="p">,</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="n">smoothing_strategy</span><span class="o">=</span><span class="s2">"working_model_reml"</span><span class="p">,</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="p">))</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="n">coarse</span> <span class="o">=</span> <span class="n">ContinuousDiscretizationControl</span><span class="p">(</span><span class="n">m</span><span class="o">=</span><span class="mi">200</span><span class="p">)</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="n">fit_tp_coarse</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x)"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">FitControl</span><span class="p">(</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>    <span class="n">execution</span><span class="o">=</span><span class="s2">"discrete"</span><span class="p">,</span> <span class="n">discretization</span><span class="o">=</span><span class="n">coarse</span><span class="p">,</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>    <span class="n">smoothing_strategy</span><span class="o">=</span><span class="s2">"working_model_reml"</span><span class="p">,</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="p">))</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit_tp</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="n">fit_tp_coarse</span><span class="o">.</span><span class="n">converged</span><span class="p">)</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="c1"># True True</span>
+</code></pre></div>
+<p>When a "batch workspace" message appears, lower <code>FitControl.batch_rows</code> or
+raise <code>max_batch_bytes</code>. When the fit itself does not fit:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">try</span><span class="p">:</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x, bs='cr') + s(z, bs='cr')"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">FitControl</span><span class="p">(</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>        <span class="n">execution</span><span class="o">=</span><span class="s2">"discrete"</span><span class="p">,</span> <span class="n">discretization</span><span class="o">=</span><span class="n">policy</span><span class="p">,</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>        <span class="n">smoothing_strategy</span><span class="o">=</span><span class="s2">"working_model_reml"</span><span class="p">,</span> <span class="n">memory_budget_bytes</span><span class="o">=</span><span class="mi">10_000_000</span><span class="p">,</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="p">))</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="k">except</span> <span class="ne">MemoryError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">error</span><span class="p">)</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="c1"># Discrete fit workspace requires 26306232 bytes, exceeding</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="c1"># FitControl.memory_budget_bytes=10000000.</span>
+</code></pre></div>
+<p><code>fit.fit_peak_bytes</code> is the figure this check uses, so a successful fit tells
+you how much it needed.</p>
+<h3 id="row-selectors-on-disk">Row selectors on disk<a class="headerlink" href="#row-selectors-on-disk" title="Permanent link">&para;</a></h3>
+<p>During setup each row's index into the compact tables is held in memory,
+charged to <code>max_selector_bytes</code>. <code>selector_memmap_directory</code> writes these
+selectors to files in an existing directory instead. The files
+(<code>compact-selector-{group}.dat</code>) are removed when the fit ends, and the
+directory must not already contain them:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">with</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">TemporaryDirectory</span><span class="p">()</span> <span class="k">as</span> <span class="n">directory</span><span class="p">:</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="n">on_disk</span> <span class="o">=</span> <span class="n">ContinuousDiscretizationControl</span><span class="p">(</span><span class="n">selector_memmap_directory</span><span class="o">=</span><span class="n">directory</span><span class="p">)</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="n">fit_disk</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x, bs='cr') + s(z, bs='cr')"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">FitControl</span><span class="p">(</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>        <span class="n">execution</span><span class="o">=</span><span class="s2">"discrete"</span><span class="p">,</span> <span class="n">discretization</span><span class="o">=</span><span class="n">on_disk</span><span class="p">,</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>        <span class="n">smoothing_strategy</span><span class="o">=</span><span class="s2">"working_model_reml"</span><span class="p">,</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>    <span class="p">))</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">fit_disk</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">directory</span><span class="p">))</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="c1"># True []</span>
+</code></pre></div>
+<h2 id="prediction-policy">Prediction policy<a class="headerlink" href="#prediction-policy" title="Permanent link">&para;</a></h2>
+<p><code>ContinuousDiscretizationControl(prediction_policy=...)</code> sets how new data are
+predicted. Both reuse the fitted knots and constraints.</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>"continuous_frozen_basis"</code> (default)</td>
+<td>Evaluates each new value exactly, as <code>predict.gam</code> does. Rows are independent, so a prediction never depends on the rest of the request or on batching.</td>
+</tr>
+<tr>
+<td><code>"mgcv_predict_bamd"</code></td>
+<td>Follows mgcv's <code>predict.bamd</code>: the whole request is first discretized on the default (<code>m=None</code>) grid, then evaluated. Results then depend on what else is in the request, as in mgcv, but not on how it is batched.</td>
+</tr>
+</tbody>
+</table>
+<p>The difference shows when a request has more distinct values than the grid:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">bamd</span> <span class="o">=</span> <span class="n">FitControl</span><span class="p">(</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>    <span class="n">execution</span><span class="o">=</span><span class="s2">"discrete"</span><span class="p">,</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>    <span class="n">discretization</span><span class="o">=</span><span class="n">ContinuousDiscretizationControl</span><span class="p">(</span><span class="n">prediction_policy</span><span class="o">=</span><span class="s2">"mgcv_predict_bamd"</span><span class="p">),</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>    <span class="n">smoothing_strategy</span><span class="o">=</span><span class="s2">"working_model_reml"</span><span class="p">,</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="p">)</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="n">fit_bamd</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x, bs='cr') + s(z, bs='cr')"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">bamd</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>    <span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="p">)</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">data</span><span class="p">)[:</span><span class="mi">2</span><span class="p">],</span> <span class="n">fit</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:</span><span class="mi">5</span><span class="p">])[:</span><span class="mi">2</span><span class="p">])</span>
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="c1"># [1.13731702 1.16322397] [1.13731702 1.16322397]</span>
+<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit_bamd</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">data</span><span class="p">)[:</span><span class="mi">2</span><span class="p">],</span> <span class="n">fit_bamd</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:</span><span class="mi">5</span><span class="p">])[:</span><span class="mi">2</span><span class="p">])</span>
+<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a><span class="c1"># [1.13767284 1.16329154] [1.13731702 1.16322397]</span>
+</code></pre></div>
+<p>With the whole training data as the request, <code>mgcv_predict_bamd</code> rounds the
+20,000 values to the grid first; five rows are evaluated exactly.</p>
+<p>A model without smooths has nothing to discretize; its result records
+<code>"continuous_frozen_basis"</code>.</p>
+<h2 id="other-options">Other options<a class="headerlink" href="#other-options" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ContinuousDiscretizationControl.factor_names</code></td>
+<td><code>()</code></td>
+<td>Columns to treat as factors.</td>
+</tr>
+<tr>
+<td><code>ContinuousDiscretizationControl.seed</code></td>
+<td><code>8547</code></td>
+<td>Seed of the shuffle that mgcv applies to the compact rows (a signed 32-bit integer).</td>
+</tr>
+<tr>
+<td><code>ContinuousDiscretizationControl.pair_policy</code></td>
+<td><code>"histogram_or_direct"</code></td>
+<td>How a pair of compact blocks is reduced: by a weight histogram when that is no larger than gathering rows, or always by gathering rows (<code>"direct_only"</code>).</td>
+</tr>
+<tr>
+<td><code>FitControl.working_model_max_iterations</code></td>
+<td><code>200</code></td>
+<td>Limit of the performance iteration.</td>
+</tr>
+<tr>
+<td><code>FitControl.working_model_epsilon</code></td>
+<td><code>1e-7</code></td>
+<td>Relative change of the penalized deviance that stops it.</td>
+</tr>
+<tr>
+<td><code>FitControl.uncertainty</code></td>
+<td><code>"none"</code></td>
+<td><code>"fisher"</code> or <code>"covariance"</code> keeps what <code>predict(se_fit=True)</code> needs.</td>
+</tr>
+<tr>
+<td><code>FitControl.batch_rows</code></td>
+<td><code>65_536</code></td>
+<td>Rows per source scan.</td>
+</tr>
+</tbody>
+</table>
+<p>Field-level detail is in the <a href="../../api/#fit-control">API reference</a>.</p>
+<h2 id="what-you-get-back">What you get back<a class="headerlink" href="#what-you-get-back" title="Permanent link">&para;</a></h2>
+<p>A <code>GAMPredictionResult</code> (see the <a href="../../api/#gampredictionresult">API reference</a>),
+with no <code>summary()</code> or <code>plot()</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Meaning on this route</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>converged</code>, <code>n_iter</code>, <code>convergence_info</code></td>
+<td>Whether the iteration met its stopping test, and how it stopped.</td>
+</tr>
+<tr>
+<td><code>execution_route</code></td>
+<td><code>"discrete"</code>.</td>
+</tr>
+<tr>
+<td><code>smoothing_strategy</code>, <code>lambda_strategy</code></td>
+<td><code>"fixed"</code> or <code>"working_model_reml"</code>.</td>
+</tr>
+<tr>
+<td><code>smoothing_params</code>, <code>deviance</code>, <code>scale</code>, <code>edf_total</code></td>
+<td>The fitted values. <code>edf_total</code> is the total effective degrees of freedom.</td>
+</tr>
+<tr>
+<td><code>theta</code></td>
+<td>The negative binomial theta (fixed or estimated), else <code>None</code>.</td>
+</tr>
+<tr>
+<td><code>score</code></td>
+<td><code>bam</code>'s criterion at the stopping point.</td>
+</tr>
+<tr>
+<td><code>source_scans</code>, <code>batches_scanned</code></td>
+<td>Scans made by the fit, not by the setup pass.</td>
+</tr>
+<tr>
+<td><code>known_workspace_bytes</code></td>
+<td>The compact design and solver workspace.</td>
+</tr>
+<tr>
+<td><code>fit_peak_bytes</code>, <code>fit_memory_budget_bytes</code></td>
+<td>The figure checked against <code>memory_budget_bytes</code>, and that budget.</td>
+</tr>
+<tr>
+<td><code>working_model_proposal_evaluations</code></td>
+<td>Smoothing-parameter proposals tried (0 for a fixed-<code>sp</code> Gaussian fit).</td>
+</tr>
+<tr>
+<td><code>prediction_policy</code>, <code>discretization</code></td>
+<td>The prediction policy and the per-group grid record.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="telling-whether-the-fit-converged">Telling whether the fit converged<a class="headerlink" href="#telling-whether-the-fit-converged" title="Permanent link">&para;</a></h3>
+<p>A fixed-<code>sp</code> Gaussian fit is a direct solve and always reports
+<code>converged=True</code>; its <code>n_iter</code> counts the scale iterations. Every other fit
+stops when, from the third iteration, the relative change of the penalized
+deviance is below <code>working_model_epsilon</code> (and, when a scale is estimated,
+so is the change of the log scale). At <code>working_model_max_iterations</code> the fit
+is still returned, with <code>converged=False</code> and a <code>RuntimeWarning</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">short</span> <span class="o">=</span> <span class="n">FitControl</span><span class="p">(</span><span class="n">execution</span><span class="o">=</span><span class="s2">"discrete"</span><span class="p">,</span> <span class="n">discretization</span><span class="o">=</span><span class="n">policy</span><span class="p">,</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>                   <span class="n">smoothing_strategy</span><span class="o">=</span><span class="s2">"working_model_reml"</span><span class="p">,</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>                   <span class="n">working_model_max_iterations</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="k">with</span> <span class="n">warnings</span><span class="o">.</span><span class="n">catch_warnings</span><span class="p">(</span><span class="n">record</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">caught</span><span class="p">:</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    <span class="n">warnings</span><span class="o">.</span><span class="n">simplefilter</span><span class="p">(</span><span class="s2">"always"</span><span class="p">)</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>    <span class="n">fit_short</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">"y ~ s(x, bs='cr') + s(z, bs='cr')"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">short</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>        <span class="n">source</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">)</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="nb">print</span><span class="p">(</span><span class="n">fit_short</span><span class="o">.</span><span class="n">converged</span><span class="p">,</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">w</span><span class="o">.</span><span class="n">message</span><span class="p">)</span> <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="n">caught</span><span class="p">])</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="c1"># False ['Gaussian working-model REML did not converge within its iteration limit.']</span>
+</code></pre></div>
+<p>For the other families the warning reads <code>{family} discrete performance
+iteration did not converge within its iteration limit.</code></p>
+<h2 id="limits">Limits<a class="headerlink" href="#limits" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Not accepted</th>
+<th>Error</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>linear_solver="qr"</code></td>
+<td><code>NotImplementedError: linear_solver='qr' currently requires execution='stream'.</code></td>
+</tr>
+<tr>
+<td><code>linear_solver="pcg"</code></td>
+<td><code>NotImplementedError: linear_solver='pcg' currently requires execution='operator'.</code></td>
+</tr>
+<tr>
+<td>A multi-variable random effect, for example <code>s(x, g, bs='re')</code></td>
+<td><code>NotImplementedError: s(x,g, bs='re') is not supported by execution='discrete': mgcv's bam discretizes each variable of a multi-variable random effect as a separate tensor margin, which the compact setup does not reproduce.</code></td>
+</tr>
+<tr>
+<td>Smooths that group shared variables differently, for example <code>s(x, z) + s(x)</code></td>
+<td><code>ValueError: continuous discretization has incompatible nesting</code></td>
+</tr>
+<tr>
+<td>A non-finite covariate value</td>
+<td><code>ValueError: Metric column 'x' contains non-finite values</code></td>
+</tr>
+<tr>
+<td><code>method</code> other than <code>"REML"</code> (including <code>"fREML"</code>)</td>
+<td><code>ValueError</code> when the <code>GAM</code> is created</td>
+</tr>
+</tbody>
+</table>
+<p>Other known rough edges:</p>
+<ul>
+<li><code>gaussian_compression=True</code> is not used here; the fit runs unchanged and
+  <code>execution_fallback_reason</code> reads <code>Gaussian QR compression requires
+  execution 'dense' or 'stream'.</code></li>
+<li>As in mgcv, the performance iteration does not check that the mean stays in
+  the family's range, and its second iteration has no step control. A first
+  step that leaves the range raises <code>FloatingPointError: Non-finite
+  working-model deviance at iteration 2.</code>, where <code>bam</code> also stops.</li>
+<li>A fixed-<code>sp</code> Gaussian fit whose coefficient system is not positive definite
+  (an unidentifiable model) raises <code>LinAlgError</code>: rank-deficient fitting is
+  not available for that fit.</li>
+<li>A row source you write yourself that does not declare
+  <code>has_explicit_weights</code> and <code>has_explicit_offset</code> is treated as supplying
+  both, as <code>bam</code> treats supplied <code>weights=</code> and <code>offset=</code> arguments. That
+  changes mgcv's seeded padding of the compact rows, and so the fitted
+  numbers slightly. See <a href="../row_sources/">Row sources</a>.</li>
+</ul>
+<h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../choosing_a_route/">Choosing a route</a></li>
+<li><a href="../row_sources/">Row sources</a></li>
+<li><a href="../prediction_results/">Prediction results</a></li>
+<li><a href="../memory_and_performance/">Memory and performance</a></li>
+<li><a href="../../api/#fitting-routes">Fitting routes in the API reference</a></li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

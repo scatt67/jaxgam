@@ -1,0 +1,2143 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Jaxgam scaling implementation plan - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Jaxgam scaling implementation plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/choosing_a_route/" class="md-tabs__link">
+          
+  
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/choosing_a_route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a route
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/smoothing_selection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoothing parameter selection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/row_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streamed fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/discretized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Discretized fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator fitting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/prediction_results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prediction results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/memory_and_performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fit_lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle of a fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data_sources/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Row sources and discretization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_dense/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The dense fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_streamed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The streamed fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_discrete/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The discretized fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fitting_operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The operator fit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/results_and_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results and prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/families_links_smooths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Families, links and smooths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/testing_and_ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/numerics_and_platform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerics and platform
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+  <h1>Jaxgam scaling implementation plan</h1>
+
+<p><strong>JaxGAM: implementation plan for large datasets and large coefficient counts</strong></p>
+<blockquote>
+<p><strong>Status (2026-11-20): delivered.</strong> The work planned here was built and merged
+into <code>main</code> as pull request #87: the streamed route, the Gaussian QR
+compression, the discretized route (the analogue of <code>bam(discrete=TRUE)</code>),
+the operator route with bulk uncertainty, and the acceptance harness
+(<code>scripts/benchmark_scaling.py</code>). The text below is the plan as written and
+amended during the work. It is kept as a record and is not maintained: its
+PR numbers are the plan's own, it refers to working documents that are no
+longer in the repository, and its module paths are those of the flat
+<code>fitting/</code> and <code>execution/</code> packages before they were divided into route
+sub-packages. For what was built, and where it is now, see the
+<a href="../../architecture/">architecture pages</a>; for how to use it see the
+<a href="../../guide/choosing_a_route/">user guide</a>.</p>
+<p>Known limits at the time of the merge: the Gaussian QR route can stop short
+of the REML optimum above 50 penalties (it reports <code>converged=False</code>); exact
+streamed REML did not converge on some many-smooth and near-Poisson
+negative binomial cases and reports that; mgcv's rank test with column drop
+for structurally rank-deficient dense models is not ported.</p>
+</blockquote>
+<p>Target: <a href="https://github.com/scatt67/jaxgam/tree/c1a31346188186bbd2fe67eea8d0d51ba6c95d79">scatt67/jaxgam at c1a31346188186bbd2fe67eea8d0d51ba6c95d79</a>. Prepared 2026-09-05; audited against the working repository and local mgcv source on 2026-09-06.</p>
+<p>This is an implementation roadmap, not a claim that every described backend is implemented. The original audit below describes the September 6 baseline; the delivery log that accompanied it is no longer in the repository. API sketches describe intended interfaces unless explicitly identified as shipped. The earlier draft quoted CPU probes without checked-in scripts, inputs, or results; those measurements were removed as acceptance evidence. Performance and numerical improvements must be measured by the implementing PRs.</p>
+<p><strong>September 8 scope correction:</strong> published plan PR7 (<a href="https://github.com/scatt67/jaxgam/pull/40">GitHub #40</a>) is the initial canonical-family, cross-product/Cholesky backend only. It does not complete general QR/TSQR solving or all-family streaming. Those are mandatory new PRs <strong>7.1–7.6</strong>, with exact-REML extensions <strong>8.1–8.3</strong>, specified below. Preserve original PR1–13 numbering; decimal IDs identify additional, separately reviewed PRs, not changes folded into published PR7. Internal development labels such as PR8a/provider and PR8b/L-BFGS are not these new decimal-numbered PRs.</p>
+<p><strong>0. Audited baseline and source provenance</strong></p>
+<p><code>echo $MGCV_SOURCE</code> resolves to <code>/Users/shanecatts/Documents/GitHub/mgcv</code>. Its checked-out source is <strong>mgcv 1.9-4</strong>, commit <code>1b6a4c8374612da27e36420b4459e93acb183f2d</code>. The repository's test oracle remains <strong>R 4.5.2 + mgcv 1.9-3</strong>, enforced by <a href="../../tests/r_bridge.py">RBridge.check_versions</a>; the local clone contains the <code>1.9-3</code> tag at <code>fb7e8e718377513e78ba6c6bf7e60757fc6a32a9</code>. All mgcv links in this document point to the inspected 1.9-4 commit. Read the files locally and compare with the pinned tag before porting behavior:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">echo</span><span class="w"> </span><span class="nv">$MGCV_SOURCE</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">"</span><span class="nv">$MGCV_SOURCE</span><span class="s2">"</span><span class="w"> </span>rev-parse<span class="w"> </span>HEAD
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>rg<span class="w"> </span>-n<span class="w"> </span><span class="s1">'^(qr_update|bgam.fitd|bam.fit) '</span><span class="w"> </span><span class="s2">"</span><span class="nv">$MGCV_SOURCE</span><span class="s2">/R/bam.r"</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">"</span><span class="nv">$MGCV_SOURCE</span><span class="s2">"</span><span class="w"> </span>show<span class="w"> </span><span class="m">1</span>.9-3:R/bam.r
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">"</span><span class="nv">$MGCV_SOURCE</span><span class="s2">"</span><span class="w"> </span>diff<span class="w"> </span><span class="m">1</span>.9-3<span class="w"> </span>HEAD<span class="w"> </span>--<span class="w"> </span>R/bam.r<span class="w"> </span>R/fast-REML.r
+</code></pre></div>
+<p>This comparison matters: 1.9-4 changes <code>bgam.fit</code>/<code>bgam.fitd</code> nuisance-scale updates and reported criteria, and adds <code>Sl.fit</code>'s <code>reml.pen</code> return. These are not interchangeable with the 1.9-3 oracle. Keep the clone at its current checkout; <code>git show</code> is sufficient for reading the pinned implementation.</p>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Actual implementation at the audited JaxGAM commit</th>
+<th>Consequence for this plan</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Public fitting API</td>
+<td><a href="../../jaxgam/api.py">api.py</a>: <code>GAM(...).fit(data, weights=None, offset=None, *, result="full")</code>; data is a DataFrame or dict; <code>result="inference"</code> already exists</td>
+<td>Preserve both result modes. <code>FitControl</code>, <code>RowSource</code>, and <code>result="prediction"</code> below are additions. Unknown constructor options, including <code>control</code>, currently raise <code>TypeError</code>.</td>
+</tr>
+<tr>
+<td>Execution and methods</td>
+<td><code>api._check_scope_guards</code>: only the JAX backend and REML are supported; <code>method="ML"</code> raises <code>NotImplementedError</code></td>
+<td>CPU fitting also uses JAX. Do not claim an existing NumPy fitting backend, ML parity, or an execution router. Fixed <code>sp</code> uses <code>_fit_fixed_sp</code>; estimated-theta NB can still require outer optimization with lambda pinned.</td>
+</tr>
+<tr>
+<td>Families and smooths</td>
+<td><a href="../../jaxgam/families/registry.py">families/registry.py</a> includes <code>nb</code>; <a href="../../jaxgam/smooths/registry.py">smooths/registry.py</a> includes <code>tp/ts</code>, <code>cr/cs/cc</code>, <code>gp</code>, <code>re</code>, <code>te/ti</code></td>
+<td>NB, GP, and modest dense random effects are already implemented despite older scope prose. <code>ps/cp/bs</code>, <code>fs</code>, sparse fitting, fREML, and Fellner-Schall remain deferred.</td>
+</tr>
+<tr>
+<td>Penalties and fitting coordinates</td>
+<td><code>ModelSetup.build</code> embeds constrained penalties globally; <code>FittingData.from_setup</code> constructs dense <code>D_global</code> and transforms X and every S; <code>_build_block_metadata</code> and <code>jax_utils.block_log_det_S</code> already handle block determinants</td>
+<td>PR 2 changes storage and applications of existing algebra. Preserve <code>TermBlock</code> ordering and existing rank thresholds rather than creating a second determinant implementation.</td>
+</tr>
+<tr>
+<td>Prediction state</td>
+<td><a href="../../jaxgam/formula/predict_matrix.py">formula/predict_matrix.py</a>: <code>PredictSpec</code>, <code>build_predict_spec</code>; each smooth has <code>copy_for_prediction</code>; <a href="../../jaxgam/inference/_core.py">inference/_core.py</a> shares prediction finishing</td>
+<td>Observation-independent prediction metadata already exists. Extend or compose it in <code>PreparedModel</code>; keep one factor/constraint/prediction contract.</td>
+</tr>
+<tr>
+<td>Result costs</td>
+<td><code>GAMResults._from_fit</code> computes dense inverse/covariance, EDF/EDF1, and transfers mu/eta before selecting the inference branch</td>
+<td>Lean retention does not make fitting or result construction bounded in n or p. PR 6 must move optional work behind the result choice.</td>
+</tr>
+<tr>
+<td>Fitting boundary</td>
+<td><code>pirls._pirls_loop_jit</code> is a fused JAX loop; <code>NewtonOptimizer</code> already uses host control flow; <code>FittingData.from_setup</code> and <code>initialize_beta</code> perform NumPy preparation</td>
+<td>Preserve pure compiled kernels and NumPy setup/prediction. Put new file scanning and optimizer orchestration in <code>execution/</code>; do not describe all existing <code>fitting/</code> functions as JIT kernels.</td>
+</tr>
+</tbody>
+</table>
+<p><code>docs/design.md</code> (since removed from the repository) was the architecture reference at the time, but its examples are not proof of implemented APIs. Read §1.2 for the scope boundary, §5.10/§13.2 for setup contracts, §7/§8 for PIRLS/REML, §10.2/§10.5 for proposed structured/chunked designs, and §18.1/§18.2 for validation. In this version, §4.3 is <strong>Cython Fallback Kernels</strong> and §4.4 is <strong>JAX Purity Boundary</strong>, not the REML/ML sections suggested by older source-map guidance. The local mgcv top-level file is <code>R/mgcv.r</code>, and NB is in <code>R/efam.r</code>. Use the function-level source map in §10 below.</p>
+<p><strong>1. Delivery strategy and compatibility contract</strong></p>
+<p>The plan contains 13 top-level delivery items, explicit follow-up PRs 7.1–7.6 and 8.1–8.3, and the smaller PR13 implementation pieces in the <a href="../fellner_schall_implementation_plan/">extended Fellner–Schall sub-plan</a>. The number of implementation PRs is therefore greater than 13. PRs 1–4 optimize the current dense implementation. The streamed/discrete/operator backends and new smoothing strategies are post-v1.0 work: their delivery must include corresponding scope/API/design updates, while existing unsupported-feature guards remain effective until each path is implemented. The negative-binomial derivative optimization is a standalone PR 4 and can ship independently of the backend refactors. Dense exact-trace EFS can also start independently of the operator backend; it is a new optimizer, not an exact-objective storage refactor.</p>
+<p>Delivery milestones (the dense Gaussian specialization in PR 9 can land earlier):</p>
+<ol>
+<li>Remove avoidable dense work while retaining the current numerical method.</li>
+<li>Separate reusable basis metadata from observations, then ship streamed prediction, fixed-smoothing PIRLS, and exact-objective REML gradients.</li>
+<li>Specialize Gaussian identity-link fitting so smoothing optimization no longer scans observations.</li>
+<li>Add two distinct large-model options: discretized designs with direct solves, and operator designs with iterative solves.</li>
+</ol>
+<p>Stage 4 is a branch: discretization and operator execution can be combined, but neither should be a prerequisite for the other. Discretization targets expensive basis evaluation and repeated covariate values. Operators target coefficient counts for which dense cross-products and factorizations are unacceptable.</p>
+<p>Define n as rows, d as input columns, p as constrained coefficients, m as smoothing parameters, t as coefficient term blocks, B as batch size, k_j as a term's coefficient count, r_j as its kernel-knot count, and q_j as its number of discrete covariate values. A tensor or factor-by term can have several smoothing parameters, so t and m are not interchangeable. Route on p, m, representation, measured workspace, and data-pass cost. An n-only threshold is inadequate.</p>
+<p>Preserve these contracts:</p>
+<ul>
+<li>Existing calls to GAM.fit(DataFrame) retain their current defaults and result semantics during migration.</li>
+<li>The existing dense solver remains the numerical reference.</li>
+<li>Phase 1 basis and penalty construction stays NumPy/SciPy. JAX adapters and kernels live in the fitting layer.</li>
+<li>Keep CoefficientMap as the mapping from public constrained coefficients to raw basis coefficients. Retain the separate fitting reparameterization already in FittingData, storing its transforms block by block.</li>
+<li>Exact means the same frozen basis, penalty conventions, and statistical objective to declared numerical tolerances. It does not mean bitwise equality, identical line-search histories, or guaranteed selection of the same local optimum.</li>
+<li>Preserve the current knot-selection policy for an exact storage refactor. Changing that policy, discretizing continuous covariates, changing to working-model REML, and estimating traces stochastically are explicit choices recorded in results. Inherited TPRS/GP knot subsampling must also be recorded; it is already part of the dense basis, and currently differs from R above the knot cap (PR 5).</li>
+<li>Broadening beyond the current dense-only v1 scope requires updating the repository scope and architecture text as part of the change. The current planning pseudocode is not executable specification.</li>
+</ul>
+<p>Useful first production target: replayable input, additive cubic smooths, canonical Gaussian/Poisson/binomial, fixed or exactly optimized smoothing, and p small enough for dense coefficient-space algebra. This is an initial milestone, not the final family-support boundary. Completion of direct streaming requires all five currently registered families (Gaussian, Poisson, binomial, Gamma, and NB), their supported non-default links, and both fixed and estimated NB theta. PR7.1 owns an explicit inventory of advertised family/link combinations from the actual registry, public documentation, dense implementation and pinned R; constructor acceptance alone is not proof that a combination is supported. Every supported combination must have an assigned implementation/parity gate. A missing combination remains unfinished work, not an implicit scope reduction.</p>
+<p>Streaming is an execution policy, independent of the family and smoothing optimizer. Extend the existing family interfaces with batch-safe mathematics, bounded reductions and explicit capabilities; do not grow family-name allowlists throughout the stream engine. Future row-separable families should integrate through that contract without changing host iteration. Non-row-separable likelihoods require a specialized reduction adapter and separate validation; this does not authorize implementing additional distribution families in this task. Family coverage and prepared-basis coverage are separate axes: these follow-ups do not imply that PR5 already prepares every smooth/factor interaction.</p>
+<p>Adapt mgcv's established algorithms before designing alternatives: <code>fixDependence</code>, the <code>Sl.*</code> penalty operations, <code>qr_update</code>, <code>bam.fit</code>, and <code>XWXd</code>/<code>XWyd</code>/<code>Xbd</code> are concrete starting points. Preserve JaxGAM's public coefficients and frozen basis when changing representation. The host-streamed adjoint, L-BFGS storage choice, and stochastic operator methods are additional JaxGAM work; the cited mgcv routines do not already implement those backends.</p>
+<p><strong>2. Proposed interfaces</strong></p>
+<p>Separate these concerns instead of adding an optional X field throughout the current code:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Ownership and responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PreparedModel</td>
+<td>Compose existing PredictSpec/TermBlock metadata with fitting transforms, local penalties, normalization constants, schema, and rank metadata; do not duplicate factor or constraint logic</td>
+</tr>
+<tr>
+<td>RowSource</td>
+<td>Repeatable scans over raw covariates, response, prior weights, offsets, and stable row positions</td>
+</tr>
+<tr>
+<td>DenseDesign</td>
+<td>PreparedModel plus the materialized dense design; adapter for the existing backend</td>
+</tr>
+<tr>
+<td>StreamDesign</td>
+<td>PreparedModel plus RowSource; creates only bounded design batches</td>
+</tr>
+<tr>
+<td>StatisticsProvider</td>
+<td>Batch-reduced fitting statistics, trial objectives, and derivative contractions</td>
+</tr>
+<tr>
+<td>SolveState</td>
+<td>Coefficients, factors/operators, objective, convergence diagnostics, and parameter values; no required training-row arrays</td>
+</tr>
+<tr>
+<td>CovarianceProvider</td>
+<td>Optional factor- or operator-based prediction variance; explicit dense covariance materialization</td>
+</tr>
+</tbody>
+</table>
+<p>Introduce these roles only as needed by the relevant PR, starting with adapters around <code>ModelSetup</code>, <code>FittingData</code>, and <code>PredictSpec</code>. The CPU-side schema can begin as:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Iterator</span><span class="p">,</span> <span class="n">Protocol</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="k">class</span><span class="w"> </span><span class="nc">PenaltyBlock</span><span class="p">:</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="n">term_id</span><span class="p">:</span> <span class="nb">int</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">start</span><span class="p">:</span> <span class="nb">int</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">stop</span><span class="p">:</span> <span class="nb">int</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">sp_indices</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    <span class="n">local_penalties</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">object</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>  <span class="c1"># DenseLocal, Diagonal, Identity</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    <span class="n">transform</span><span class="p">:</span> <span class="nb">object</span>                  <span class="c1"># local D, diagonal D, or Identity</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>    <span class="n">range_metadata</span><span class="p">:</span> <span class="nb">object</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="k">class</span><span class="w"> </span><span class="nc">RowBatch</span><span class="p">:</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>    <span class="n">columns</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">object</span><span class="p">]</span>         <span class="c1"># preserve categorical dtype and ordered levels</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>    <span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span>              <span class="c1"># required for fitting, absent for new-data prediction</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>    <span class="n">weight</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>    <span class="n">offset</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>    <span class="n">valid</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>                  <span class="c1"># distinguishes padding from real rows</span>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>    <span class="n">row_positions</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>         <span class="c1"># stable source positions, including filtered scans</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="k">class</span><span class="w"> </span><span class="nc">RowSource</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">scan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">batch_rows</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">RowBatch</span><span class="p">]:</span> <span class="o">...</span>
+<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">fingerprint</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span> <span class="o">...</span>
+<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>
+<a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a><span class="k">class</span><span class="w"> </span><span class="nc">StatisticsProvider</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
+<a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">working_stats</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">beta</span><span class="p">,</span> <span class="n">theta</span><span class="p">):</span> <span class="o">...</span>
+<a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">trial_objectives</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">beta</span><span class="p">,</span> <span class="n">direction</span><span class="p">,</span> <span class="n">alphas</span><span class="p">,</span> <span class="n">theta</span><span class="p">):</span> <span class="o">...</span>
+<a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">final_stats</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">beta</span><span class="p">,</span> <span class="n">theta</span><span class="p">,</span> <span class="n">need_fisher</span><span class="p">:</span> <span class="nb">bool</span><span class="p">):</span> <span class="o">...</span>
+<a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">statistic_vjp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">beta</span><span class="p">,</span> <span class="n">theta</span><span class="p">,</span> <span class="n">cotangents</span><span class="p">):</span> <span class="o">...</span>
+</code></pre></div>
+<p>Use stable term IDs or positional TermBlocks, never labels as identifiers: the existing code deliberately supports label-colliding smooths.</p>
+<p>Add explicit control options rather than overloading the currently accepted backend="jax":</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Proposed API, not supported by the audited commit.</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">control</span> <span class="o">=</span> <span class="n">FitControl</span><span class="p">(</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">execution</span><span class="o">=</span><span class="s2">"stream"</span><span class="p">,</span>              <span class="c1"># dense | stream | discrete | operator</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">memory_budget_bytes</span><span class="o">=</span><span class="mi">8</span> <span class="o">&lt;&lt;</span> <span class="mi">30</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">batch_rows</span><span class="o">=</span><span class="mi">8192</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="n">basis_policy</span><span class="o">=</span><span class="s2">"exact"</span><span class="p">,</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="n">linear_solver</span><span class="o">=</span><span class="s2">"cholesky"</span><span class="p">,</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    <span class="n">smoothing_strategy</span><span class="o">=</span><span class="s2">"exact_reml"</span><span class="p">,</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="n">sp_optimizer</span><span class="o">=</span><span class="s2">"lbfgs"</span><span class="p">,</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">)</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="n">fit</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="n">formula</span><span class="p">,</span> <span class="n">family</span><span class="o">=</span><span class="s2">"poisson"</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">control</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>    <span class="n">source</span><span class="p">,</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>    <span class="n">result</span><span class="o">=</span><span class="s2">"prediction"</span><span class="p">,</span>             <span class="c1"># new mode: no mandatory Vp/EDF reporting</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="p">)</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="k">for</span> <span class="n">row_positions</span><span class="p">,</span> <span class="n">predictions</span> <span class="ow">in</span> <span class="n">fit</span><span class="o">.</span><span class="n">predict_iter</span><span class="p">(</span><span class="n">new_source</span><span class="p">):</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>    <span class="n">prediction_sink</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">row_positions</span><span class="p">,</span> <span class="n">predictions</span><span class="p">)</span>
+</code></pre></div>
+<p>Batch size here is an example; the allocator must shrink it to fit the declared host and device budgets. Initially require explicit execution selection. Later, automatic routing may choose equivalent exact implementations, but must not enable an approximation without an explicit approximation policy. Add the public option, exports, constructor validation, and result-mode overloads together in <code>api.py</code>/<code>__init__.py</code>, with tests in <code>tests/test_api/test_gam.py</code> and <code>tests/test_result_mode.py</code>. The sketch does not authorize accepting and silently ignoring new options.</p>
+<p><strong>3. Stage 1: block structure and duplicate-work removal</strong></p>
+<p><strong>PR 1 — remove full-Q allocation in dependence detection.</strong></p>
+<p>Affected: <a href="https://github.com/scatt67/jaxgam/blob/c1a31346188186bbd2fe67eea8d0d51ba6c95d79/jaxgam/smooths/constraints.py#L602">smooths/constraints.py, fix_dependence</a>.</p>
+<p>Read first: <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/mgcv.r#L502"><code>R/mgcv.r::fixDependence</code></a>, especially <code>qr(X1, LAPACK=TRUE)</code> followed by <code>qr.qty(qr1, X2)</code>. R already applies the packed reflectors without constructing full Q. The Python change should reproduce that implementation, including its trailing-R-block mean threshold; it is not a new dependence algorithm. <code>augment.smX</code> and <code>gam.side</code> in the same file explain the penalty augmentation and column deletion bookkeeping.</p>
+<p>The first QR currently defaults to full mode. For a tall X1 it creates an n-by-n Q; overlapping smooths can reach this path. At one million rows, an unaugmented float64 Q alone would require 8 TB.</p>
+<p>Use pivoted raw Householder QR of X1, then apply Q-transpose to X2 with LAPACK ormqr. Keep the existing residual QR, pivot mapping, rank threshold, and column-drop logic. Simply changing the call to economic QR is incorrect: the current algorithm needs the orthogonal-complement rows of Q-transpose times X2.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Core operation; handle LAPACK status/workspace and edge cases in production.</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="p">(</span><span class="n">packed</span><span class="p">,</span> <span class="n">tau</span><span class="p">),</span> <span class="n">R1</span><span class="p">,</span> <span class="n">piv1</span> <span class="o">=</span> <span class="n">scipy</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">qr</span><span class="p">(</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="n">X1</span><span class="p">,</span> <span class="n">pivoting</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">"raw"</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">)</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">QtX2</span> <span class="o">=</span> <span class="n">apply_householder_qt</span><span class="p">(</span><span class="n">packed</span><span class="p">,</span> <span class="n">tau</span><span class="p">,</span> <span class="n">X2</span><span class="p">)</span>  <span class="c1"># ormqr; never form full Q</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">residual_coordinates</span> <span class="o">=</span> <span class="n">QtX2</span><span class="p">[</span><span class="n">X1</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]:,</span> <span class="p">:]</span>
+</code></pre></div>
+<p>Gate: extend <code>tests/test_constraints.py</code> for identical selected dependent columns on current exact, nested, repeated-smooth, and rank-deficient fixtures, plus direct <code>fixDependence</code> comparisons through RBridge; no n-by-n allocation. Exercise tall inputs and the currently supported dimensional edge cases. Record reflector-residual error in the test rather than relying on the earlier untracked probe.</p>
+<p><strong>PR 2 — migrate penalty storage and fitting transforms.</strong></p>
+<p>Affected: formula/design.py, penalties/penalty.py, fitting/data.py, jax_utils.py, fitting/newton.py, fitting/reml.py, and results.py. Add penalties/structure.py and fitting/penalty_ops.py.</p>
+<p>Read first: <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L68"><code>R/fast-REML.r::Sl.setup</code></a> for local <code>start/stop</code>, <code>S</code>, <code>D/Di</code>, penalized indices, rank, and splitting disjoint multiple penalties into singletons; <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L517"><code>Sl.initial.repara</code></a> for coefficient/model-matrix/covariance transformations; <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L431"><code>Sl.Sb</code>/<code>Sl.rSb</code></a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L1016"><code>Sl.addS</code></a>, and <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L762"><code>ldetS</code></a> for the operations below. R's diagonal singleton branch retains D as a vector. Its dense <code>Sl.setup</code> also creates global E/S rank-check matrices: port the block representation and preserve rank semantics, but do not copy those allocations into the eventual operator path.</p>
+<p>Migrate <code>_compute_repara_D</code>, <code>_build_block_metadata</code>, and <code>block_log_det_S</code>; they already implement much of this logic. <code>Penalty</code>/<code>CompositePenalty</code> currently require dense arrays, so keep compatibility materialization explicit at their consumers during migration. A local transform belongs to a coefficient block, which may own multiple S_j; it is not one independently chosen D per overlapping penalty.</p>
+<ul>
+<li>Stop embedding each S_j into global p-by-p coordinates in ModelSetup.build.</li>
+<li>Group overlapping penalties by coefficient block. Factor-by levels may have disjoint subblocks; tensor penalties overlap within one term.</li>
+<li>Compute each local D_j and apply X_j @ D_j. Retain identity or diagonal transforms without dense matrices.</li>
+<li>Transform each local penalty as D_j.T @ S_j @ D_j. For q-level random intercepts, store a scaled identity of size q symbolically, not a q-by-q identity.</li>
+<li>Derive total penalty range/nullity from block decompositions. Preserve the existing global cutoff where the current implementation applies a cutoff relative to the largest eigenvalue of the assembled normalized total penalty. Independent per-block cutoffs are not automatically equivalent.</li>
+<li>Check unpenalized confounding on X times the combined unpenalized directions. A block-diagonal penalty does not imply that the unpenalized design is identifiable.</li>
+<li>Reuse the existing block log-pseudodeterminant formulas: singleton terms have rank*rho plus a constant; multi-penalty terms need a local range-space determinant. Do not sum individual pseudodeterminants for overlapping penalties.</li>
+<li>Add operations apply(beta,rho), quadratic(beta,rho), add_to_dense(G,rho), log_pdet(rho), and parameter_vjp(beta,adjoint,rho).</li>
+<li>Keep NumPy descriptors in penalties/. Transfer arrays and register JAX pytrees in fitting/. Smoothing parameters are dynamic leaves; slices and representations are static metadata. Preserve the family-parameter cache safeguards discussed in PR 4.</li>
+</ul>
+<p>The direct solver may still allocate one dense H and its factor. Eliminate m separate global penalties first. Functional JAX updates do not guarantee in-place execution: measure compiled workspace and apply buffer donation where ownership is clear.</p>
+<p>For covariance transformation, preserve off-diagonal blocks: V_public[j,l] = D_j @ V_fit[j,l] @ D_l.T. Transforming only diagonal covariance blocks changes uncertainty.</p>
+<p>Expected storage: O(sum local penalty sizes), with diagonal/identity special cases O(p) or smaller. Design reparameterization changes from O(n<em>p²) to O(n</em>sum(k_j²)); local dense penalty transformations cost the sum of their local cubic costs.</p>
+<p>Gate: penalty action/quadratic form/log-pseudodeterminant and derivatives match the old representation and corresponding R <code>Sl.*</code> operations; prediction and covariance roundtrips pass; lambda ordering stays unchanged; tensors, factor-by, shrinkage, duplicate labels, and parametric-only models are included. Extend <code>tests/test_penalties.py</code>, <code>tests/test_fitting/test_fitting_data.py</code>, <code>tests/test_linalg.py</code>, and the prediction/result tests, with dedicated files for the new modules.</p>
+<p>Storage regression to measure: compare <code>sum(S.nbytes)</code> before embedding, after embedding, and after device transfer for many additive cubic smooths. Report peak live memory as well as retained penalty bytes, including <code>D_global</code>, total-penalty eigenspaces, and factor-by wrapper penalties.</p>
+<p><strong>PR 3 — eliminate repeated basis work and initialization.</strong></p>
+<p>Affected: smooths/base.py, cubic.py, tprs.py, gaussian_process.py, tensor.py, by_variable.py, <strong>smooths/utils.py</strong> (<code>_compute_distance_matrix</code>), formula/design.py, fitting/data.py, fitting/initialization.py, fitting/newton.py, api.py.</p>
+<p>Read first: <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L3770"><code>R/smooth.r::smoothCon</code></a> and the smooth constructors, which return the training matrix in <code>sm$X</code>; <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L4302"><code>PredictMat</code></a> is the separate evaluation path for new data. For initial smoothing statistics use <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/mgcv.r#L4626"><code>R/mgcv.r::initial.sp</code></a>: its <code>XX=TRUE</code> branch already consumes a cross-product diagonal, and penalties stay local with <code>off</code> indices. Preserve JaxGAM's current activity-threshold calculation during the storage migration: row/column means over a globally padded penalty have a different divisor from means over a local block.</p>
+<ul>
+<li>Give setup orchestration an explicit way to consume the just-built training basis. Do not use equal row count or mutable object identity as a public data-cache key. build_design_matrix(newdata) must continue to evaluate the supplied data correctly.</li>
+<li>Reuse marginal bases in tensor setup; compose wrappers from known training blocks.</li>
+<li>Remove the nearest-knot index calculation after TPRS subsampling when its result cannot be used by the subsequent branch.</li>
+<li>Replace broadcast distances with bounded cdist/kernel/projection batches. Never retain an n-by-r-by-d difference tensor. In the dense backend write projected rows directly into the final n-by-k buffer.</li>
+<li>Reduce unnecessary copies in constraint application using explicit ownership; preserve prediction-state immutability.</li>
+<li>Compute initial-sp diagonal statistics by bounded reductions instead of constructing wX and wX*wX over the full design.</li>
+<li>Compute and cache beta initialization once before device transfer. Reuse it for initial scale estimation and the first score call.</li>
+<li>Keep family-specific validity checks and offset handling. A sampled warm start is an optional optimization, not a replacement for validity checking.</li>
+</ul>
+<p>The concrete initialization duplication is in <code>NewtonOptimizer.run</code>: the unknown-scale branch and first score call both call <code>_initial_beta</code>, which converts device X/y/weights back to NumPy. <code>initialize_beta</code> currently returns a JAX array. Split CPU starting-value computation from transfer at the existing Phase 1→2 boundary, after the fitting transform is known, then pass that one result through. Keep the family-specific null-start fallback and the distinct initial PIRLS fit used to estimate scale.</p>
+<p>TPRS <code>build_design_matrix</code> currently checks equal row count but then rebuilds the kernel/polynomial projection; despite its cache-related comments, it does not return cached <code>_X</code> or compare data values in that branch. Cubic/GP/tensor paths also evaluate again through prediction methods. Preserve their behavior while introducing an explicit handoff of the just-built training matrix.</p>
+<p>Gate: training basis construction is called once per required normalization stage; changing same-length data produces new predictions; data/offset/theta changes invalidate the appropriate caches; beta initialization runs once; existing numerical tolerances remain unchanged. Extend the smooth tests, <code>tests/test_smooths/test_prediction_copy.py</code>, and the initialization/Newton tests.</p>
+<p><strong>PR 4 — replace the negative-binomial derivative scan with prefix sums.</strong></p>
+<p>Affected: <a href="https://github.com/scatt67/jaxgam/blob/c1a31346188186bbd2fe67eea8d0d51ba6c95d79/jaxgam/families/negative_binomial.py#L365">families/negative_binomial.py, _lgamma_diff_jvp</a>, fitting/data.py, and the max_y/static-argument plumbing in fitting/newton.py and fitting/reml.py. Add tests/test_nb_lgamma_derivatives.py. Extend tests/test_fitting/test_nb_custom_jvp.py for fit-level integration and the scaling benchmark for this kernel.</p>
+<p>Read first: <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/efam.r#L161"><code>R/efam.r::nb</code></a>, specifically <code>Dd</code>, <code>ls</code>, <code>initialize</code>, <code>getTheta</code>, and <code>putTheta</code>. <code>nb()$ls</code> already supplies vectorized digamma/trigamma formulas for the saturated likelihood and its first/second derivatives in <strong>log(theta)</strong>, with per-observation weights. R does not implement a max-count scan or a count-prefix planner. Reuse those formulas as the reference on well-conditioned cases; the prefix optimization below is specific to JaxGAM's stable recurrence JVP near the Poisson limit. Benchmark the R-style vectorized formulas too, without replacing the stable recurrence with cancellation-prone subtraction at large theta.</p>
+<p>Dependency: none of the new backends. Merge as an independent Stage 1 optimization, before estimated-theta NB is enabled in the streamed REML path. Its scope is the gamma-difference derivative and count metadata; retain the current likelihood formula, dispersion parameterization, and PIRLS algorithm.</p>
+<p>The existing JVP scans k from zero to max(y)-1, updating an n-element accumulator on every step. For scalar theta and integer counts, all observations share the same reciprocal sequence:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>f(theta, y) = lgamma(theta) - lgamma(theta + y)
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>partial_theta f = -sum(k=0..y-1, 1/(theta+k))
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>partial_theta_theta f = sum(k=0..y-1, 1/(theta+k)²)
+</code></pre></div>
+<p>Build that sequence once per current theta and gather its prefixes:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># JVP sketch for validated integer counts and a bounded static capacity.</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># capacity must cover every lookup, including any y_safe sentinel.</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">reciprocal</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="p">(</span><span class="n">theta</span> <span class="o">+</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">capacity</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">jnp</span><span class="o">.</span><span class="n">float64</span><span class="p">))</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">prefix</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">jnp</span><span class="o">.</span><span class="n">float64</span><span class="p">),</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">jnp</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">reciprocal</span><span class="p">),</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="p">))</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="n">dtheta_value</span> <span class="o">=</span> <span class="o">-</span><span class="n">prefix</span><span class="p">[</span><span class="n">count_index</span><span class="p">]</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="n">tangent</span> <span class="o">=</span> <span class="n">dtheta_value</span> <span class="o">*</span> <span class="n">theta_dot</span> <span class="o">-</span> <span class="n">jsp</span><span class="o">.</span><span class="n">digamma</span><span class="p">(</span><span class="n">theta</span> <span class="o">+</span> <span class="n">y</span><span class="p">)</span> <span class="o">*</span> <span class="n">y_dot</span>
+</code></pre></div>
+<p>Keep the primal value path unchanged in this PR. Preserve the existing y-tangent term where supported; fitting normally holds integer responses constant. Do not silently truncate fractional responses to indices. Validate the integer fast-path domain and explicitly preserve or define behavior outside it.</p>
+<p>Differentiate the prefix calculation through theta so the Hessian receives the positive reciprocal-square sum. Test the actual optimization coordinate too: for t=log(theta), dF/dt=theta<em>dF/dtheta and d²F/dt²=theta</em>dF/dtheta+theta²*d²F/dtheta². Passing only the first-derivative test is insufficient for the current outer optimizer.</p>
+<p>Implementation steps:</p>
+<ol>
+<li>Introduce a reusable count plan with integer indices, maximum required lookup, optional unique-count mapping, and bounded table capacity. Prepare indices once per fit; recompute theta-dependent table values whenever theta changes.</li>
+<li>Normalize max_y to a neutral value for families that do not use it; <code>FittingData.from_setup</code> currently computes it for all responses, and <code>_DIFF_STATIC</code> includes it. Capacity buckets and unique-count plans are optional follow-ups if profiling justifies them. Estimated log_theta is already dynamic. Fixed theta currently enters the family's static cache key in <code>NegativeBinomial._static_cache_key</code>; preserve that safeguard unless all fixed-theta reads are explicitly migrated to dynamic arguments and tested across different theta values.</li>
+<li>Handle empty helper inputs, zero counts, all-zero responses, and _saturated_loglik_jax's y_safe=1 convention without an out-of-range gather. JAX's indexing behavior must not silently hide an undersized table.</li>
+<li>Enforce a prefix-workspace budget before allocating. Above it, reuse R-style vectorized derivatives only in a validated conditioning regime, otherwise use a recurrence fallback whose compiled first/second-derivative workspace fits the budget. The current scan passes <code>jnp.arange(max_y)</code> as its input: do not assume it is a memory-safe fallback without inspecting the compiled allocation. A counted recurrence retaining the existing n-element updates is acceptable initially if its workspace gate passes; a faster tiled requested-prefix implementation can follow if profiling warrants it. Avoid requiring a new sorting/count-planner subsystem for the ordinary fast path.</li>
+<li>State the large-count limit: an n-accumulator recurrence still performs O(n*max(y)) work; a tiled prefix recurrence still performs work proportional to the maximum count. A validated asymptotic tail can be subsequent work; raw subtraction of nearly equal digamma/trigamma values is not an acceptable untested replacement near the Poisson limit.</li>
+<li>In the streamed backend, share a theta-specific table or requested-count values across row batches. Rebuilding the full table for each batch multiplies its cost by the number of batches. Only count metadata is reusable across different theta values.</li>
+</ol>
+<p>For the ordinary bounded-table path, work changes from O(n*max(y)) to O(n+capacity), with O(n+capacity) total indices/output/table storage and O(capacity) table workspace. Set capacity to the required maximum, or a bounded bucket if implemented, allowing for the all-zero sentinel case. Any unique-count sorting is one-time preprocessing and must be timed separately.</p>
+<p>Validation gates:</p>
+<ul>
+<li>Compare first and second theta derivatives against recurrence sums on tractable counts, including y=0, repeated counts, capacity boundaries, theta well below one, and theta up to 1e12. Use a high-accuracy reference for extreme-scale cases rather than finite differences of cancellation-prone gamma values alone.</li>
+<li>Verify derivatives in log(theta), JVP linearity, weighted saturated-likelihood sums, mixed REML derivatives with smoothing parameters, and the bounded-memory fallback.</li>
+<li>Preserve fixed- and estimated-theta behavior, fitted theta, smoothing parameters, predictions, deviance, and convergence within existing tolerances on supported fixtures. Noninteger handling must be explicit and tested.</li>
+<li>Benchmark cold compilation and synchronized warm JVP/Hessian execution, varying n and max(y) separately and including one large-count outlier. Measure temporary memory and compile-cache reuse. Run end-to-end estimated-theta NB fits separately.</li>
+</ul>
+<p>Neither current JaxGAM initialization nor R's <code>nb()$initialize</code> rejects fractional nonnegative y. The integer recurrence identity does not apply there, so rounding/casting is not a compatible fix. Add a validated noninteger derivative path (with the same gamma-function meaning as <code>nb()$ls</code>) or explicitly scope and document any input-policy change separately. Extreme-theta checks need a high-accuracy oracle because the R polygamma difference can also lose precision. No kernel or end-to-end speedup is established by this document audit.</p>
+<p><strong>4. Stage 2: streamed setup, prediction, PIRLS, and REML</strong></p>
+<p><strong>PR 5 — introduce replayable sources and observation-independent setup.</strong></p>
+<p>Add data/source.py, formula/prepare.py, and formula/design_provider.py. Extend smooths with metadata discovery, reduction, finalize, and evaluate_batch operations. Keep ModelSetup as the dense compatibility wrapper.</p>
+<p>Read first: <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L384"><code>R/bam.r::mini.mf</code></a> and <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L2376"><code>bam</code>'s setup dispatch</a>, then <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L3770"><code>R/smooth.r::smoothCon</code></a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L4302"><code>PredictMat</code></a>, and each supported constructor. mgcv already separates basis setup from repeated block evaluation. However, <code>mini.mf</code> constructs a sampled frame with covariate extremes and factor-level coverage; normal <code>bam</code> setup uses that frame. Copying it would change knots, centering, and normalization relative to JaxGAM's full-data <code>ModelSetup.build</code>. Use it only for an explicitly sampled-basis policy. Exact full-data reduction passes below are additional work, not an existing <code>bam</code> guarantee.</p>
+<p>Build the preparation result around the existing <code>PredictSpec</code>, <code>CoefficientMap</code>, smooth prediction-copy hooks, and parametric alias metadata. Do not build dense <code>ModelSetup</code> and discard X afterward: that only reduces retention. <code>RowSource</code> is new I/O infrastructure; mgcv's <code>bam</code> still constructs a model frame and keeps observation vectors, so its memory behavior is not an out-of-core raw-input contract.</p>
+<p>Implement sources in this order: arrays/DataFrame, NumPy memmap, then an optional columnar file adapter. A source must be restartable because PIRLS and line searches revisit data. Reject a one-shot iterator before fitting unless the user explicitly selected a spool-to-disk policy. A source fingerprint covers schema, data version, row selection, weight/offset definitions, and basis configuration.</p>
+<p>Preparation needs multiple passes, not a universal two-pass promise:</p>
+<table>
+<thead>
+<tr>
+<th>Pass</th>
+<th>Work and retained state</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Discovery</td>
+<td>Row counts; response/domain checks; means/ranges; factor dictionaries; unique-value/knot information; conservative p and memory estimate</td>
+</tr>
+<tr>
+<td>Basis construction</td>
+<td>Freeze knots and local kernel eigenspaces; construct raw local penalties</td>
+</tr>
+<tr>
+<td>Normalization reductions</td>
+<td>Column sums and sum of squares; finalize RMS scales where needed</td>
+</tr>
+<tr>
+<td>Dependent reductions</td>
+<td>Re-evaluate normalized rows to compute infinity norms and any downstream centering/tensor statistics</td>
+</tr>
+<tr>
+<td>Constraints</td>
+<td>Freeze centering, side-constraint deletions, and unpenalized rank decisions</td>
+</tr>
+<tr>
+<td>Fitting preparation</td>
+<td>Freeze local D transforms; compute initial-sp/initial-beta information; expose the batch evaluator</td>
+</tr>
+</tbody>
+</table>
+<p>Preserve the existing order of shrinkage, basis scaling, penalty normalization, constraints, and fitting reparameterization. In particular:</p>
+<ul>
+<li>Cubic knots are interpolated through sorted unique covariate values, not quantiles of the full empirical row distribution. An ordinary quantile sketch changes the basis when values repeat.</li>
+<li>Exact unique-value or multi-column unique-row processing can require external sorting. It cannot, for arbitrary inputs, be replaced by a fixed-size in-memory sample while claiming exact equivalence.</li>
+<li>For TPRS, RMS scaling changes row absolute sums. The smoothCon infinity norm after scaling generally needs another pass.</li>
+<li>Sum-to-zero constraints are global column sums, not independent per-batch centering.</li>
+<li>Factor-by constraints use the base smooth across all observations, before level indicators, as the existing implementation specifies.</li>
+<li>te/ti preparation follows dependencies among marginal normalization, marginal constraints, tensor construction, and final term constraints.</li>
+</ul>
+<p>Concrete basis references: <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L1444"><code>smooth.construct.cr.smooth.spec</code></a> calls <code>quantile(unique(x), ...)</code>; <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L1562"><code>place.knots</code></a> expresses the equivalent rank interpolation used by JaxGAM's <code>_place_knots</code>. <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L1248"><code>smooth.construct.tp.smooth.spec</code></a> caps unique locations at 2000 by default using R's seeded <code>sample</code>, then calls <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/src/tprs.c#L307"><code>src/tprs.c::construct_tprs</code>/<code>tprs_setup</code></a>. The C implementation truncates E's eigensystem and handles the polynomial null space; do not replace it with an assumed augmented-matrix eigensolve or max-min knot algorithm from stale prose. <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L3441"><code>smooth.construct.gp.smooth.spec</code></a> has its own knot/kernel setup. Keep the existing Python evaluators and normalization order as the dense reference.</p>
+<p>Known parity limitation: <code>smooths/utils.py::_subsample_knots</code> uses NumPy <code>RandomState</code>, and its docstring explicitly states that selected knots differ from R's sampler. Preserve that selection for dense-versus-streamed tests. Strict/MODERATE R basis parity above the cap requires matching the actual selected knots/R sampling first; do not claim that this plan has fixed it. <code>GAM(knots=...)</code> is currently guarded as unsupported. Initial exact-streaming delivery excludes those sampled TPRS/GP cases.</p>
+<p>Preserve schema semantics from <code>formula/predict_matrix.py::_to_dict</code> and the shared factor helpers: integer-valued categoricals must remain factors, ordered-factor reference levels must remain stable across batches, and row positions must be positional rather than pandas-label aligned. Preserve finite-input validation, nonnegative prior weights, positive total weight mass, and parametric alias decisions from <code>ModelSetup.build</code>.</p>
+<p>Start exact streaming with univariate cubic and modest parametric blocks. Add TPRS/GP and complex overlapping terms only when their preparation passes meet the same contract. Unsupported combinations must fail at preflight; they must not silently materialize a full design.</p>
+<p>For streamed side constraints, adapt <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L46"><code>qr_update</code></a> to compress each overlapping term group, then apply <code>fixDependence</code>/<code>gam.side</code> to the small system. Compute <code>augment.smX</code>'s scaling statistics on the original rows before compression: mean absolute entries are not preserved by QR. Append the correctly scaled penalty roots in their original block coordinates. Preserve unweighted centering, ordering, pivots, thresholds, and deletion decisions. This compressed use of <code>gam.side</code> is a new adaptation requiring tests, especially at rank boundaries; mgcv's <code>bam</code> does not provide exact full-data side constraints through <code>mini.mf</code>.</p>
+<p>Gate: prepared prediction state retains no observation-aligned training arrays; knots/scales/constraints agree with dense setup; prediction is invariant to batch boundaries; no full design allocation during preparation. Basis metadata can grow with knots or factor levels and must be budgeted separately; an accidental equality between k/q and n is not proof of retained training data. Reuse the object-graph checks in <code>tests/test_result_mode.py</code> and <code>tests/test_smooths/test_prediction_copy.py</code>, with new source/preparation tests and extensions to <code>tests/test_formula/test_design.py</code>.</p>
+<p><strong>PR 6 — stream prediction and separate optional uncertainty.</strong></p>
+<p>Affected: formula/predict_matrix.py, inference/_core.py, inference/predictor.py, results.py. Add a result mode for prediction plus basic convergence diagnostics that does not require retaining Vp, EDF/EDF1 diagnostics, or training rows.</p>
+<p>Read first: <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/mgcv.r#L2692"><code>R/mgcv.r::predict.gam</code></a> already divides ordinary predictions into blocks; <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L1415"><code>R/bam.r::predict.bam</code></a> delegates to that implementation, and <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L1976"><code>Sl.postproc</code></a> separates optional covariance postprocessing. Reuse JaxGAM's <code>PredictSpec.build_predict_matrix</code>, <code>predict_core</code>, and <code>finish_prediction</code> for the initial batch adapter. Per-term matvec and factor-based covariance can follow without reimplementing categorical encoding, coefficient transforms, or response-link SE conversion.</p>
+<ul>
+<li>predict_iter yields ordered batches; a convenience predict may concatenate only when explicitly requested and within its output budget.</li>
+<li>For point predictions, evaluate and accumulate terms directly into eta. No full B-by-p matrix is required if the term evaluators expose matvec operations.</li>
+<li>For exact standard errors at manageable p, retain the Fisher factor L and fitting transforms instead of forming H inverse.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">X_fit_batch</span> <span class="o">=</span> <span class="n">X_public_batch</span> <span class="o">@</span> <span class="n">D</span>       <span class="c1"># implemented through local transforms</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">Z</span> <span class="o">=</span> <span class="n">solve_triangular</span><span class="p">(</span><span class="n">L</span><span class="p">,</span> <span class="n">X_fit_batch</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">lower</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">variance</span> <span class="o">=</span> <span class="n">phi</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">Z</span> <span class="o">*</span> <span class="n">Z</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</code></pre></div>
+<p>The solve is still O(B*p²) for dense factors. This avoids explicit inverse/covariance construction; it does not make exact arbitrary prediction variances linear in p.</p>
+<p>Preserve existing full and inference result APIs through adapters, including their dense Vp contract and shared operation order; full-versus-inference predictions are currently tested for byte equality in <code>tests/test_result_mode.py</code>. For the new mode, branch before <code>_from_fit</code> constructs H inverse, F, Vp, EDF1, or transfers row outputs. <code>PIRLSResult</code> currently always holds mu/eta/weights and both information matrices/factors, so fit-state changes are also required to avoid retaining those rows. An explicit Vp request on the new mode can materialize covariance subject to a memory check. A prediction-only result without a covariance provider must raise a clear unavailable-uncertainty error for se_fit=True. Factor-based SEs must use <code>L_fisher</code> and the reported scale convention currently used by <code>_from_fit</code>.</p>
+<p>Per-term EDF/EDF1 and optional diagnostic reporting can be deferred, but the total Fisher EDF required by <code>fitting/reml.py::fletcher_scale</code>/<code>estimate_scale</code> cannot be skipped when preserving unknown-scale families' reported scale. Separate computing that scalar from retaining diagnostics; a different or approximate scale convention is not an exact storage refactor. Use selected/block right-hand-side solves and correct cross-block terms for requested diagnostics; do not approximate full EDF1 with diagonal term blocks. A full result's training X cannot be supplied for free by an out-of-core fit.</p>
+<p>Gate: batch predictions and standard errors match dense outputs, including external-offset omission warnings, supplied offsets, categorical levels, transformed coefficients, empty/tail batches, and input row ordering. Keep <code>tests/test_predict/test_predict.py</code>, <code>tests/test_inference/test_predictor.py</code>, and <code>tests/test_result_mode.py</code> as compatibility gates. New modes may compare numerically to old modes; do not weaken the existing full-versus-inference byte-equality assertion.</p>
+<p><strong>PR 7 — initial streamed PIRLS for fixed smoothing parameters (published foundation).</strong></p>
+<p>Published scope: Gaussian/identity, Poisson/log and binomial/logit; replayable prepared cubic/numeric designs; fixed sp and compact prediction results; accumulated cross-products with an SPD Cholesky solve. The general QR/TSQR, non-canonical and NB requirements in the original milestone are carried into PRs 7.1–7.6 below. Publishing PR7 does not mark those requirements complete.</p>
+<p>Add execution/stream.py for host iteration and I/O, fitting/stream_kernels.py for pure JIT batch reductions, and fitting/state.py for observation-independent fit state.</p>
+<p>Read first: <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L46"><code>R/bam.r::qr_up</code>/<code>qr_update</code></a> and <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L909"><code>bgam.fit</code></a> for chunkwise working-response/weight reduction and QR reuse; <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit3.r#L67"><code>R/gam.fit3.r::gam.fit3</code></a> for penalized-deviance backtracking, validity, and the stationarity check before accepting convergence. For later NB/non-canonical support read <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit4.r#L240"><code>R/gam.fit4.r::dDeta</code>/<code>gam.fit4</code></a> and the observed/Fisher split in <code>src/gdi.c</code>. <code>bgam.fit</code> updates smoothing on each working model; reuse its reductions without importing that smoothing strategy into this fixed-sp path or PR 8.</p>
+<p>Do not put a Python file iterator inside a JAX while_loop. The dense backend retains its fused loop; the streamed backend uses host orchestration around compiled kernels. Share the working-quantity and accepted-step calculations in <code>fitting/pirls.py</code> rather than maintaining separate family mathematics. Its NB observed-weight branch, signed cross-products, and Fisher postprocessing must remain distinct.</p>
+<p>Per coefficient iteration:</p>
+<ol>
+<li>Scan batches at the current beta. Evaluate eta, mu, W, and z using the existing family/link conventions; accumulate G, b, deviance, and required scalar statistics.</li>
+<li>Add the structured penalty to G and solve the small coefficient system.</li>
+<li>Evaluate the proposed coefficient step against global penalized deviance and domain validity. Add the penalty once per candidate, not once per batch.</li>
+<li>If needed, backtrack. Optionally evaluate a small group of candidate step sizes in a single source scan using eta_current and delta_eta, retaining only batch-sized candidate arrays.</li>
+<li>Check the accepted coefficient/deviance criteria plus a scaled stationarity residual. A failed line search with an unchanged beta must not be mistaken for convergence.</li>
+<li>Recompute final statistics at the accepted beta, including distinct observed and Fisher curvature where required.</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Schematic canonical positive-weight reduction.</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># Invalid padding inputs must be replaced by finite, family-valid values first.</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">accumulate</span><span class="p">(</span><span class="n">state</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">prior_w</span><span class="p">,</span> <span class="n">offset</span><span class="p">,</span> <span class="n">valid</span><span class="p">,</span> <span class="n">beta</span><span class="p">,</span> <span class="n">family_params</span><span class="p">):</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="n">eta</span> <span class="o">=</span> <span class="n">X</span> <span class="o">@</span> <span class="n">beta</span> <span class="o">+</span> <span class="n">offset</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="n">w</span><span class="p">,</span> <span class="n">z</span> <span class="o">=</span> <span class="n">working_quantities</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">eta</span><span class="p">,</span> <span class="n">prior_w</span><span class="p">,</span> <span class="n">offset</span><span class="p">,</span> <span class="n">family_params</span><span class="p">)</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="n">w</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">valid</span><span class="p">,</span> <span class="n">clip_working_weights</span><span class="p">(</span><span class="n">w</span><span class="p">),</span> <span class="mf">0.0</span><span class="p">)</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="n">z</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">valid</span><span class="p">,</span> <span class="n">z</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    <span class="n">WX</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">w</span><span class="p">)[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">X</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    <span class="k">return</span> <span class="n">state</span><span class="o">.</span><span class="n">add</span><span class="p">(</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>        <span class="n">G</span><span class="o">=</span><span class="n">WX</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="n">WX</span><span class="p">,</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>        <span class="n">b</span><span class="o">=</span><span class="n">WX</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">w</span><span class="p">)</span> <span class="o">*</span> <span class="n">z</span><span class="p">),</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>        <span class="n">deviance</span><span class="o">=</span><span class="n">masked_deviance</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">eta</span><span class="p">,</span> <span class="n">prior_w</span><span class="p">,</span> <span class="n">valid</span><span class="p">,</span> <span class="n">family_params</span><span class="p">),</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>        <span class="n">valid_domain</span><span class="o">=</span><span class="n">masked_domain_check</span><span class="p">(</span><span class="n">eta</span><span class="p">,</span> <span class="n">valid</span><span class="p">,</span> <span class="n">family_params</span><span class="p">),</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>    <span class="p">)</span>
+</code></pre></div>
+<p>Mask after weight clipping: otherwise padded zero-weight rows get promoted to the current positive floor. Avoid 0*NaN by sanitizing padding before link/deviance evaluation. Preserve real-row weight behavior separately.</p>
+<p>Memory and transfer policy:</p>
+<ul>
+<li>Keep p-by-p accumulators on the selected compute device across batches. Copying one G back to the CPU per batch adds O(number_of_batches*p²) transfer traffic.</li>
+<li>Bound host prefetch and outstanding device work, initially to two batches. A long asynchronous launch queue can retain every input buffer and defeat streaming.</li>
+<li>Fit and score reductions use float64. Use stable/pairwise accumulation or compensation for long reductions as justified by the error budget.</li>
+<li>Estimate memory using all live design, weighted design, kernel, factor, adjoint, and allocator workspaces. O(B*p+p²) is an asymptotic invariant, not a claim that only two arrays exist.</li>
+<li>PR7.2 supplies QR/TSQR coefficient solves for ill-conditioned positive-weight designs. PR7.4 supplies the separate sign-aware path for signed observed weights; sqrt(W), ordinary Cholesky, and PCG are not universal fallbacks.</li>
+<li>PR7 is the initial canonical Poisson/binomial/Gaussian fixed-sp release. PR7.3 adds regular-family/link coverage, PR7.5 adds NB coefficient kernels and parameter state, and PR7.6 completes the public all-family gate, including estimated theta through PR8.2.</li>
+</ul>
+<p>Gate: fixed-sp results agree with dense fits within STRICT/MODERATE tolerances across B; offsets, zero weights, rare factor levels, extreme means, rank deficiencies, and backtracking are tested; measured additional RAM is bounded as n increases with B and p fixed. Extend <code>tests/test_fitting/test_pirls.py</code> for the shared numerics and add a streamed-kernel JIT test plus host-source integration tests. RBridge comparisons for this PR hold sp and the basis fixed.</p>
+<p><strong>Required new PR7 follow-ups — shared engine, robust solvers, all existing families.</strong></p>
+<p>These are new implementation PRs after the published foundation, not optional polish. They may be developed alongside the existing PR8/PR9 work, but their dependency and acceptance gates remain explicit.</p>
+<p><strong>PR 7.1 — shared family execution contract and conformance suite.</strong></p>
+<p>Extend/combine <code>families/base.py</code>, <code>families/extended.py</code> and shared PIRLS kernels rather than create a second streaming family hierarchy. Read the corresponding <code>gam.fit3</code>, <code>gam.fit4</code>/<code>dDeta</code>, family and link implementations before extracting numerical behavior. Keep CPU preparation descriptors free of JAX imports; device kernels consume explicit dynamic family parameters.</p>
+<ul>
+<li>Specify batch working quantities, direct deviance/likelihood contributions, domain-valid padding/initialization, observed and Fisher information, and bounded mergeable summaries for initialization, scale, likelihood and count-prefix metadata. Use a finalization step for global decisions; per-batch initialization/fallbacks must not change the statistical algorithm.</li>
+<li>Separate static family/link configuration and mathematical capabilities from dynamic theta/phi and from validation/release status. Capabilities describe the required coefficient system, derivative availability and reduction semantics, not a hard-coded family name.</li>
+<li>Preserve static-cache and source/basis/family lineage contracts, with immutable accepted versus trial parameter state. Dense defaults and their operation order stay unchanged during extraction. Do not put Python source iteration inside JAX transformations.</li>
+<li>Create one checked-in family/link/parameter-mode inventory. Required first rows include Gaussian/identity plus log/inverse, Poisson/log plus identity/sqrt, binomial/logit plus probit/cloglog, Gamma/inverse plus log/identity, and NB/log/identity/sqrt in both theta modes. Inventory all other currently supported combinations as well; this minimum list is not a way to drop them. Distinguish unsupported input domains from unfinished family implementations.</li>
+</ul>
+<p>Gate: existing dense and PR7 numerical/cache tests are unchanged; family contract tests cover batch-size invariance, padding/domain behavior and global reductions. An unregistered test-only row-separable family or independently implemented family adapter must work without editing the stream driver or spoofing a built-in <code>family_name</code>. Missing capabilities reject explicitly. No new production distribution is required for this extensibility test.</p>
+<p><strong>PR 7.2 — general positive-weight QR/TSQR coefficient solver.</strong></p>
+<p>Depend on PR7.1 and reuse reviewed QR primitives from PR9 where applicable, without requiring its Gaussian-only optimizer. Read <code>bam.r::qr_up</code>/<code>qr_update</code>, <code>bgam.fit</code>, and mgcv's penalized least-squares/rank handling. Update a bounded R/transformed-response state from weighted design batches, then incorporate local penalty roots and solve the reduced penalized problem. Preserve pivots, original row counts, the residual tail, fitting transforms and the fixed identifiable coefficient subspace.</p>
+<p>Expose an explicit solver policy and truthful route/failure diagnostics; retain the reviewed Cholesky fast path for suitable systems. QR must not first form normal equations and merely factor those: its purpose is to avoid their squared conditioning. Do not construct n-by-n Q, retain n-by-p rows, or stack m global penalties. Rank deficiency needs an explicit identifiable-subspace decision consistent with CoefficientMap, not jitter disguised as rank handling.</p>
+<p>Gate: fixed-sp dense/pinned-R parity for all currently enabled positive-weight families; ill-conditioned and aliased designs; B=1, B&lt;p, empty/tail batches, long reductions, weights/offsets and backtracking. Include cases where cross-product Cholesky loses accuracy but QR remains accurate. Verify JIT-compatible solve kernels, bounded CPU QR helpers, source-scan counts and increasing-n memory. Signed weights are owned by PR7.4, not silently passed through sqrt(W).</p>
+<p><strong>PR 7.3 — all regular families and their supported links.</strong></p>
+<p>Depend on PR7.1–7.2; use PR7.4 wherever a signed observed system is needed. Enable Gaussian, Poisson, binomial and Gamma through the shared contract, including the non-default links in the inventory. Match pinned <code>gam.fit3</code>'s working-system policy: canonical links use Fisher scoring, while noncanonical links use alpha-adjusted Newton working weights/responses, including its explicit recovery behavior. Do not extend the existing dense Fisher implementation to every streamed regular link and call that the same mgcv algorithm. Keep observed information for REML separate from Fisher EDF/covariance. Add bounded family-specific initialization and reported-scale reductions, especially Gamma/Fletcher scale; Gaussian's closed-form score-scale shortcut is not a generic scale estimator. Default <code>start=NULL</code> initialization must preserve per-row <code>eta=link(mustart)</code> and its distinct null-coefficient backoff anchor; a QR projection of that eta is not an interchangeable first working state.</p>
+<p>Gate: every inventoried regular-family/link cell passes fixed-sp coefficient, fitted-mean, deviance, reported-scale, total-EDF and requested-uncertainty parity at STRICT/MODERATE on the same prepared basis. Exercise non-canonical links, valid null starts, near-domain boundaries, zero/extreme weights, offsets, exact-zero residuals and failed-step status. Do not substitute a canonical link or silently change observed to Fisher information. Joint smoothing/phi optimization is a separate PR8.1 gate.</p>
+<p>September 8 initialization review adds explicit boundary gates: preserve R's literal <code>alpha == 0</code> replacement without a near-zero deadband that can reverse signed curvature. The internal PR7.3b prototype exposes a separate Binomial/log cancellation-resolution diagnostic for exact and near-success responses; resolving and validating that discrepancy is still required before the complete family/link release gate. It is not a permanent exclusion or evidence that all initial working systems already match. Normalize zero-weight Binomial responses consistently before CPU/JIT input validation; distinguish invalid positive-weight working inputs from legitimate zero-information rows. Batch admissibility must compose across empty/zero-weight batches, with an informative-count requirement applied globally. Raw Fisher/observed diagnostics must not silently replace the selected coefficient system or cause an unrelated selected-system failure.</p>
+<p><strong>PR 7.4 — sign-aware observed-curvature fitting and scoring.</strong></p>
+<p>Depend on PR7.1 and the coefficient solver interface from PR7.2. Read <code>gam.fit4</code>, <code>dDeta</code> and the corresponding signed least-squares C routines. Add bounded signed cross-products and a validated solve/safeguard policy for indefinite intermediate working systems; preserve the pinned algorithm's recovery and global deviance backtracking. Keep separate observed and Fisher statistics/factors and make their consumers explicit. A positive Fisher matrix is not evidence that an observed matrix can use Cholesky/PCG.</p>
+<p>Gate: matched-state signed-system tests plus real non-canonical/extended-family cases cover mixed-sign working weights, indefinite intermediates, recovery, genuine failure and consistent final observed/Fisher statistics. No absolute-weight substitution or new Fisher-scoring algorithm may be introduced without a separately identified numerical-policy change. Coefficient solves and score/log-determinant admissibility are separate checks.</p>
+<p><strong>PR 7.5 — NB fixed-theta fitting and dynamic family-parameter state.</strong></p>
+<p>Depend on PR7.1, PR7.4 and PR4's count metadata. Enable NB's log, identity and sqrt links at explicitly supplied theta; expose the same pure coefficient kernels at a trial theta for estimated-family callers. Preserve the appropriate existing default versus optimizer-specific observed/Fisher conventions, count-prefix budget, stable likelihood primitives and source-owned weights/offsets. No full-response/count copy may be hidden in preparation. Fixed-theta cache isolation and dynamic-theta updates must both be tested.</p>
+<p>Gate: fixed-theta NB parity across links, small/large theta, count tails, multiple batches and signed-curvature cases; identical results across repeated and fresh-process fits with different theta values. Any fractional-response discrepancy in the pinned oracle must be resolved or recorded as an explicit, reviewed compatibility issue, not hidden with relative-score comparisons. This PR does not freeze theta when the user requested estimation: public estimated-theta fitting awaits PR8.2. EFS's conditional in-PIRLS theta policy remains owned by EFS-5, not substituted for exact REML.</p>
+<p><strong>PR 7.6 — public all-family fixed-sp integration and release matrix.</strong></p>
+<p>Depend on PR7.1–7.5 and PR8.2 for estimated NB with lambda pinned. Wire family capabilities and solver selection into the public streamed route, compact result/family snapshots, prediction/SE and diagnostics. Separate basis eligibility, family/link capability, parameter-estimation mode, solver admissibility and derivative eligibility; do not collapse them into a family-name allowlist. Explicit streamed requests must never fall back to materializing full training X without separate user selection.</p>
+<p>Gate: all five families and every supported inventoried link, both fixed and estimated NB theta, pass the public fixed-sp matrix with pinned R and dense comparisons at STRICT/MODERATE. Test reported/score scale conventions, ownership/pickle, family isolation, bounded retained state and near-boundary failures. Demonstrate the custom-family extension seam from PR7.1 at the public driver. New families added later must provide capabilities and conformance tests; they must not require rewriting host scanning. Mark complete only when missing family cells are implemented or the user explicitly approves a changed scope. Unsupported prepared smooths remain a separately documented limitation.</p>
+<p><strong>PR 8 — exact-objective streamed REML foundation using an adjoint gradient.</strong></p>
+<p>The current internal provider/L-BFGS implementation is a canonical Poisson/log and binomial/logit, known-scale, differentiable-interior foundation. The full algorithm below is the target; PR8 alone does not deliver the remaining regular-family scale/non-canonical or NB theta paths. PRs 8.1–8.3 make those follow-ups explicit.</p>
+<p>Affected: <code>fitting/newton.py::_diff_score</code>, <code>_jit_diff_grad_hess</code>, <code>fitting/reml.py::_criterion_core</code>, and the new stream state/reductions; add a pure coefficient/statistic derivative kernel and an <code>execution/reml.py</code> host driver. The current module-level score accepts full X/y/weights as explicit dynamic arguments; the nested custom_jvp closes over those arguments, and Newton evaluates a full outer Hessian. The existing cache design already avoids a separate compiled score closure per fit. Passing only G and b to REML and treating them as constants loses how beta and W vary with smoothing parameters.</p>
+<p>Read first: <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit3.r#L67"><code>gam.fit3</code></a>/<a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit4.r#L240"><code>gam.fit4</code></a> and <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/src/gdi.c#L1953"><code>src/gdi.c::gdi1</code>/<code>gdi2</code></a> for score and implicit derivatives; <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit3.r#L1290"><code>R/gam.fit3.r::newton</code></a> for inner tolerance tightening and accepted-fit warm starts; <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit3.r#L1722"><code>bfgs</code></a> for an existing first-derivative optimizer on the same fitted-model criterion. mgcv's BFGS uses a full inverse-Hessian approximation. Use an existing bounded L-BFGS implementation, such as SciPy's L-BFGS-B in the host driver, to bound m-space storage rather than write a new quasi-Newton algorithm. The streamed VJP/adjoint interface itself is additional work and must be validated against the current custom_jvp.</p>
+<p>Use the same scalar REML criterion with a new explicit derivative provider. Let:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>rho = log smoothing parameters
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>g(beta, rho, theta) = 0.5 * gradient_beta(deviance) + S(rho) beta
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>H_beta = derivative_beta(g)
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>F(beta, rho, theta, phi) = the existing REML scalar criterion
+</code></pre></div>
+<p>At a converged coefficient solution:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>solve H_beta.T a = partial_beta F
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>total_gradient_rho F =
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    partial_rho F - (partial_rho g).T a
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>For rho_j: partial_rho_j g = exp(rho_j) S_j beta
+</code></pre></div>
+<p>Implementation:</p>
+<ol>
+<li>Converge streamed PIRLS at the trial rho/theta. Cache accepted beta, final G_observed, G_fisher if needed, deviance, family statistics, factors, and the exact parameter values.</li>
+<li>Differentiate the p-dimensional REML core with respect to its explicit inputs. This produces cotangents for G_observed, deviance, beta, rho, and relevant family scalars.</li>
+<li>Scan rows again. For each batch, apply a JAX VJP of the batch statistics with these cotangents and sum beta/theta contributions. No reverse-mode tape spans the source iterator.</li>
+<li>Solve one coefficient-space adjoint system.</li>
+<li>Contract the adjoint with local penalty derivative actions. This is local block work for all smoothing parameters, rather than materializing m global penalty derivatives.</li>
+<li>Add theta and scale derivatives with their actual dependence. For NB, include both the saturated-likelihood theta derivative and partial_theta g. Do not freeze estimated dispersion.</li>
+<li>Use L-BFGS-B on rho and joint parameters. Preserve the current lambda bounds from <code>NewtonOptimizer._clamp_params</code> (default rho in [-40, 40]); log_theta/log_phi are currently unbounded. Each trial score must re-converge beta and use the global objective; warm-start from the last accepted fit. Retain the actual parameter ordering <code>[log_lambda, &lt;log_theta&gt;, &lt;log_phi&gt;]</code>, <code>Mp</code>/rank corrections, and the distinction between optimized phi and reported Fletcher scale.</li>
+</ol>
+<p>L-BFGS changes the optimization trajectory, not the intended exact REML objective. Keep dense Newton as the reference and optionally for small m. Do not produce a full m-by-m Hessian by default. Finite-difference refitting for each rho_j would add roughly m full fits per gradient and is only appropriate as a small validation oracle.</p>
+<p>Preserve the existing solve/score regularization conventions. The current log determinant uses a scaled system and jitter, whereas the IFT solve uses observed curvature with its own stabilization. Sharing factors is valid only when those systems coincide. A genuinely indefinite or unidentified system needs a stated algorithmic decision, not an unconditional SPD solve.</p>
+<p>The adjoint equations assume a converged, differentiable stationarity equation with a fixed identifiable subspace. Check active weight clipping separately: current PIRLS clips weights, while the canonical <code>_diff_score</code> JVP differentiates the underlying working-weight function. Agreement among that custom JVP, finite differences, and a new stationarity derivative is not automatic at clipping/rank boundaries. Start derivative parity in the smooth interior and resolve discrepancies explicitly before expanding the streamed path to those cases.</p>
+<p>Complexity remains dominated by batch G formation and its VJP, generally O(n*p²), plus coefficient factorizations. The advantage is bounded row workspace and removal of full Hessian/m-direction intermediates. Exact streaming is a capacity improvement; repeated passes can still be expensive.</p>
+<p>Gate: gradients agree with the existing custom_jvp and finite differences on manageable data; scalar objective, fitted predictions, EDF when requested, and convergence residuals meet reference tolerances. Exercise multiple penalties, coupled tensor penalties, theta, scale, non-canonical links, and rank issues separately. Use <code>tests/test_fitting/test_reml.py</code>, <code>test_newton.py</code>, and <code>test_nb_custom_jvp.py</code> as layer references; consolidate broad final fits in <code>tests/test_validation_matrix.py</code>.</p>
+<p>First proof required: a reproducible, well-conditioned Poisson case with multiple penalties, comparing the batch VJP/adjoint to <code>_diff_score</code> at several trial rho values and batch sizes. Current captured proof evidence belongs in the implementation checkpoint; the earlier draft's unverified quoted error is not acceptance evidence.</p>
+<p><strong>PR 8.1 — regular-family adjoints, non-canonical links and unknown scale.</strong></p>
+<p>Depend on the PR8 foundation and PR7.1–7.4. Generalize derivative contributions through the family contract rather than reusing the canonical identity <code>dD/deta = 2*wt*(mu-y)</code> for arbitrary links. Preserve observed stationarity/score curvature, Fisher reporting, actual saturated likelihood and joint log_phi derivatives for Gaussian/Gamma. Keep accepted/trial states bound to exact rho/phi and the prepared model. QR-stabilized coefficient solves require a consistent adjoint and log-determinant policy, not reuse of an unrelated factor.</p>
+<p>Gate: all regular-family/link inventory cells have scalar, gradient, refit finite-difference, fitted-model and reported-scale parity. Clipping/rank/conditioning boundaries have explicit validated behavior; unsupported derivatives must not produce a plausible gradient. Include the high-rho penalty-null-space roundoff issue found during PR9 review. No full outer Hessian or reverse-mode tape over source scans.</p>
+<p><strong>PR 8.2 — NB theta derivatives and exact parameter optimization.</strong></p>
+<p>Depend on PR8.1, PR7.5 and PR4. Add dynamic-theta batch cotangents, saturated-likelihood derivatives and partial_theta stationarity terms for the supported NB links, preserving parameter order <code>[log_lambda, log_theta]</code> and phi=1. Optimize smoothing and theta jointly for exact REML; support fixed-sp calls by pinning lambda while leaving theta free. Reuse the common driver, not a host alternation that fully fits beta and then changes the statistical objective. EFS conditional theta Newton is a different policy and is not an exact-REML replacement.</p>
+<p>Gate: fixed/estimated-theta NB derivatives, final fits and pin-lambda semantics meet dense/pinned-R comparisons, including non-default links, parameter isolation and post-theta consistency. Every accepted coefficient/score/gradient state belongs to the returned theta. Failure and boundary behavior stay explicit.</p>
+<p><strong>PR 8.3 — public all-family exact streamed REML release.</strong></p>
+<p>Depend on PR7.6 and PR8.1–8.2. Expose the reviewed limited-memory optimizer through the public streaming controls with truthful convergence, solver, objective, scale/theta and source-scan diagnostics. Preserve dense Newton defaults. The release matrix covers every inventoried family/link with fixed and estimated smoothing, both NB theta modes, prediction/uncertainty and memory behavior. Family-specific derivative limitations cannot be hidden behind a generic public "all families" claim. This is the all-family exact large-row milestone; PR9 remains its optional Gaussian acceleration, not a substitute for general-family support.</p>
+<p><strong>5. Stage 3: Gaussian identity-link specialization</strong></p>
+<p><strong>PR 9 — compress the data once and optimize in coefficient space.</strong></p>
+<p>Add fitting/gaussian.py and execution/gaussian.py. Route only Gaussian with identity link, a frozen design and prior weights, and supported offset/penalty conventions. Other Gaussian links remain on general PIRLS.</p>
+<p>Read first: <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L1503"><code>R/bam.r::bam.fit</code></a> already compresses weighted X and y-offset using <code>qr_update</code>, carries <code>R</code>, <code>f</code>, <code>y.norm2</code>, <code>rss.extra</code>, and <code>n.true</code>, then fits the reduced problem. <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L1682"><code>R/fast-REML.r::fast.REML.fit</code>/<code>Sl.fit</code></a> already optimize a Gaussian penalized least-squares REML criterion in coefficient space, with scale derivatives and penalty reparameterization. Adapt that compression flow and the existing JaxGAM <code>_criterion_core</code>; do not design a second Gaussian likelihood or copy the non-Gaussian working-model iteration. The Gaussian compression is exact for the frozen model even though the R routine is named fast REML.</p>
+<p>A dense-input version can ship after PRs 2–3 using <code>FittingData</code> adapters; the RowSource version needs PR 5. Neither needs the new non-Gaussian adjoint in PR 8. Keep the current Newton optimizer initially, adding the bounded-memory optimizer only when m warrants it.</p>
+<p>After basis preparation, one reduction computes:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">r</span> <span class="o">=</span> <span class="n">y_batch</span> <span class="o">-</span> <span class="n">offset_batch</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">G</span> <span class="o">+=</span> <span class="n">X_batch</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="p">(</span><span class="n">weight_batch</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">X_batch</span><span class="p">)</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">h</span> <span class="o">+=</span> <span class="n">X_batch</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="p">(</span><span class="n">weight_batch</span> <span class="o">*</span> <span class="n">r</span><span class="p">)</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">c</span> <span class="o">+=</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">weight_batch</span> <span class="o">*</span> <span class="n">r</span><span class="p">,</span> <span class="n">r</span><span class="p">)</span>
+</code></pre></div>
+<p>Retain row/positive-weight counts, sum of log positive weights, and statistics required by null deviance and scale reporting.</p>
+<p>For every smoothing trial:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">H</span> <span class="o">=</span> <span class="n">penalty_pack</span><span class="o">.</span><span class="n">add_to_dense</span><span class="p">(</span><span class="n">G</span><span class="p">,</span> <span class="n">rho</span><span class="p">)</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">L</span> <span class="o">=</span> <span class="n">factor</span><span class="p">(</span><span class="n">H</span><span class="p">)</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">beta</span> <span class="o">=</span> <span class="n">solve_factor</span><span class="p">(</span><span class="n">L</span><span class="p">,</span> <span class="n">h</span><span class="p">)</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="n">rss</span> <span class="o">=</span> <span class="n">c</span> <span class="o">-</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">beta</span> <span class="o">@</span> <span class="n">h</span> <span class="o">+</span> <span class="n">beta</span> <span class="o">@</span> <span class="n">G</span> <span class="o">@</span> <span class="n">beta</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="n">score</span> <span class="o">=</span> <span class="n">gaussian_reml_core</span><span class="p">(</span><span class="n">beta</span><span class="p">,</span> <span class="n">rss</span><span class="p">,</span> <span class="n">G</span><span class="p">,</span> <span class="n">L</span><span class="p">,</span> <span class="n">rho</span><span class="p">,</span> <span class="n">log_phi</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+</code></pre></div>
+<p>This expression is algebraic specification, not the preferred residual evaluation for a near-perfect fit. Compute RSS from a QR compression when cancellation is significant:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>sqrt(W) X = Q R
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>f = Q.T sqrt(W) (y-offset)
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>RSS(beta) = residual_norm_squared + ||f - R beta||²
+</code></pre></div>
+<p>Accumulate the orthogonal residual norm stably during QR updates, retaining the discarded <code>Q.T @ y</code> tail's squared norm at each merge and preserving column pivots. This is a deliberate stability improvement to <code>bam.fit</code>'s <code>y.norm2 - sum(f^2)</code> residual calculation; the initial compression inside <code>fast.REML.fit</code> and augmented QR in <code>Sl.fit</code> already demonstrate tail-norm accumulation. Deriving it only as c-||f||² recreates the cancellation problem.</p>
+<p>Keep these details explicit:</p>
+<ul>
+<li>The audited PIRLS clips working weights but uses original prior weights in deviance. To reproduce it across clipping edges, keep separate solve and deviance statistics, or change zero/extreme-weight handling in a separately validated numerical change. A single G does not represent both if weights differ.</li>
+<li>Initial delivery can gate on weights for which these conventions coincide; expand after the edge cases are covered.</li>
+<li>Use the current joint scale objective and public reported-scale behavior first. The code distinguishes optimized log_phi from the Fletcher scale stored for reporting. Do not replace either blindly with RSS/(n-p).</li>
+<li>Preserve <code>Gaussian.saturated_loglik</code>'s positive-weight count and log-weight term, and <code>fletcher_scale</code>/<code>estimate_scale</code>'s current row-count conventions. A reduced matrix with p rows must not replace the original n in likelihood or reporting statistics.</li>
+<li>Derive beta sensitivity from the coefficient solve, so cross-penalty derivatives are retained. Automatic differentiation of this coefficient-space score is feasible without any training-row arrays.</li>
+<li>Preserve penalty null-space dimension and generalized determinant treatment in rank-deficient cases.</li>
+<li>Retain Newton for small m and reuse the exact-gradient/L-BFGS strategy for large m. Gaussian compression removes n from optimization, not p³ factorizations or large-m costs.</li>
+<li>Only scan training data again when row-level fitted values, residuals, or a requested validation pass is needed.</li>
+</ul>
+<p>Gate: current Gaussian fixed-sp and estimated-sp cases, weights, offsets, multiple/tensor penalties, unknown-scale behavior, near-perfect fits, and rank deficiency agree; source scan counters do not increase during smoothing optimization after statistics are frozen.</p>
+<p>Expected cost: one O(n*p²) data reduction, then coefficient-space work per smoothing evaluation. Prediction is a separate pass. Setup itself may have required several earlier scans. Add <code>tests/test_fitting/test_gaussian.py</code>; compare the compressed objective/derivatives to current dense REML and the corresponding R reduced fit before adding final-model cases to the validation matrix.</p>
+<p><strong>6. Stage 4A: discretized design and working-model smoothing</strong></p>
+<p><strong>PR 10 — exact discrete representation before continuous binning.</strong></p>
+<p>Add data/discretize.py, formula/discrete_design.py, and fitting/discrete_ops.py.</p>
+<p>Read first: <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L122"><code>R/bam.r::compress.df</code>/<code>discrete.mf</code></a> for unique-row indexing, sharing covariate tables, factors, and tensor-margin bookkeeping; <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/misc.r#L191"><code>R/misc.r::XWXd</code></a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/misc.r#L333"><code>XWyd</code>/<code>Xbd</code>/<code>diagXVXd</code></a> for operation contracts; and <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/src/discrete.c#L57"><code>src/discrete.c::XWXd0</code>/<code>XWXijs</code>/<code>indReduce</code></a> for the actual algorithms. The R wrappers call C; a generic dense pair-histogram implementation would miss the main reuse opportunity. Translate the needed single-predictor, independent-row cases into NumPy descriptors and JAX kernels, with tests against these R routines. AR correlation, multiple linear predictors, and smooth summation conventions in the R implementation are outside this plan's initial scope.</p>
+<p>Preserve the frozen basis, normalization, and constraints from PR 5 before creating lookup tables. Running <code>smoothCon</code> on an unweighted unique-only frame changes normalization/centering when observations repeat. mgcv's discrete setup uses a compressed/padded model frame and its own constraint representation, so default <code>bam(discrete=TRUE)</code> is not the reference for this exact-representation milestone.</p>
+<p>For a univariate term, store basis table B_j of shape (q_j,k_j) and row indices g_j. If using observed unique values, this changes representation without approximating covariate values.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>X_j = L_j B_j                     # L_j is implicit indexed selection
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>X_j v = (B_j v)[g_j]
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>X_j.T u = B_j.T segment_sum(u, g_j)
+</code></pre></div>
+<p>For dense coefficient cross-products:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>G_jl = B_j.T C_jl B_l
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>C_jl[a,b] = sum of current row weights with g_j=a and g_l=b
+</code></pre></div>
+<p>Include products of numeric-by multipliers and the appropriate factor indicators in cross-term weights. The C <code>XWXijs</code> implementation already specializes the diagonal same-term case, partitions tensor terms into subblocks, and uses <code>indReduce</code> to accumulate a sparse weighted pair representation when the dense pair table is too large. Reuse those choices, adapting all row scratch space to B for streamed execution; the original C code uses n-sized work buffers. Build pair tables sequentially or in bounded groups; never retain all q_j-by-q_l tables.</p>
+<p>This representation does not eliminate off-diagonal term products or per-row IRLS weights. Across t terms, naive pair aggregation can still cost O(n*t²), before tensor subblocks. If a pair table is too large or sparse with too many unique pairs, use the indexed/direct-product alternative or reject that kernel choice. Compare histogram accumulation, direct block GEMM, and operator execution.</p>
+<p>Discretize tensor margins separately; evaluate tensor contractions using marginal tables and coefficient ordering metadata. Port the meaning of <code>Xd</code>, <code>kd</code>, <code>ks</code>, <code>ts</code>, <code>dt</code>, <code>v</code>, <code>qc</code>, and dropped-column indices from R, with explicit zero-based indices and translation to JaxGAM's <code>TermBlock</code> transforms. mgcv may reorder tensor margins; retain a permutation back to public coefficient and smoothing-parameter order. Do not construct a global grid across d input features. A high-order tensor still has a coefficient product: compression does not remove that model-size explosion. Keep row index arrays in the source/memmap when needed; storing all n-by-margin indices on device is not a bounded-row guarantee.</p>
+<p>Gate: at exact unique-value indices, matvec, transpose action, diagonal, and all cross-term blocks agree with the ordinary design. Include correlated covariates, numeric-by terms, factors, and tensors so tests cannot pass by ignoring cross terms.</p>
+<p><strong>PR 11 — optional continuous discretization and working-model REML.</strong></p>
+<p>Read first: <code>compress.df</code> rounds metric variables to an evenly spaced range grid only when there are too many unique combinations, while preserving factor values; <code>discrete.mf</code> uses a fixed temporary RNG state to shuffle/pad the setup frame. Adapt this existing policy before inventing quantile bins or representative selection. For smoothing, port the sequence in <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L430"><code>R/bam.r::bgam.fitd</code></a> and <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L1585"><code>R/fast-REML.r::Sl.fitChol</code></a>: working cross-products, initial block transform, proposed Newton update, coefficient step control, and convergence checks. Use <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/efam.r#L5"><code>R/efam.r::estimate.theta</code></a> only for the corresponding working-model nuisance update. Check the 1.9-3/1.9-4 differences in §0 before choosing the parity target.</p>
+<p>Expose the chosen grid policy per term or margin, with representative values and prediction policy. Evaluate full-data deviance on the selected discretized design; retain per-row responses and offsets through the source. Discretization and smoothing strategy are separate controls: the frozen discrete design can use fixed-sp PIRLS or the exact-objective solver; <code>bgam.fitd</code>-style performance iteration is an additional opt-in strategy.</p>
+<p>First validate fixed-sp discrete fitting against the same explicit discretized design. Then add the large-data smoothing loop:</p>
+<ol>
+<li>Compute current working model statistics from the discrete design.</li>
+<li>Take a limited smoothing update on that working model.</li>
+<li>Update coefficients and, where supported, nuisance parameters.</li>
+<li>Repeat with damping and convergence checks; record the actual criterion and strategy.</li>
+</ol>
+<p>This is a new fitting method for JaxGAM with an existing mgcv implementation to port. It differs from current nested REML even when every covariate already lies on the discrete grid. In particular, the nuisance update in <code>estimate.theta</code> conditions on current mu, whereas JaxGAM's estimated-theta NB path uses joint outer REML. Record both execution and smoothing strategy; do not label performance iteration as PR 8's exact-objective optimization.</p>
+<p>Refine q per margin and compare predictions, held-out deviance, smooth shapes, EDF, and interval behavior against the undiscretized reference. Do not demand strict coefficient equality across different bases. Repeated exact discrete values require no covariate approximation; continuous bins do.</p>
+<p>Prediction must state its semantics. <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L1773"><code>predict.bamd</code></a> calls <code>discrete.mf</code> on <strong>newdata</strong>, then evaluates the fitted smooth metadata on that newly compressed frame; it does not simply snap all future values to stored training bins. Match that behavior when exposing an mgcv-compatible discrete prediction mode. Freeze the prediction grid over the whole prediction request before yielding batches; independently rediscretizing each batch changes its ranges/representatives. A policy that always uses training-grid representatives, or evaluates every new value continuously, is a separate documented choice. Reuse the fitted knots/transforms in every mode and test held-out values, extrapolation, factors, and changes in prediction batch boundaries.</p>
+<p>Gate: first compare discrete operators and fixed-sp fits against the identical explicit design at STRICT/MODERATE tolerance; then compare the chosen working-model implementation to pinned mgcv <code>bam</code> with matching setup, grid, ordering, and method. Accuracy relative to an undiscretized <code>gam</code> is a separate approximation study. Extend RBridge with explicit <code>bam</code>/discrete-operation helpers when needed; the current <code>fit_gam</code> helper does not establish this parity. No unbounded joint-grid or pair-table allocation.</p>
+<p><strong>7. Stage 4B: operator design and iterative coefficient solving</strong></p>
+<p><strong>PR 12 — implement operators and preconditioners with fixed sp first.</strong></p>
+<p>Add fitting/operators.py, fitting/preconditioners.py, fitting/iterative.py, and an execution/operator.py host orchestrator.</p>
+<p>Read first: R's <code>Xbd</code>/<code>XWyd</code> indexed actions and <code>Sl.Sb</code> from PRs 2/10; adapt those for matvec/rmatvec rather than designing another smooth evaluator. <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L2571"><code>smooth.construct.re.smooth.spec</code>/<code>Predict.matrix.random.effect</code></a> define the random-effect interaction columns, full-rank identity penalty, no-centering rule, and zero contribution for unseen levels. JaxGAM's <code>RandomEffectSmooth</code> already implements those semantics densely. The preconditioner and host-streamed Krylov solver are new work: mgcv's dense <code>bam</code> cross-products/Cholesky are not an existing no-p² solver.</p>
+<p>Make the no-p² contract apply to setup as well as fitting. PR 5 initially supports cubic/modest parametric blocks; PR 12 must add indexed random-effect preparation before claiming high-cardinality support. Avoid <code>RandomEffectSmooth.setup</code>'s dense interaction encodings/identity, <code>CoefficientMap.build</code>'s requirement for dense training X blocks, dense penalty-root augmentation, dense range bases, and global D. Budget each local block too: a single q-level term or tensor can itself have size p, so a dense "local" block is not safe automatically.</p>
+<p>The fused batch operation must not allocate the n-vector Xv outside a batch:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">normal_matvec</span><span class="p">(</span><span class="n">v</span><span class="p">):</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>    <span class="n">out</span> <span class="o">=</span> <span class="n">penalty</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">rho</span><span class="p">)</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>    <span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">source</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">batch_rows</span><span class="p">):</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>        <span class="c1"># beta and theta are fixed throughout this linear solve</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>        <span class="n">w</span> <span class="o">=</span> <span class="n">working_weights_at_current_fit</span><span class="p">(</span><span class="n">batch</span><span class="p">,</span> <span class="n">beta</span><span class="p">,</span> <span class="n">theta</span><span class="p">)</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>        <span class="n">xv</span> <span class="o">=</span> <span class="n">design</span><span class="o">.</span><span class="n">matvec_batch</span><span class="p">(</span><span class="n">batch</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>        <span class="n">out</span> <span class="o">+=</span> <span class="n">design</span><span class="o">.</span><span class="n">rmatvec_batch</span><span class="p">(</span><span class="n">batch</span><span class="p">,</span> <span class="n">w</span> <span class="o">*</span> <span class="n">xv</span><span class="p">)</span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>    <span class="k">return</span> <span class="n">out</span>
+</code></pre></div>
+<p>Freeze beta, theta, weights, transforms, and the preconditioner during each Krylov solve. If weight caching is too large, recompute from the same frozen state. Changing them within ordinary PCG changes the linear system.</p>
+<p>Start with SPD canonical systems. Add fixed-theta NB only for cases where the chosen observed system is also SPD: fixing theta alone is not an SPD guarantee for every link. Preserve the current observed/Fisher split; switching coefficient updates to Fisher scoring is a separate tested algorithm choice. Use block-Jacobi term Hessians plus penalties for small blocks and diagonal/indexed actions for large blocks, augmented with a budgeted coarse solve for intercept/unpenalized directions. Strong concurvity often makes diagonal preconditioning inadequate; measure convergence before adding a sketch/coarse correction. Multi-device execution is outside this plan.</p>
+<p>For indexed random intercepts, use level IDs and weighted counts directly. For a single grouping factor plus a modest fixed/smooth block, an exact Schur complement is an additional option because the random-effect diagonal is cheap to eliminate. Crossed random effects lose this simple structure.</p>
+<p>B-splines and P-splines (<code>bs/ps/cp</code>) are deferred by the repository's scope and are not a prerequisite or deliverable of PR 12. Use the existing supported smooths. A later spline extension must preserve sparse application through centering and reparameterization; dense Z/D can erase local support. Treat any changed spline space or penalty as a model change.</p>
+<p>Use implicit differentiation of converged solves where differentiation is needed. For host-streamed operators, call the solver and its adjoint explicitly. JAX custom_linear_solve is appropriate when the matvec itself is a pure JAX operation, such as resident discrete tables; it cannot directly trace a Python I/O iterator.</p>
+<p>Gate: adjoint identity dot(Xv,u)=dot(v,X.Tu), symmetry, scaled residuals, convergence and preconditioner behavior; fixed-sp predictions/deviance match the direct solver. Include correlated terms and sparse high-cardinality factors.</p>
+<p>An operator solve costs approximately n_cg full data passes, where n_cg is the Krylov iteration count. With dense bases, arithmetic is O(n_cg<em>n</em>p); with indexed support it is O(n_cg*nnz(X)), excluding basis recomputation. Its advantage depends on preconditioning and data bandwidth. Re-reading remote data hundreds of times can be slower than direct statistics accumulation.</p>
+<p><strong>PR 13 — add large-p smoothing selection and uncertainty.</strong></p>
+<p>The <a href="../fellner_schall_implementation_plan/">extended Fellner–Schall implementation sub-plan</a> owns the theory-to-code mapping, pinned mgcv 1.9-3 reference, update algebra, controller, scale/theta behavior, API integration, and EFS acceptance tests. Read its Wood–Fasiolo paper references alongside <code>R/gam.fit4.r::efsudr</code>; <code>efsud</code> targets the more general <code>gam.fit5</code> path and is not the initial port.</p>
+<p>Split delivery rather than requiring all of PR 13 to land together:</p>
+<ul>
+<li>Fixed externally supplied sp is the first useful operator release in PR 12.</li>
+<li>EFS-1 through EFS-5 deliver the dense, exact-trace reference on current <code>FittingData</code>, with parent PR 2's local penalties optional for initial correctness. This can ship before PR 12 and avoids the full smoothing-parameter Hessian, not dense coefficient algebra. Exact traces do not remove the general-family EFS approximation or guarantee the Newton REML optimum.</li>
+<li>EFS-5.1 completes the remaining existing-family/link gates; EFS-5.2 adds a streamed direct fit/statistic/score adapter using the PR7.x family contract. Dense EFS support is not evidence that its streamed counterpart exists. These remain manageable-p exact-trace deliverables with EFS-specific scale and in-PIRLS theta policies.</li>
+<li>EFS-6 adapts that reference to validated operator fit/trace/score providers after PR 12. Stochastic traces and log determinants are separate approximation changes; bulk uncertainty remains a separate deliverable under this parent plan.</li>
+</ul>
+<p>The EFS update needs traces and quadratic forms, but mgcv's step selection and score-window stopping still require REML scores. A no-p² backend needs a validated exact or approximate score provider; omitting score checks is a different algorithm. The sub-plan also makes the non-monotone mgcv step policy an explicit architecture/release decision, without weakening existing Newton gates.</p>
+<p>For stochastic methods, use fixed probes across trial comparisons and expose probe count, Lanczos depth, solver tolerances, seed, residuals, and estimated uncertainty. Increase accuracy when stochastic or solve error is comparable to the proposed improvement or stopping threshold. Do not claim exact REML or treat a noisy decrease as certain. These capabilities are new work, not supplied by mgcv's basis-truncation Lanczos routines.</p>
+<p>Project out unidentifiable directions and handle penalty null spaces explicitly before log-determinant estimation. An SPD CG/SLQ implementation is not a solution for arbitrary signed observed Hessians.</p>
+<p>For selected prediction variances, solve against requested design rows in bounded groups. For bulk uncertainty, require a separately validated approximation. Saving a dense covariance would defeat the large-p representation.</p>
+<p>Gate: dense EFS meets the sub-plan's pinned EFS parity and compatibility tests first. On moderate p, operator/randomized statistics and fits agree with the dense EFS reference within calibrated error; record differences from Newton separately. Results identify approximation and optimization strategy. Public EFS and operator approximations remain post-v1.0 capabilities with their own scope gates.</p>
+<p><strong>8. Performance and numerical acceptance</strong></p>
+<p>Extend the existing <a href="../../scripts/benchmark_vs_r.py">scripts/benchmark_vs_r.py</a>, <a href="../../scripts/benchmark_large_p.py">scripts/benchmark_large_p.py</a>, and <a href="../../scripts/profile_fit.py">scripts/profile_fit.py</a> fixtures/timing approach; add <code>scripts/benchmark_scaling.py</code> only for the new source-scan and memory measurements. The large-p script already compares <code>gam(REML)</code> and <code>bam(fREML)</code>, but those timings do not establish equal bases/objectives. Both benchmark scripts currently delete a user-global JAX cache; new cold-compilation runs must use an isolated temporary cache rather than copying that behavior. Enforce RBridge's version check for parity measurements.</p>
+<p>Add Makefile targets such as <code>benchmark-scaling</code> and <code>test-scaling-memory</code> when the harness lands, using <code>uv run</code>. Existing commands are <code>make lint</code>, <code>make test-local</code>, <code>make test-file FILE=...</code>, <code>make test</code> (Docker/R), and <code>make test-cov</code>; there is no scaling target yet. Keep large benchmarks outside ordinary unit-test runtime.</p>
+<p>Use representative cases rather than a full infeasible Cartesian product:</p>
+<table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Suggested dimensions</th>
+<th>Concrete question</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Large n, modest p</td>
+<td>n=100k/1m/10m; p around 100/1k</td>
+<td>Does streamed memory plateau and does Gaussian optimization stop reading rows?</td>
+</tr>
+<tr>
+<td>Many additive terms</td>
+<td>n=100k/1m; m=10/100/500; k=10/20</td>
+<td>Are penalty storage, compilation, and smoothing derivatives controlled?</td>
+</tr>
+<tr>
+<td>Expensive kernels</td>
+<td>tp/gp with default knot cap; varying input dimension</td>
+<td>Are all distance/kernel intermediates batch bounded?</td>
+</tr>
+<tr>
+<td>Shared variables/tensors</td>
+<td>s(x)+te(x,z), repeated smooths, ti terms</td>
+<td>Do dependence detection and constraint preparation avoid n²/n*p allocations?</td>
+</tr>
+<tr>
+<td>High-cardinality effects</td>
+<td>10k/100k/1m groups where supported</td>
+<td>Is storage proportional to indices/nonzeros rather than one-hot dense arrays?</td>
+</tr>
+<tr>
+<td>NB count tails</td>
+<td>Modest counts plus large outliers; theta near Poisson limit</td>
+<td>Is derivative work bounded without losing first/second derivative accuracy?</td>
+</tr>
+<tr>
+<td>Numerical stress</td>
+<td>Concurvity, zero/extreme weights, offsets, near-perfect Gaussian fits</td>
+<td>Do solvers, derivatives, rank decisions, and uncertainty remain valid?</td>
+</tr>
+</tbody>
+</table>
+<p>Measure setup time, cold compilation, warm fitting, source scan count and bytes, inner/outer iterations, derivative time, prediction/SE time, host peak RSS, device peak memory, and temporary disk use. Explicitly synchronize device results before timing. CPU profiler time attributed to array-to-scalar conversion often includes waiting for prior device computation; do not interpret it all as Python conversion overhead.</p>
+<p>Define each run's hardware, package versions, dtype, BLAS/thread settings, formula, basis/penalty counts, seed, input source, memory budget, and execution/approximation strategy.</p>
+<p>Numerical gates:</p>
+<ul>
+<li>Import the actual constants from <code>tests/tolerances.py</code>: STRICT is rtol=1e-10/atol=1e-12 and MODERATE is rtol=1e-4/atol=1e-6. The design document quotes different values. Do not duplicate those stale constants or loosen existing tolerances to make a refactor pass.</li>
+<li>The active repository instructions require R parity at STRICT or MODERATE. Existing tolerance prose and parts of <code>tests/test_validation_matrix.py</code> still use LOOSE; preserve those regression assertions, but passing them alone is insufficient acceptance for these PRs. Add explicit STRICT/MODERATE gates for each newly supported equivalent-model path. Record unresolved legacy parity gaps rather than calling them passed or weakening the new gates.</li>
+<li>Keep broad final-model R comparisons and hard-gate invariants in <code>tests/test_validation_matrix.py</code>; layer-specific R tests own basis construction, penalty/derivative algebra, fixed-sp PIRLS, prediction/SE, and summary behavior. Use <code>tests.helpers._AssertCollector</code> when assertions share an expensive fit. Every new module gets a corresponding test file and &gt;80% coverage; Phase 2 changes require a JIT compilation-and-execution test.</li>
+<li>Compare penalty action, local transformations, score, gradients, stationarity residuals, predictions, deviance, scale, EDF and uncertainty as relevant.</li>
+<li>Hold the prepared basis fixed when comparing solvers. Evaluate changed-basis/discretized methods using approximation and prediction metrics separately.</li>
+<li>Verify memory behavior with increasing n at fixed B/p in isolated processes, subtracting measured input/runtime baselines. Instrument allocation sites and inspect compiler memory estimates in addition to peak-memory sampling.</li>
+<li>Exact direct paths must not allocate n-by-n Q, n-by-p X in streaming, m-by-p-by-p penalty arrays, or n-by-r-by-d distance differences.</li>
+<li>Operator paths additionally must not allocate p-by-p G/H or full covariance. A permitted small coarse preconditioner is accounted for separately.</li>
+<li>Use <code>make test</code>/<code>make test-cov</code> in the pinned R 4.5.2/mgcv 1.9-3 environment for reference gates. Local R auto-skips are not evidence of parity. Reading 1.9-4 source is useful but does not change the oracle; version-specific behavior needs a documented target and matching tests.</li>
+</ul>
+<p>No speedup target is justified by this source audit. The measurable early guarantees are removal of the identified array shapes, fewer data passes, equivalent numerical outputs, and recorded throughput on the target workload.</p>
+<p><strong>9. Merge sequence and exit criteria</strong></p>
+<table>
+<thead>
+<tr>
+<th>PR</th>
+<th>Deliverable</th>
+<th>Dependency</th>
+<th>Exit criterion</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Raw-reflector dependence QR</td>
+<td>None</td>
+<td>No n² Q; same dependence decisions</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Local penalties and D transforms</td>
+<td>None; merge after 1</td>
+<td>No m global penalties; algebra/derivative parity</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Reused bases, bounded kernels, one initialization</td>
+<td>2 where interfaces change</td>
+<td>Duplicate-work counters and prediction correctness</td>
+</tr>
+<tr>
+<td>4</td>
+<td>NB prefix-sum derivative with bounded workspace and fallback</td>
+<td>None; independent Stage 1 fix</td>
+<td>First/second derivative parity against recurrence and nb()$ls; explicit fallback cost; synchronized benchmarks</td>
+</tr>
+<tr>
+<td>5</td>
+<td>PreparedModel and replayable exact preparation</td>
+<td>2–3</td>
+<td>No full training design during supported setup</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Batched prediction and optional covariance</td>
+<td>Existing PredictSpec for array batches; 5 for RowSource</td>
+<td>Existing full/inference contracts pass; bounded workspace for new mode</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Published canonical-family fixed-sp streaming foundation</td>
+<td>5–6</td>
+<td>Gaussian/identity, Poisson/log, binomial/logit; bounded cross-product/Cholesky path only</td>
+</tr>
+<tr>
+<td>7.1</td>
+<td>Shared family execution contract and support inventory</td>
+<td>7; existing dense family/PIRLS interfaces</td>
+<td>Generic batch/reduction capabilities; unchanged defaults; custom-family conformance</td>
+</tr>
+<tr>
+<td>7.2</td>
+<td>Positive-weight QR/TSQR coefficient solver</td>
+<td>7.1; reusable PR9 QR primitives when available</td>
+<td>No normal-equation accuracy loss or retained training design; stable rank/pivot handling</td>
+</tr>
+<tr>
+<td>7.3</td>
+<td>All regular families and supported links</td>
+<td>7.1–7.2; 7.4 for signed observed information</td>
+<td>Every inventoried Gaussian/Poisson/binomial/Gamma fixed-sp cell passes</td>
+</tr>
+<tr>
+<td>7.4</td>
+<td>Sign-aware observed-curvature solver and safeguards</td>
+<td>7.1–7.2</td>
+<td>Signed/indefinite intermediate recovery and distinct observed/Fisher contracts</td>
+</tr>
+<tr>
+<td>7.5</td>
+<td>NB coefficient fitting and explicit fixed/dynamic theta state</td>
+<td>7.1, 7.4, 4</td>
+<td>NB/log/identity/sqrt fixed-theta parity and safe trial-theta kernels</td>
+</tr>
+<tr>
+<td>7.6</td>
+<td>Public all-family fixed-sp streaming integration</td>
+<td>7.1–7.5; 8.2 for free theta with pinned lambda</td>
+<td>Five families, all supported links, both NB theta modes; public/memory matrix</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Canonical known-scale streamed adjoint/L-BFGS foundation</td>
+<td>7</td>
+<td>Initial Poisson/binomial score/gradient parity without full outer Hessian</td>
+</tr>
+<tr>
+<td>8.1</td>
+<td>Regular-family adjoints and unknown-scale optimization</td>
+<td>8, 7.1–7.4</td>
+<td>Non-canonical and joint-phi derivative/final-fit parity</td>
+</tr>
+<tr>
+<td>8.2</td>
+<td>NB exact theta/smoothing optimization and pin-lambda mode</td>
+<td>8.1, 7.5, 4</td>
+<td>Theta cotangents, parameter isolation and exact fixed/free-sp NB parity</td>
+</tr>
+<tr>
+<td>8.3</td>
+<td>Public all-family exact streamed REML</td>
+<td>7.6, 8.1–8.2</td>
+<td>Full inventoried family/link/parameter-mode release matrix</td>
+</tr>
+<tr>
+<td>9</td>
+<td>Gaussian QR/statistics specialization adapted from bam.fit/Sl.fit</td>
+<td>2–3 for dense adapter; 5 for RowSource; 8's optimizer optional</td>
+<td>No source scans during smoothing optimization; same REML/scale conventions</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Exact discrete-index operators/cross-products</td>
+<td>5, 7; shared family contract from 7.1</td>
+<td>Algebraic parity on repeated values; family mathematics not duplicated</td>
+</tr>
+<tr>
+<td>11</td>
+<td>Continuous discretization and working-model smoothing</td>
+<td>10; applicable 7.x family capabilities and validated nuisance-update policy</td>
+<td>Quantified approximation/runtime gains; explicit per-family method gates</td>
+</tr>
+<tr>
+<td>12</td>
+<td>Fixed-sp operator solves/preconditioning</td>
+<td>2, 5, 7.1; applicable 7.x family contracts</td>
+<td>No p² system; controlled solve residuals; solver admissibility remains explicit</td>
+</tr>
+<tr>
+<td>13</td>
+<td><a href="../fellner_schall_implementation_plan/">Dense and streamed EFS, then operator smoothing</a>; separate uncertainty approximations</td>
+<td>Dense EFS: current FittingData; streamed EFS: 7.x contracts; operator EFS: 12 plus validated score provider</td>
+<td>Pinned EFS parity first; calibrated operator traces/scores and fit error later</td>
+</tr>
+</tbody>
+</table>
+<p>IDs preserve the original roadmap, not a strict numeric merge order. For example, 7.4 can land before 7.3's final signed-curvature gates, and 8.2 supplies estimated-theta fitting required by 7.6. There is no dependency cycle: 8.2 uses the internal family kernels from 7.5, not 7.6's public release adapter. The already-developed PR8 foundation and PR9 can finish while the new follow-ups are implemented in isolated branches; their smaller scopes must stay explicit.</p>
+<p>PRs 1–4 are useful dense-backend improvements. PR7 is the initial three-family streamed fixed-sp milestone, <strong>PR7.6 is the all-family fixed-sp milestone</strong>, and <strong>PR8.3 is the all-family exact-REML milestone</strong>. PR9 is the optional Gaussian QR acceleration. Both blockwise/QR and discretized bam-style algorithms are in this plan; a complete drop-in <code>bam()</code> API with every R option is a different compatibility claim. PRs 10–13 remain separate post-v1.0 algorithmic deliverables, not conditions for shipping the early optimizations. PR13 remains the final top-level milestone; its EFS sub-plan now explicitly includes wider-family and streamed-provider follow-ups before operator EFS, followed by separately reviewed uncertainty approximations.</p>
+<p>Implementation risk is highest in streamed constraints/normalization, exact non-Gaussian derivatives, and operator smoothing. Estimate schedule after PRs 1–5 establish the actual abstractions and target hardware benchmarks; do not assign a speedup or delivery date solely from n.</p>
+<p><strong>10. Source anchors and method references</strong></p>
+<p>This is the implementation reading map, complementing <code>docs/R_SOURCE_MAP.md</code> (since removed from the repository). Paths in the mgcv column are relative to <code>$MGCV_SOURCE</code>; links resolve to the exact locally inspected commit identified in §0. Function names are the durable anchors; line numbers change between 1.9-3 and 1.9-4.</p>
+<table>
+<thead>
+<tr>
+<th>PR</th>
+<th>Existing JaxGAM anchor</th>
+<th>mgcv implementation to read/adapt</th>
+<th>Additional work or compatibility limit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><a href="../../jaxgam/smooths/constraints.py">CoefficientMap.fix_dependence/gam_side</a></td>
+<td><a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/mgcv.r#L502">R/mgcv.r: fixDependence, augment.smX, gam.side</a></td>
+<td>Map R's packed QR application to SciPy/LAPACK; preserve dependent-column choices.</td>
+</tr>
+<tr>
+<td>2</td>
+<td><a href="../../jaxgam/formula/design.py">ModelSetup.build</a>, <a href="../../jaxgam/fitting/data.py">FittingData helpers</a>, <a href="../../jaxgam/jax_utils.py">block_log_det_S</a></td>
+<td><a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L68">Sl.setup</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L517">Sl.initial.repara</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L431">Sl.Sb/Sl.rSb</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L1016">Sl.addS</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L762">ldetS</a>; <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit3.r#L2661">totalPenaltySpace</a></td>
+<td>Change storage, not penalty order, fitting coordinates, or current rank cutoffs. mgcv's totalPenaltySpace uses eps^.66; JaxGAM uses eps^(2/3), so copying thresholds is a separate numerical change.</td>
+</tr>
+<tr>
+<td>3</td>
+<td><a href="../../jaxgam/smooths/base.py">Smooth and prediction-copy hooks</a>, <a href="../../jaxgam/smooths/utils.py">distance helper</a>, <a href="../../jaxgam/fitting/initialization.py">initialize_beta</a></td>
+<td><a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L3770">smoothCon</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L741">tensor constructor's Xm reuse</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/mgcv.r#L4626">initial.sp</a></td>
+<td>Explicit training-basis handoff, bounded evaluation, and initialization at the transfer boundary.</td>
+</tr>
+<tr>
+<td>4</td>
+<td><a href="../../jaxgam/families/negative_binomial.py">_lgamma_diff_jvp/_saturated_loglik_jax</a></td>
+<td><a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/efam.r#L161">R/efam.r: nb()$Dd, nb()$ls, nb()$initialize</a></td>
+<td>Prefixes optimize an existing JaxGAM stability workaround; they are not an mgcv algorithm. Preserve derivatives in log(theta).</td>
+</tr>
+<tr>
+<td>5</td>
+<td><a href="../../jaxgam/formula/predict_matrix.py">PredictSpec/build_predict_spec</a>, <a href="../../jaxgam/formula/design.py">ModelSetup.build</a></td>
+<td><a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L384">mini.mf</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L2376">bam setup</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L3770">smoothCon</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L4302">PredictMat</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L1444">cr</a>/<a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L1562">place.knots</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L1248">tp</a>/<a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/src/tprs.c#L307">tprs_setup</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L3441">gp</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L741">tensor</a></td>
+<td>Reuse metadata/evaluators; exact full-data reductions and replayable raw-input I/O are new. Sampled/unique-only setup is not dense setup parity.</td>
+</tr>
+<tr>
+<td>6</td>
+<td><a href="../../jaxgam/inference/_core.py">predict_core/finish_prediction</a>, <a href="../../jaxgam/inference/predictor.py">GAMPredictor</a>, <a href="../../jaxgam/results.py">GAMResults._from_fit</a></td>
+<td><a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/mgcv.r#L2692">predict.gam</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L1415">predict.bam</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L1976">Sl.postproc</a></td>
+<td>Batch existing prediction; optional factor covariance is a new result capability.</td>
+</tr>
+<tr>
+<td>7, 7.1–7.6</td>
+<td><a href="../../jaxgam/fitting/pirls.py">_pirls_loop_jit/pirls_loop</a>, existing family and link interfaces</td>
+<td><a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L46">qr_update/qr_up</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L909">bgam.fit</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit3.r#L67">gam.fit3</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit4.r#L240">gam.fit4</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/src/gdi.c#L1953">gdi1/gdi2</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/efam.r#L161">nb()</a></td>
+<td>Share family mathematics; add QR and signed-system safeguards, explicit parameter state and separately gated all-family public streaming.</td>
+</tr>
+<tr>
+<td>8, 8.1–8.3</td>
+<td><a href="../../jaxgam/fitting/newton.py">_diff_score/NewtonOptimizer</a>, <a href="../../jaxgam/fitting/reml.py">_criterion_core</a></td>
+<td><a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit3.r#L67">gam.fit3</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit4.r#L240">gam.fit4</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/src/gdi.c#L1953">gdi1/gdi2</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit3.r#L1290">newton</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit3.r#L1722">bfgs</a></td>
+<td>Preserve the full fitted-model REML objective through regular-family/phi and NB/theta extensions; EFS conditional updates are not interchangeable.</td>
+</tr>
+<tr>
+<td>9</td>
+<td><a href="../../jaxgam/fitting/reml.py">REML/scale functions</a>, <a href="../../jaxgam/families/standard.py">Gaussian.saturated_loglik</a></td>
+<td><a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L1503">bam.fit</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L46">qr_update</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L1682">Sl.fit/fast.REML.fit</a></td>
+<td>Reuse Gaussian QR compression; preserve original observation counts, weights, and reported scale.</td>
+</tr>
+<tr>
+<td>10</td>
+<td><a href="../../jaxgam/formula/predict_matrix.py">PredictSpec</a>, <a href="../../jaxgam/smooths/tensor.py">tensor evaluation</a>, local penalties from PR 2</td>
+<td><a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L122">compress.df/discrete.mf</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/misc.r#L191">XWXd</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/misc.r#L333">XWyd/Xbd/diagXVXd</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/src/discrete.c#L57">discrete.c indexed reductions</a></td>
+<td>Use R's indexed/block algorithms on the already-frozen JaxGAM basis; bound C-style n-sized workspace by batching.</td>
+</tr>
+<tr>
+<td>11</td>
+<td>New discrete operators plus existing family functions</td>
+<td><a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L430">bgam.fitd</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L1585">Sl.fitChol</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/efam.r#L5">estimate.theta</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/bam.r#L1773">predict.bamd</a></td>
+<td>Explicit performance iteration and prediction policy, with pinned-version bam parity and separate approximation evaluation.</td>
+</tr>
+<tr>
+<td>12</td>
+<td><a href="../../jaxgam/smooths/random_effects.py">RandomEffectSmooth</a>, existing smooth evaluators and PR 2 actions</td>
+<td><a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/smooth.r#L2571">random-effect constructor/prediction</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/misc.r#L333">Xbd/XWyd</a>, <a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/fast-REML.r#L431">Sl.Sb</a></td>
+<td>Indexed high-cardinality setup and operator solver/preconditioner are new. No implied sparse bam/PCG backend exists in JaxGAM.</td>
+</tr>
+<tr>
+<td>13</td>
+<td>Existing FittingData/PIRLS/block determinant machinery first; new operators later</td>
+<td><a href="https://github.com/cran/mgcv/blob/1b6a4c8374612da27e36420b4459e93acb183f2d/R/gam.fit4.r#L822">efsudr</a> (gam.fit3/4); <a href="../fellner_schall_implementation_plan/">dedicated EFS plan</a> pins the 1.9-3 oracle and paper mapping</td>
+<td>Port dense EFS first; conditional NB theta Newton is distinct from outer EFS. Operator traces/scores and bulk uncertainty need separately validated approximations.</td>
+</tr>
+</tbody>
+</table>
+<p>For each implementation PR, record the exact R function/branch ported and any deliberate departure (for example QR residual-tail accumulation, preserved JaxGAM clipping, or a bounded-memory derivative). Run the layer test against the corresponding R operation, then the existing dense regression gates. Do not use a <code>bam</code> runtime comparison, a default discretized fit, or a skipped R test as evidence of identical <code>gam(REML)</code> behavior.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>
