@@ -95,7 +95,8 @@ def test_rejection_reports_the_full_requirement_after_the_scan():
         _prepare(_TP, frame, budget=requirement - 1)
     assert str(raised.value) == (
         f"Operator preparation needs at most {requirement} bytes; "
-        f"budget is {requirement - 1}."
+        f"budget is {requirement - 1}. "
+        "Lower batch_rows or raise the memory budget."
     )
 
 
@@ -109,6 +110,7 @@ def test_rejection_during_the_scan_says_it_is_a_lower_bound():
     message = str(raised.value)
     assert re.fullmatch(
         r"Operator preparation needs at least \d+ bytes \(distinct covariate rows "
-        r"are still being counted\); budget is 3000000\.",
+        r"are still being counted\); budget is 3000000\. "
+        r"Lower batch_rows or raise the memory budget\.",
         message,
     )

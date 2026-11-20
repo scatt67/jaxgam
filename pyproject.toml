@@ -1,7 +1,7 @@
 [project]
 name = "jaxgam"
-version = "1.0.0a1"
-description = "Python port of R's mgcv package for Generalized Additive Models"
+version = "1.0.0"
+description = "REML based Generalized Additive Models"
 license = "GPL-2.0-or-later"
 requires-python = ">=3.11"
 dependencies = [

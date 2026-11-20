@@ -1,8 +1,25 @@
 **JaxGAM: implementation plan for large datasets and large coefficient counts**
 
+> **Status (2026-11-20): delivered.** The work planned here was built and merged
+> into `main` as pull request #87: the streamed route, the Gaussian QR
+> compression, the discretized route (the analogue of `bam(discrete=TRUE)`),
+> the operator route with bulk uncertainty, and the acceptance harness
+> (`scripts/benchmark_scaling.py`). The text below is the plan as written and
+> amended during the work. It is kept as a record and is not maintained: its
+> PR numbers are the plan's own, and it refers to working documents that are
+> no longer in the repository. For what was built see the
+> [architecture pages](../architecture/index.md); for how to use it see the
+> [user guide](../guide/choosing_a_route.md).
+>
+> Known limits at the time of the merge: the Gaussian QR route can stop short
+> of the REML optimum above 50 penalties (it reports `converged=False`); exact
+> streamed REML did not converge on some many-smooth and near-Poisson
+> negative binomial cases and reports that; mgcv's rank test with column drop
+> for structurally rank-deficient dense models is not ported.
+
 Target: [scatt67/jaxgam at c1a31346188186bbd2fe67eea8d0d51ba6c95d79](https://github.com/scatt67/jaxgam/tree/c1a31346188186bbd2fe67eea8d0d51ba6c95d79). Prepared 2026-09-05; audited against the working repository and local mgcv source on 2026-09-06.
 
-This is an implementation roadmap, not a claim that every described backend is implemented. The original audit below describes the September 6 baseline; current delivery evidence is in [implementation_status.md](implementation_status.md). API sketches describe intended interfaces unless explicitly identified as shipped. The earlier draft quoted CPU probes without checked-in scripts, inputs, or results; those measurements were removed as acceptance evidence. Performance and numerical improvements must be measured by the implementing PRs.
+This is an implementation roadmap, not a claim that every described backend is implemented. The original audit below describes the September 6 baseline; the delivery log that accompanied it is no longer in the repository. API sketches describe intended interfaces unless explicitly identified as shipped. The earlier draft quoted CPU probes without checked-in scripts, inputs, or results; those measurements were removed as acceptance evidence. Performance and numerical improvements must be measured by the implementing PRs.
 
 **September 8 scope correction:** published plan PR7 ([GitHub #40](https://github.com/scatt67/jaxgam/pull/40)) is the initial canonical-family, cross-product/Cholesky backend only. It does not complete general QR/TSQR solving or all-family streaming. Those are mandatory new PRs **7.1–7.6**, with exact-REML extensions **8.1–8.3**, specified below. Preserve original PR1–13 numbering; decimal IDs identify additional, separately reviewed PRs, not changes folded into published PR7. Internal development labels such as PR8a/provider and PR8b/L-BFGS are not these new decimal-numbered PRs.
 
@@ -30,7 +47,7 @@ This comparison matters: 1.9-4 changes `bgam.fit`/`bgam.fitd` nuisance-scale upd
 | Result costs | `GAMResults._from_fit` computes dense inverse/covariance, EDF/EDF1, and transfers mu/eta before selecting the inference branch | Lean retention does not make fitting or result construction bounded in n or p. PR 6 must move optional work behind the result choice. |
 | Fitting boundary | `pirls._pirls_loop_jit` is a fused JAX loop; `NewtonOptimizer` already uses host control flow; `FittingData.from_setup` and `initialize_beta` perform NumPy preparation | Preserve pure compiled kernels and NumPy setup/prediction. Put new file scanning and optimizer orchestration in `execution/`; do not describe all existing `fitting/` functions as JIT kernels. |
 
-[docs/design.md](../design.md) remains the architecture reference, but its examples are not proof of implemented APIs. Read §1.2 for the scope boundary, §5.10/§13.2 for setup contracts, §7/§8 for PIRLS/REML, §10.2/§10.5 for proposed structured/chunked designs, and §18.1/§18.2 for validation. In this version, §4.3 is **Cython Fallback Kernels** and §4.4 is **JAX Purity Boundary**, not the REML/ML sections suggested by older source-map guidance. The local mgcv top-level file is `R/mgcv.r`, and NB is in `R/efam.r`. Use the function-level source map in §10 below.
+`docs/design.md` (since removed from the repository) was the architecture reference at the time, but its examples are not proof of implemented APIs. Read §1.2 for the scope boundary, §5.10/§13.2 for setup contracts, §7/§8 for PIRLS/REML, §10.2/§10.5 for proposed structured/chunked designs, and §18.1/§18.2 for validation. In this version, §4.3 is **Cython Fallback Kernels** and §4.4 is **JAX Purity Boundary**, not the REML/ML sections suggested by older source-map guidance. The local mgcv top-level file is `R/mgcv.r`, and NB is in `R/efam.r`. Use the function-level source map in §10 below.
 
 **1. Delivery strategy and compatibility contract**
 
@@ -738,7 +755,7 @@ Implementation risk is highest in streamed constraints/normalization, exact non-
 
 **10. Source anchors and method references**
 
-This is the implementation reading map, complementing [docs/R_SOURCE_MAP.md](../R_SOURCE_MAP.md). Paths in the mgcv column are relative to `$MGCV_SOURCE`; links resolve to the exact locally inspected commit identified in §0. Function names are the durable anchors; line numbers change between 1.9-3 and 1.9-4.
+This is the implementation reading map, complementing `docs/R_SOURCE_MAP.md` (since removed from the repository). Paths in the mgcv column are relative to `$MGCV_SOURCE`; links resolve to the exact locally inspected commit identified in §0. Function names are the durable anchors; line numbers change between 1.9-3 and 1.9-4.
 
 | PR | Existing JaxGAM anchor | mgcv implementation to read/adapt | Additional work or compatibility limit |
 |---|---|---|---|

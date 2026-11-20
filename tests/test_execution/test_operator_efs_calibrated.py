@@ -380,8 +380,9 @@ _METHODS = {
 
 
 def test_calibrated_domain_is_the_documented_v2_record():
-    # docs/scale_jaxgam/efs6_operator_calibration.md records the measured
-    # distributions behind each limit; change both together.
+    # These limits were measured with
+    # scripts/benchmark_operator_efs_calibration.py; re-measure before
+    # changing them.
     assert (
         OperatorEFSCalibratedDomain(
             minimum_levels=257,

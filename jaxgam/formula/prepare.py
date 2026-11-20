@@ -358,7 +358,7 @@ class SetupWorkspace:
             return requested
         if maximum_bytes < self.minimum_bytes:
             raise MemoryError(
-                "Phase-1 streamed setup requires at least "
+                "Streamed setup requires at least "
                 f"{self.minimum_bytes} bytes to scan one row, exceeding the "
                 f"setup memory budget of {maximum_bytes} bytes "
                 "(FitControl.memory_budget_bytes)."

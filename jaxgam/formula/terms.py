@@ -3,8 +3,6 @@
 Data classes for formula terms extracted by the AST-based parser.
 These are the structured representations used by the design matrix
 assembly layer.
-
-Design doc reference: Section 13.1
 """
 
 from __future__ import annotations
@@ -17,8 +15,7 @@ from typing import Any
 #: them one smoothing parameter (mgcv.r, ``gam.setup``). Ignoring ``id`` would
 #: silently fit a different model, so it is a deferred feature.
 LINKED_SMOOTHING_PARAMETERS_MESSAGE = (
-    "Linked smoothing parameters (id=) are planned for v1.1. "
-    "See docs/design.md Section 5.1."
+    "Linked smoothing parameters (id=) are not supported."
 )
 
 

@@ -1,13 +1,13 @@
 """75-Cell Validation Matrix: systematic R comparison for all smooth x family combos.
 
-Tests cover every cell in the v1.0 surface (design.md §1.2):
+Tests cover every cell in the v1.0 surface:
 - 15 smooth configs (tp, cr, te, ti, tp_by, cr_by, te_by, re, re_slope,
   re_mixed, gp, gp_2d, gp_mixed, gp_te, gp_ti) x 5 families = 75 cells
 - Families: gaussian, binomial, poisson, gamma, nb
 
-Plus hard-gate invariants (§18.1) that must hold for all cells without R.
+Plus hard-gate invariants that must hold for all cells without R.
 
-Tolerance rationale (from AGENTS.md §Common Pitfalls, MEMORY.md):
+Tolerance rationale:
   Gaussian REML: MODERATE (rtol=1e-4, atol=1e-6).
   GLM families: LOOSE (rtol=1e-2, atol=1e-4).
   Tensor products / factor-by: LOOSE for all (flat REML surfaces).
@@ -1778,7 +1778,7 @@ def test_public_exact_large_row_fit_stays_within_stream_budget() -> None:
         memory_budget_bytes=fit_budget,
         uncertainty="fisher",
     )
-    with pytest.raises(MemoryError, match="Phase-1 streamed setup requires"):
+    with pytest.raises(MemoryError, match="Streamed setup requires"):
         GAM('y~s(x,bs="cr",k=24)', family=Poisson(), control=control).fit(
             source, result="prediction"
         )
@@ -4857,7 +4857,7 @@ def test_public_dense_efs_poisson_log_seed1033_result_matches_pinned_r(
 
 
 class TestHardGateInvariants:
-    """Hard-gate invariants (design.md §18.1) for all smooth x family cells.
+    """Hard-gate invariants for all smooth x family cells.
 
     These must hold regardless of R comparison and never be waived.
     Eight invariants tested:

@@ -317,7 +317,7 @@ def _sweep_frame() -> pd.DataFrame:
 def _assert_hard_gates(
     fit, label: str, collector: _AssertCollector, *, must_converge: bool = True
 ) -> None:
-    """Hard-gate invariants (design.md §18.1) for one fitted model.
+    """Hard-gate invariants for one fitted model.
 
     ``must_converge`` is R's own inner-fit status where one exists: at
     smoothing parameters near exp(40) the gam.fit3 gradient test is limited by

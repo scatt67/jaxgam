@@ -13,8 +13,6 @@ R-parity and hard-gate ownership:
   Broad family x smooth R parity and final-result hard gates live in
   tests/test_validation_matrix.py. This file owns public API orchestration,
   routing, input validation, and fixed-sp behavior.
-
-Design doc reference: Section 10.1, 10.2
 """
 
 from __future__ import annotations
@@ -737,8 +735,12 @@ class TestInputValidation:
 
     def test_unknown_kwargs_rejected(self) -> None:
         """M3: unknown GAM kwargs raise TypeError (typos like tol=/max_iter=)."""
-        with pytest.raises(TypeError, match="unexpected keyword"):
+        with pytest.raises(TypeError, match="unexpected keyword") as rejected:
             GAM("y ~ s(x)", foo=1, max_iter=5, tol=1e-2)
+        # The message lists every accepted argument, named parameters included.
+        accepted = str(rejected.value).split("Accepted arguments:")[1]
+        for name in ("formula", "family", "method", "sp", "control", "optimizer"):
+            assert name in accepted
 
     def test_supported_kwargs_accepted(self) -> None:
         """M3 guard: every genuinely-supported kwarg still constructs."""

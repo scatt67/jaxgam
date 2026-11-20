@@ -11,7 +11,6 @@ from jaxgam.smooths.tensor:
 - Edge cases
 - Phase boundary guard (no JAX imports)
 
-Design doc reference: docs/design.md Section 5.5
 R source reference: R/smooth.r smooth.construct.tensor.smooth.spec()
 """
 

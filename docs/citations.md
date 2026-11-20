@@ -21,6 +21,35 @@ cite the relevant mgcv papers.
 > American Statistical Association*, 111, 1548--1575.
 > [doi:10.1080/01621459.2016.1180986](https://doi.org/10.1080/01621459.2016.1180986)
 
+**Large datasets and discretized covariates (`bam`)**
+
+These are the methods behind jaxgam's discretized route
+(`FitControl(execution="discrete")`).
+
+> Wood SN, Goude Y, Shaw S (2015). "Generalized additive models for large
+> datasets." *Journal of the Royal Statistical Society (C)*, 64(1),
+> 139--155.
+> [doi:10.1111/rssc.12068](https://doi.org/10.1111/rssc.12068)
+
+> Wood SN, Li Z, Shaddick G, Augustin NH (2017). "Generalized additive
+> models for gigadata: modelling the UK black smoke network daily data."
+> *Journal of the American Statistical Association*, 112(519), 1199--1210.
+> [doi:10.1080/01621459.2016.1195744](https://doi.org/10.1080/01621459.2016.1195744)
+
+> Li Z, Wood SN (2020). "Faster model matrix crossproducts for large
+> generalized linear models with discretized covariates." *Statistics and
+> Computing*, 30, 19--25.
+> [doi:10.1007/s11222-019-09864-2](https://doi.org/10.1007/s11222-019-09864-2)
+
+**Fellner-Schall smoothing parameter optimization**
+
+This is the method behind `optimizer="efs"`.
+
+> Wood SN, Fasiolo M (2017). "A generalized Fellner-Schall method for
+> smoothing parameter optimization with application to Tweedie location,
+> scale and shape models." *Biometrics*, 73(4), 1071--1081.
+> [doi:10.1111/biom.12666](https://doi.org/10.1111/biom.12666)
+
 **GCV-based model method and basics of GAMM**
 
 > Wood SN (2004). "Stable and efficient multiple smoothing parameter
@@ -63,6 +92,53 @@ cite the relevant mgcv papers.
   pages = {1548--1575},
   volume = {111},
   doi = {10.1080/01621459.2016.1180986},
+}
+
+@Article{wood2015,
+  title = {Generalized additive models for large datasets},
+  author = {S. N. Wood and Y. Goude and S. Shaw},
+  journal = {Journal of the Royal Statistical Society (C)},
+  volume = {64},
+  number = {1},
+  pages = {139--155},
+  year = {2015},
+  doi = {10.1111/rssc.12068},
+}
+
+@Article{wood2017gigadata,
+  title = {Generalized additive models for gigadata: modelling the {UK}
+    black smoke network daily data},
+  author = {S. N. Wood and Z. Li and G. Shaddick and N. H. Augustin},
+  journal = {Journal of the American Statistical Association},
+  volume = {112},
+  number = {519},
+  pages = {1199--1210},
+  year = {2017},
+  doi = {10.1080/01621459.2016.1195744},
+}
+
+@Article{li2020,
+  title = {Faster model matrix crossproducts for large generalized linear
+    models with discretized covariates},
+  author = {Z. Li and S. N. Wood},
+  journal = {Statistics and Computing},
+  volume = {30},
+  pages = {19--25},
+  year = {2020},
+  doi = {10.1007/s11222-019-09864-2},
+}
+
+@Article{wood2017efs,
+  title = {A generalized {F}ellner-{S}chall method for smoothing parameter
+    optimization with application to {T}weedie location, scale and shape
+    models},
+  author = {S. N. Wood and M. Fasiolo},
+  journal = {Biometrics},
+  volume = {73},
+  number = {4},
+  pages = {1071--1081},
+  year = {2017},
+  doi = {10.1111/biom.12666},
 }
 
 @Article{wood2004,

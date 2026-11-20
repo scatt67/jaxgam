@@ -205,7 +205,7 @@ def prepare_stream_efs_start(
             raise ValueError("EFS startup source exceeds prospective batch cap")
         initial = family.initial_working_state_cpu(y, prior, valid, summary=metadata)
         if not initial.input_ok or not initial.domain_ok:
-            raise ValueError("EFS startup mustart predictor is invalid in pinned R")
+            raise ValueError("EFS startup mustart predictor is invalid in mgcv")
         response = family.execution_initial_response_cpu(y, prior)
         mu, eta = initial.mustart, initial.eta
         derivative = np.asarray(family.link.mu_eta(eta))

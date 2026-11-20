@@ -2,8 +2,6 @@
 
 Provides ``get_family()`` which accepts either a string name or an
 existing family instance and returns a ready-to-use family object.
-
-Design doc reference: Section 6.1
 """
 
 from __future__ import annotations

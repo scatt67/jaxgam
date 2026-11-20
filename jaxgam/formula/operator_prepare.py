@@ -205,11 +205,13 @@ def _check_budget(
         if lower_bound_reason is not None:
             raise MemoryError(
                 f"Operator preparation needs at least {required} bytes "
-                f"({lower_bound_reason}); budget is {control.memory_budget_bytes}."
+                f"({lower_bound_reason}); budget is {control.memory_budget_bytes}. "
+                "Lower batch_rows or raise the memory budget."
             )
         raise MemoryError(
             f"Operator preparation needs at most {required} bytes; "
-            f"budget is {control.memory_budget_bytes}."
+            f"budget is {control.memory_budget_bytes}. "
+            "Lower batch_rows or raise the memory budget."
         )
 
 

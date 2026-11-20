@@ -3,7 +3,7 @@
 This module is NumPy-only (Phase 1). It defines the kernel ABC, the five
 concrete kernel classes used by ``GaussianProcessSmooth``, and the
 ``gp_kernel_registry`` that maps a kernel name string to its class. Per
-design doc §5.3, the smooth class itself owns kernel resolution
+docs/gaussian_process/design.md §5.3, the smooth class itself owns kernel resolution
 (``__init__`` reads ``spec.extra_args["kernel"]`` and looks up the
 class) and the kernel-evaluation / null-space helpers; this module is
 just the kernel surface.

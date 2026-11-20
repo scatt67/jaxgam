@@ -302,6 +302,8 @@ def test_public_policy_rejects_false_metadata(kwargs, exception):
     ],
 )
 def test_bridge_invalid_inputs_reject_before_r_process(monkeypatch, kwargs):
+    # The bridge itself needs rpy2 to be constructed, whatever R is installed.
+    pytest.importorskip("rpy2")
     monkeypatch.setattr(RBridge, "check_versions", staticmethod(lambda: (True, "")))
 
     def reject_process(*_args, **_kwargs):

@@ -228,7 +228,7 @@ def test_public_stream_covariance_budget_and_route_guards() -> None:
     source = DataFrameRowSource(data, response="y")
     formula = 'y ~ s(x, bs="cr", k=6)'
     # Phase-1 setup is the first budgeted stage: one byte cannot scan a row.
-    with pytest.raises(MemoryError, match="Phase-1 streamed setup requires"):
+    with pytest.raises(MemoryError, match="Streamed setup requires"):
         GAM(
             formula,
             sp=[0.2],

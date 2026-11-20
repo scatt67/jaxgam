@@ -2,59 +2,109 @@
 
 ## What This Project Is
 
-JaxGAM is a Python port of Simon Wood's R package `mgcv` (Mixed GAM Computation Vehicle) for fitting Generalized Additive Models. The v1.0 release is deliberately scoped: dense-only execution, four exponential families, three smooth types + tensor products, REML/ML optimization. See `docs/design.md` Section 1.2 for the full scope boundary.
+JaxGAM is a Python port of Simon Wood's R package `mgcv` (Mixed GAM Computation Vehicle) for fitting Generalized Additive Models. The package version is `1.0.0`.
 
-The design document at `docs/design.md` is the authoritative reference for all architectural decisions. It is ~8000 lines. **Do not attempt to read it entirely.** Instead, read the specific sections referenced in each task. The table of contents is in the first 30 lines.
+What the code implements today:
+
+- **Default dense fit.** `gam(method="REML")`: PIRLS inside a Newton optimizer for the smoothing parameters, in memory.
+- **Extended Fellner-Schall optimizer** (`optimizer="efs"`), on the dense, streamed and operator routes.
+- **Row-source routes**, selected with `FitControl(execution=...)`:
+  - `"stream"`: fits from a replayable row source in batches (fixed `sp`, exact REML, or Fellner-Schall; optional Gaussian QR compression).
+  - `"discrete"`: the analogue of `bam(discrete=TRUE)` (compact discretized design, working-model REML).
+  - `"operator"`: matrix-free conjugate gradients for random effects with very many levels.
+- **Families:** Gaussian, Binomial, Poisson, Gamma, Negative Binomial (theta estimated or fixed), each with non-default links through the family class.
+- **Smooths:** `tp`, `ts`, `cr`, `cs`, `cc`, `gp`, `re`, `te`, `ti`, and `by=` variables.
+- **Results:** `result="full"` (`GAMResults`), `"inference"` (`GAMInferenceResult`), `"prediction"` (`GAMPredictionResult`); the row-source routes return prediction results only.
+
+What is not implemented is listed under [What Is Not Implemented](#what-is-not-implemented).
+
+## Where To Read
+
+| You need | Read |
+|---|---|
+| How the code is organized today, with flow and class diagrams | `docs/architecture/` (start at `index.md`) |
+| How a user calls each feature | `docs/guide/`, `docs/api.md`, `docs/quickstart.md` |
+| The plans the row-source routes and Fellner-Schall were built from | `docs/scale_jaxgam/` |
+| The planned refactor of `fitting/` and `execution/` | `docs/unify_fit/` |
+| Which mgcv source to read for a task | The table under [R Source Reference](#r-source-reference); each architecture page names the routines its area ports |
+| Design records of earlier features (random effects, Gaussian process, negative binomial, the result modes) | `docs/<feature>/design.md` |
+
+The design records and plans describe what was intended when they were written. Where one disagrees with the code about what is implemented, the code and `docs/architecture/` are right.
 
 ## Project Setup
-We use uv for dependency and package management; init using uv and use `uv sync` when needed.
+
+We use uv for dependency and package management.
+
+- `make install` runs `uv sync --extra dev`.
+- R comparison tests also need rpy2: `uv sync --extra dev --extra r`.
+- On Apple silicon, install the OpenBLAS builds of NumPy and SciPy (see README, "Apple silicon"). With the default Accelerate builds `import jaxgam` warns, and large fits can return wrong results.
 
 ## Code Quality
-We use pre-commit for code quality checks, and ruff for python specific linting, and formatting. 
 
+Pre-commit runs `ruff --fix`, `ruff-format` and `vulture` on every commit (`make pre-commit-install` once).
+
+- `make lint`: `ruff check`, `ruff format --check`, `vulture jaxgam --min-confidence 80`. CI runs this.
+- `make format`: `ruff format`.
 
 ## Repo Developer Tasks Orchestration
-We use `make` and `Makefile` to orchestrate common tasks such as running linters, and static analysis. Whenever we add new repo, CICD capabilities please update the `Makefile` and use make to run common tools.
 
-## Docker Test Environment
-R comparison tests require pinned R 4.5.2 + mgcv 1.9-3 (enforced by `RBridge.check_versions()`). Without the correct versions, R tests auto-skip.
+We use `make` to orchestrate common tasks. Whenever we add new repo or CI capabilities, update the `Makefile` and call the tool through `make`. `make help` lists the targets.
 
-- `make test` - full suite in Docker (includes R comparison tests)
-- `make test-local` - local tests only (R tests skip if R unavailable/wrong version)
+## Test Environments
+
+R comparison tests need the pinned **R 4.5.2 + mgcv 1.9-3**. `RBridge.check_versions()` checks both, and tests skip when R is missing or the versions differ.
+
+- `make test-local`: the suite on this machine (`uv run pytest`).
+- `make test`: the suite in the Docker image, which has the pinned R (needs colima; stops at the first failure).
+- `make test-file FILE=tests/...`: one file in Docker.
+- `make test-cov`: Docker, with coverage.
+
+The Docker image pins BLAS to one thread (`OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`) so R's reference arithmetic is the same on every machine. `make test-local` does not; set those variables yourself when comparing numbers.
+
+CI (`.github/workflows/test.yml`) runs the suite as **eight shards on parallel runners**, a `coverage` job that combines them and enforces 80%, eight replicas of the `platform_sensitive` tests, and four focused jobs, all behind one `gate` job. A test's shard is a hash of its node id (`tests/sharding.py`); `JAXGAM_TEST_SHARD=3/8` runs one shard locally.
 
 ## Architecture (Three Phases)
 
-Every `gam()` call flows through three phases. This boundary is load-bearing - do not mix phases.
+Every fit flows through three phases. This boundary is load-bearing - do not mix phases.
 
-**Phase 1 - Setup (CPU, NumPy only).** Parse formula → construct basis matrices → build penalty matrices → assemble full model matrix X → apply identifiability constraints via `CoefficientMap`. No JAX imports permitted in Phase 1 code.
+**Phase 1 - Setup (NumPy only).** Parse the formula, construct bases and penalties, absorb identifiability constraints (`CoefficientMap`), and for row sources scan the data to place knots or build the compact discretized design. Packages: `formula/`, `smooths/`, `penalties/`, `data/`. No module in these packages imports JAX.
 
-**Phase 2 - Fit (JAX, JIT-compiled).** Dense X and S_λ are transferred to device via `jax.device_put`. PIRLS inner loop (penalized iteratively reweighted least squares) nested inside a REML outer Newton loop. All code in `fitting/` must be JIT-compatible - no Python-level control flow that depends on array values (use `jax.lax.while_loop`, `jax.lax.cond`).
+**Phase 2 - Fit (JAX).** Two packages:
 
-**Phase 3 - Post-estimation (CPU, NumPy).** Coefficients come back via `np.asarray()`. `predict()`, `summary()`, `plot()` operate on CPU NumPy arrays using the `CoefficientMap` from Phase 1.
+- `fitting/`: JAX kernels (PIRLS, the REML criterion, batch reductions, indexed design operators) and the dense Newton optimizer. Kernels that are JIT-compiled must be pure and use `jax.lax` control flow. The Newton outer loop in `fitting/newton.py` and `fitting/stable_log_det.py` run on the host between jitted evaluations.
+- `execution/`: host-side drivers that own iteration, step control and data scans for the Fellner-Schall, Gaussian QR, streamed, discretized and operator routes. They call the kernels in `fitting/`.
+
+`fitting/` does not import `execution/`, with one lazy exception in `fitting/data.py` (`structural_rank`).
+
+**Phase 3 - Post-estimation (NumPy).** `results.py`, `inference/`, `summary/`, `plot/`. Prediction uses the `CoefficientMap` and frozen smooth state from Phase 1. No module in `inference/`, `summary/` or `plot/` imports JAX.
 
 ```
-Phase 1 (NumPy)  ──jax.device_put──▶  Phase 2 (JAX JIT)  ──np.asarray──▶  Phase 3 (NumPy)
+Phase 1 (NumPy)  ──jax.device_put──▶  Phase 2 (JAX)  ──np.asarray──▶  Phase 3 (NumPy)
 ```
+
+`families/` and `links/` are used by Phase 2 and import JAX. Phase 1 code receives family objects as arguments and never imports those packages.
 
 ## R Source Reference
 
-The mgcv R source is cloned locally from the CRAN GitHub mirror. **Always read the corresponding R implementation before writing Python.** The R code is ground truth for numerical edge cases, special handling, and algorithmic choices that the design doc doesn't capture.
+The mgcv R source is cloned locally. **Always read the corresponding R implementation before writing Python.** The R code is ground truth for numerical edge cases, special handling, and algorithmic choices that no document here captures.
 
-The clone location is in the `MGCV_SOURCE` environment variable. Run `echo $MGCV_SOURCE` to find it. See `docs/R_SOURCE_MAP.md` for setup instructions if the variable is not set.
+The clone location is in the `MGCV_SOURCE` environment variable (`echo $MGCV_SOURCE`). If it is unset, clone the CRAN mirror (`git clone https://github.com/cran/mgcv.git`) and export the variable. The tests are pinned to **mgcv 1.9-3**; if the clone's HEAD is newer, read the 1.9-3 commit (`fb7e8e7`).
 
-`docs/R_SOURCE_MAP.md` maps every implementation task to the specific R files and functions to read. It also has a quick-lookup table for debugging ("my coefficients don't match R → look here").
-
-Key R files you'll reference most often:
+Key R files:
 
 | R file | Contains |
 |---|---|
-| `$MGCV_SOURCE/R/smooth.r` | All smooth constructors (basis + penalty). ~8000 lines. Search for `smooth.construct.XX.smooth.spec` where XX is the basis type. |
-| `$MGCV_SOURCE/R/gam.fit3.r` | PIRLS inner loop (`gam.fit3`), working weights, step-halving, convergence. |
-| `$MGCV_SOURCE/R/fast-REML.r` | REML/ML criterion computation, Newton optimizer for λ. |
-| `$MGCV_SOURCE/R/gam.r` | Top-level `gam()`, `predict.gam()`, `summary.gam()`, `gam.setup()`, `gam.side()` (identifiability). |
-| `$MGCV_SOURCE/R/families.r` | Family definitions: `variance`, `dev.resids`, `initialize`, `validmu`. |
-| `$MGCV_SOURCE/src/tprs.c` | C implementation of TPRS eigendecomposition and knot selection. The R wrapper just calls this. |
-| `$MGCV_SOURCE/src/gdi.c` | C implementation of REML derivatives. Reading this helps validate our `jax.grad` output. |
+| `$MGCV_SOURCE/R/mgcv.r` | Top-level `gam()`, `gam.setup()`, `gam.side()` (identifiability), `gam.outer()`, `magic()`, `predict.gam()`, `summary.gam()`. |
+| `$MGCV_SOURCE/R/smooth.r` | All smooth constructors (basis + penalty), `smoothCon()`. About 4,400 lines. Search for `smooth.construct.XX.smooth.spec`. |
+| `$MGCV_SOURCE/R/gam.fit3.r` | PIRLS (`gam.fit3`), `newton()` for the smoothing parameters, `gam.reparam()`, `negbin()`, family fix-ups. |
+| `$MGCV_SOURCE/R/gam.fit4.r` | `gam.fit4`, `gam.fit5` (extended families) and `efsudr` (extended Fellner-Schall). |
+| `$MGCV_SOURCE/R/efam.r` | Extended families, including `nb()`, and `estimate.theta`. |
+| `$MGCV_SOURCE/R/fast-REML.r` | The `Sl.*` routines, including `Sl.fitChol` (working-model REML step used by `bam`). |
+| `$MGCV_SOURCE/R/bam.r` | `bam()`, `bgam.fitd` (performance iteration), `discrete.mf`, `compress.df`, `predict.bamd`. |
+| `$MGCV_SOURCE/R/plots.r` | `plot.gam()`. |
+| `$MGCV_SOURCE/src/tprs.c` | Thin-plate eigendecomposition and knot selection. |
+| `$MGCV_SOURCE/src/gdi.c` | REML derivatives, `get_stableS`, `MLpenalty1`. |
+| `$MGCV_SOURCE/src/discrete.c` | Discretized cross-products (`XWXd` and friends). |
 
 **R reading tips:**
 - `<-` is assignment. `.C()` / `.Call()` invoke C code in `src/`.
@@ -62,54 +112,39 @@ Key R files you'll reference most often:
 - `mgcv:::function_name` accesses unexported internals. These are often the functions we need most.
 - Run `debug(mgcv:::gam.fit3)` in R to step through PIRLS and compare intermediate values.
 
-## Design Document Reference
-
-Location: `docs/design.md`
-
-Key sections by topic area:
-
-| If you're working on... | Read these sections |
-|---|---|
-| Smooth basis construction | §5.1 (base class), §5.2 (TPRS), §5.3 (cubic), §5.5 (tensor) |
-| Factor-by smooths | §5.7 (full mechanism), §5.7.3 (identifiability) |
-| Distribution families | §6.1 (base class), §6.2 (standard families) |
-| Link functions | §7 |
-| Penalty matrices | §8 |
-| Autodiff strategy | §9.1 (where AD helps/hurts), §9.3 (extended family strategy - v1.18 rewrite) |
-| PIRLS inner loop | §4.1, §4.2 |
-| REML/ML outer loop | §4.3, §4.4 |
-| Convergence & step-halving | §4.5 |
-| Identifiability constraints | §5.10 (CoefficientMap) |
-| Formula parsing | §13.1 (AST-based parser) |
-| Design matrix assembly | §13.2 |
-| Execution path routing | §10.1, §10.2 |
-| Testing strategy | §18.1 (philosophy + tolerances), §18.2 (R bridge) |
-| Numerical stability | §4.8 (jitter), §9.3 (AD stability) |
-
 ## Code Conventions
 
 ### File Organization
 
 ```
 jaxgam/
-├── __init__.py          # Public API: GAM, GAMResults, GAMInferenceResult, GAMPredictor
-├── api.py               # GAM class (specification + fit orchestration)
-├── results.py           # Full/lean frozen result types + post-estimation helpers
-├── inference/           # Phase 3: prediction-only core and shared prediction finish
-├── jax_utils.py         # JAX helpers (slogdet, pseudo-det, penalized solve)
-├── formula/             # Phase 1: parsing and term representation
-├── smooths/             # Phase 1: basis and penalty construction
-├── families/            # Families and link functions (used in Phase 1 + 2)
-├── links/               # Link function implementations
-├── penalties/           # Penalty matrix construction
-├── fitting/             # Phase 2: PIRLS, REML, convergence (JAX)
+├── __init__.py          # Public API; enables float64, compile cache, Accelerate warning
+├── api.py               # GAM class: argument checks, routing, fit orchestration
+├── control.py           # FitControl, EFSControl, OperatorControl, ContinuousDiscretizationControl
+├── results.py           # GAMResults, GAMInferenceResult, GAMPredictionResult
+├── registry.py          # Generic string-key registry
+├── jax_utils.py         # Array dispatch, device transfer, linear-algebra helpers
+├── platform_guard.py    # Apple Accelerate LAPACK warning
+├── data/                # Phase 1: row sources, discretization
+├── formula/             # Phase 1: parsing, terms, design, streamed/discretized/operator setup
+├── smooths/             # Phase 1: bases, constraints, pinned LAPACK provider
+├── penalties/           # Phase 1: penalty construction
+├── families/            # Families (Phase 2; import JAX)
+├── links/               # Link functions
+├── fitting/             # Phase 2: JAX kernels + dense Newton optimizer
+├── execution/           # Phase 2: host drivers (EFS, Gaussian QR, stream, discrete, operator)
+├── inference/           # Phase 3: prediction-only core (GAMPredictor)
 ├── summary/             # Phase 3: summary, EDF, p-values
-├── plot/                # Phase 3: matplotlib plotting
+└── plot/                # Phase 3: matplotlib plotting
 tests/
-├── r_bridge.py          # R bridge for testing (pinned R 4.5.2 + mgcv 1.9-3)
-├── tolerances.py        # STRICT / MODERATE / LOOSE definitions
-├── helpers.py           # Shared test helpers (SEED, N, r_available, etc.)
-└── conftest.py          # Shared fixtures, R bridge setup
+├── conftest.py          # Shared fixtures, R bridge fixture, shard selection
+├── helpers.py           # SEED, N, r_available, _AssertCollector, per-platform replay bounds
+├── tolerances.py        # STRICT / MODERATE / LOOSE
+├── r_bridge.py          # Typed rpy2 bridge to pinned R 4.5.2 + mgcv 1.9-3
+├── sharding.py          # CI shard assignment
+├── test_validation_matrix.py   # Broad final-model R parity and hard-gate invariants
+└── test_<package>/      # One directory per package area
+scripts/                 # Benchmarks and demos
 ```
 
 ### Naming and Style
@@ -118,31 +153,31 @@ tests/
 - `snake_case` everywhere. No abbreviations except established ones: `n` (observations), `p` (parameters), `k` (basis dimension), `edf` (effective degrees of freedom).
 - Penalty matrices: `S` or `S_j` (per-smooth), `S_lambda` (combined weighted penalty).
 - Model matrix: `X` (full), `X_s` (smooth block), `X_p` (parametric block).
-- Greek letters in variable names match the design doc: `eta` (linear predictor), `mu` (mean), `beta` (coefficients), `lambda_` (smoothing parameters, trailing underscore to avoid keyword).
+- Greek letters in variable names: `eta` (linear predictor), `mu` (mean), `beta` (coefficients), `lambda_` (smoothing parameters, trailing underscore to avoid keyword).
 
 ### JAX Rules (Phase 2 code)
 
-- All functions that will be JIT-compiled must be pure - no side effects, no Python `if` on array values.
-- Use `jax.lax.while_loop` for PIRLS iteration, not Python `while`.
-- Use `jax.lax.cond` for conditional logic on array values, not Python `if`.
-- Debugging: functions should accept a `debug=False` parameter. When True, use `jax.debug.print()` (not Python print) and `jax.debug.callback()` to log PIRLS traces.
-- Float64 everywhere: set `jax.config.update("jax_enable_x64", True)` at module import. GAMs are numerically sensitive - float32 is not acceptable.
+- Functions that are JIT-compiled must be pure - no side effects, no Python `if` on array values. Use `jax.lax.while_loop` and `jax.lax.cond`.
+- Host loops (the Newton optimizer, every driver in `execution/`) may branch in Python on values pulled back from the device. Keep them out of jitted functions.
+- Float64 everywhere: `jaxgam/__init__.py` sets `jax_enable_x64`. GAMs are numerically sensitive - float32 is not acceptable.
+- On the row-source routes, every array a driver holds must be covered by a memory budget check (`FitControl.memory_budget_bytes`, `DiscretizationBudget`). Do not add an unaccounted array that grows with the number of rows.
 
 ### NumPy Rules (Phase 1 and 3 code)
 
-- No JAX imports in Phase 1 modules (`formula/`, `smooths/`, `penalties/`). Use `numpy` and `scipy` only.
+- No JAX imports in `formula/`, `smooths/`, `penalties/`, `data/`, `inference/`, `summary/`, `plot/`. Use `numpy` and `scipy` only.
 
 ### Testing Rules
 
 - Every new module gets a corresponding test file.
-- Use the tolerance classes from `tests/tolerances.py`: `STRICT`, `MODERATE`, `LOOSE`.
-- R comparison tests use `tests/r_bridge.py` to run the same model in R and compare results.
-- **important** R comparisons tests must be identical to R results with `STRICT`, or `MODERATE` tolerance.
-- jaxgam results (smooths, bases, coefficients, etc...) **must** be identical to the canonical R mgcv results.
-- Broad final-model R parity and hard-gate invariants live in `tests/test_validation_matrix.py`. Other R-bridge tests should own layer-specific behavior (for example optimizer internals, fixed-`sp` PIRLS numerics, prediction/SE, summary tables, smooth construction, or the RBridge implementation) rather than duplicate final `GAMResults` field checks.
+- Use the tolerance classes from `tests/tolerances.py`, never a hand-written `rtol`/`atol`: `STRICT` (rtol 1e-10, atol 1e-12), `MODERATE` (1e-4, 1e-6), `LOOSE` (1e-2, 1e-4).
+- **R comparisons must match R.** Use `STRICT` wherever JaxGAM reproduces mgcv's arithmetic. Use `MODERATE` or `LOOSE` only for a quantity that is genuinely ill-determined or depends on the BLAS/LAPACK build (for example smoothing parameters on a flat criterion), and say why in a comment with the measured difference. Never loosen a tolerance to hide an unexplained difference.
+- R comparison tests go through the typed rpy2 bridge in `tests/r_bridge.py`. Do not add subprocess, `Rscript`, CSV or saved-fixture paths: generate inputs in code and get reference values from the bridge.
+- Broad final-model R parity and hard-gate invariants live in `tests/test_validation_matrix.py`. Other R-bridge tests should own layer-specific behavior (optimizer internals, fixed-`sp` PIRLS numerics, prediction/SE, summary tables, smooth construction, the bridge itself) rather than duplicate final-result field checks.
 - When several related assertions share one expensive fixture or R fit, consolidate them with `tests.helpers._AssertCollector` so failures remain named without multiplying collected tests.
-- Hard-gate invariants (§18.1) are tested in every CI run and block the build on failure. These include: objective monotonicity, H symmetry/PSD, penalty PSD, rank conditions, EDF bounds, deviance non-negativity, no NaN in converged model.
-- All new modules must have > 80% test coverage.
+- Hard-gate invariants run in every CI run and block the build: convergence, deviance non-negativity, finite `eta`/`mu`, EDF bounds, covariance symmetric PSD, penalty PSD, `theta > 0`, rank conditions (`TestHardGateInvariants`), and objective monotonicity and Hessian symmetry in `tests/test_fitting/`.
+- Mark a test `platform_sensitive` when its outcome can depend on the CPU's SIMD maths or the BLAS kernel; CI runs those on eight runners.
+- Coverage: CI enforces 80% on the whole suite, with branch coverage, over the shards combined.
+- Tests must not depend on other tests having run first; CI runs each test in one of eight shards.
 
 ### Commit and PR Conventions
 
@@ -151,33 +186,23 @@ tests/
 - PR title format: `[phase] component: description` - e.g., `[phase1] smooths/tprs: implement thin plate basis construction`.
 - If a change touches Phase 2 code, the PR must include a JIT compilation test (the function compiles and runs without error under `jax.jit`).
 
-## What Is NOT in v1.0
+## What Is Not Implemented
 
-Fellner–Schall (EFS) implementation is authorized follow-on work under
-`docs/scale_jaxgam/fellner_schall_implementation_plan.md`, including the internal
-estimated-NB/theta controller integration. The earlier EFS implementation
-deferral no longer applies. Numerical parity, phase boundaries, testing, and
-main-agent review requirements remain unchanged.
+Do not implement any of the following without an explicit decision. They are out of scope today:
 
-Do not implement any of the following. They are designed for but deferred:
-
-- Sparse-CPU execution path (CHOLMOD, scikit-sparse)
-- `bam()`, chunked processing, fREML
-- Extended families (Tweedie, Beta, SHASH, Cox PH, ordered categorical) — NB is implemented in v1.0
-- P-splines (`ps`, `cp`), B-splines (`bs`)
+- Sparse-CPU execution (CHOLMOD, scikit-sparse)
+- `method="ML"`, GCV and UBRE smoothness selection (REML only)
+- Extended families beyond Negative Binomial (Tweedie, Beta, SHASH, Cox PH, ordered categorical)
+- P-splines (`ps`, `cp`), B-splines (`bs`), `t2()` tensor products
 - Factor-smooth interactions (`bs="fs"`)
-- Multi-GPU SPMD, Ray, distributed anything
+- `select=TRUE`, `fx=TRUE`, per-term `sp=`, linked smoothing parameters (`id=`), user-specified `knots=`, `gamma` other than 1
+- `offset()` and interaction terms (`x:z`, `x*z`) inside the formula (pass an offset to `fit()` or through the row source)
+- Multi-GPU, Ray, distributed fitting
 - `gamm()`, PQL
 - Exotic smooths (soap film, MRF, adaptive, Duchon)
-- GCV / UBRE smoothness selection (REML and ML only)
+- `summary()` and `plot()` on the row-source routes (they return prediction results)
 
-If you encounter a code path that would require one of these, stub it with:
-
-```python
-raise NotImplementedError(
-    "Feature X is planned for v1.1. See docs/design.md Section Y."
-)
-```
+If you add a guard for an unsupported feature, raise `NotImplementedError` with a message that names the feature and, where there is one, the supported alternative.
 
 ## Common Pitfalls
 
@@ -187,8 +212,12 @@ raise NotImplementedError(
 
 3. **CoefficientMap is the contract between Phase 1 and Phase 3.** It maps constrained coefficients (from the fit) back to the original basis for prediction. If this is wrong, `predict()` produces garbage even when the fit is correct. Test the roundtrip: `predict(model, original_data)` must reproduce `model.fitted_values`.
 
-4. **The REML criterion is flat near the optimum.** Smoothing parameters (λ) can differ by 1e-3 from R and the fit is still correct. Don't chase λ precision - validate deviance and coefficients instead.
+4. **The REML criterion is flat near the optimum.** Smoothing parameters can differ from R and the fit is still correct. Validate deviance and coefficients before chasing smoothing-parameter precision. With many smooths the discretized route's stopping point is not determined beyond its stopping rule, in JaxGAM or in `bam`.
 
-5. **Step-halving is essential, not optional.** PIRLS without step-halving diverges on Binomial and Gamma models. The step-halving logic (halve step until penalized deviance decreases) must be in the first PIRLS implementation, not added later.
+5. **Step-halving is essential, not optional.** PIRLS without step-halving diverges on Binomial and Gamma models.
 
-6. **Sum-to-zero constraints interact with factor-by smooths.** When `s(x, by=fac)` coexists with `s(x)`, the constraint absorption (§5.7.3) must be applied correctly or identifiability fails. Test with multi-smooth models from the start.
+6. **Sum-to-zero constraints interact with factor-by smooths.** When `s(x, by=fac)` coexists with `s(x)`, the constraint absorption must be applied correctly or identifiability fails. Test with multi-smooth models from the start.
+
+7. **A row source must replay identically.** A fit scans its source several times. Every scan must return the same rows in the same order, and the source owns the prior weights and offset. A custom source's `fingerprint()` is called many times per fit, so it must be cheap.
+
+8. **Last-bit changes move ill-determined results.** A change that alters rounding (operation order, a different LAPACK) can move a result that sits on a flat criterion. Check whether the old code reaches the new value under a one-ulp perturbation before treating it as a bug, and never change a stopping rule to make a test pass.

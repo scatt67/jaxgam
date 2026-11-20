@@ -1,8 +1,19 @@
 # Registry Refactor — Implementation Plan
 
+> **Historical record.** This document was written while this piece of work
+> was being designed and built, and is kept as a record of it. It is not
+> maintained: the file names, line numbers, counts and "current state"
+> descriptions in it are those of the repository at that time, and it may
+> refer to documents that were later removed from the repository (for
+> example `docs/design.md` and `docs/R_SOURCE_MAP.md`, which remain in the
+> git history). For how the code is organized today see the
+> [architecture pages](../architecture/index.md); for how to use the package
+> see the [user guide](../guide/choosing_a_route.md) and the
+> [API reference](../api.md).
+
 LLM-optimized step-by-step plan.
 
-**Before starting:** Read `docs/refactor_class_system/design.md` lines 1-19 for the problem statement and goals driving this refactor. Read lines 121-132 for the inconsistency summary table that motivates unifying the three registries. Read lines 134-146 for alternatives considered and why `Registry[T]` was chosen.
+**Before starting:** Read `docs/refactor_registry_system/design.md` lines 1-19 for the problem statement and goals driving this refactor. Read lines 121-132 for the inconsistency summary table that motivates unifying the three registries. Read lines 134-146 for alternatives considered and why `Registry[T]` was chosen.
 
 ## Step 1: Create `jaxgam/registry.py` ✅
 

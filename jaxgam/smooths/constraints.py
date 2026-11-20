@@ -15,7 +15,6 @@ Implements the constraint pipeline that R's mgcv applies during model setup:
 
 This module is Phase 1 (NumPy + SciPy only, no JAX imports).
 
-Design doc reference: docs/design.md Section 5.10
 R source reference: R/mgcv.r gam.side(), fixDependence(), augment.smX()
 """
 

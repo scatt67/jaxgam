@@ -620,7 +620,7 @@ def batch_initial_working_quantities(
     )
     if context.capabilities.dynamic_theta:
         raise NotImplementedError(
-            "Initial working systems with dynamic theta are deferred to PR7.5; "
+            "Initial working systems with dynamic theta are not supported; "
             "the current regular-family primitive must not mix static family "
             "variance with explicit trial theta."
         )

@@ -928,7 +928,8 @@ class FrozenScanSystem:
         if required > self.memory_budget_bytes:
             raise MemoryError(
                 f"Frozen operator requires {required} bytes; "
-                f"budget is {self.memory_budget_bytes}."
+                f"budget is {self.memory_budget_bytes}. "
+                "Lower batch_rows or raise the memory budget."
             )
 
     def _weight(self, batch: RowBatch, rows: OperatorBatch) -> np.ndarray:

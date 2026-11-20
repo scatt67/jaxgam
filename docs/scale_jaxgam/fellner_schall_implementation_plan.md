@@ -1,6 +1,16 @@
 # JaxGAM: extended Fellner–Schall implementation plan
 
-Status: proposed post-v1.0 work; no EFS implementation or public API is enabled by this document. Audited 2026-09-06 against JaxGAM commit `c1a31346188186bbd2fe67eea8d0d51ba6c95d79`.
+> **Status (2026-11-20): delivered.** The extended Fellner-Schall optimizer
+> is implemented and public as `GAM(..., optimizer="efs")` on the dense,
+> streamed and operator routes, merged into `main` as pull request #87. The
+> text below is the plan as written and amended during the work. It is kept
+> as a record and is not maintained. For what was built see
+> [the dense fit](../architecture/fitting_dense.md),
+> [the streamed fit](../architecture/fitting_streamed.md) and
+> [the operator fit](../architecture/fitting_operator.md); for how to use it
+> see [Smoothing parameter selection](../guide/smoothing_selection.md).
+
+Original status line: proposed post-v1.0 work; no EFS implementation or public API is enabled by this document. Audited 2026-09-06 against JaxGAM commit `c1a31346188186bbd2fe67eea8d0d51ba6c95d79`.
 
 Parent: [JaxGAM scaling implementation plan](jaxgam_scaling_implementation_plan.md), PR 13. This sub-plan owns the EFS algorithm, dense reference implementation, and later operator adapter. The parent owns execution representations, preparation, memory budgets, and bulk uncertainty. EFS means the generalized/extended Fellner–Schall smoothing update used by mgcv's `efsudr`, not `bam(method="fREML")` and not the existing Newton REML optimizer.
 
@@ -32,7 +42,7 @@ No automatic switch from Newton based on n, p, or m. Unsupported EFS combination
 
 ### Required architecture reconciliation
 
-[docs/design.md](../design.md) remains authoritative. Read §1.2, §4.4, §5.10, §7, §8.1, the subsection titled **8.2 Fellner-Schall Method (Fast REML for bam)**, and §18.1–§18.2. There are two §8.2 headings; use the title as well as the number.
+`docs/design.md` (since removed from the repository) was authoritative at the time. Read §1.2, §4.4, §5.10, §7, §8.1, the subsection titled **8.2 Fellner-Schall Method (Fast REML for bam)**, and §18.1–§18.2. There are two §8.2 headings; use the title as well as the number.
 
 Before public EFS ships, its implementation PR must reconcile the post-v1 scope, optimizer/API contract, and objective-monotonicity policy with the architecture and repository instructions. This plan does not silently override those rules. The old §8.2 sketch is not an executable specification: it conflates EFS with fREML, uses a singleton-rank shortcut that is not general for coupled penalties, omits scale handling, and disagrees between its docstring and code about a lambda factor. Replace that sketch with an accurate summary and a link here when the architectural change is approved. Do not implement it verbatim.
 

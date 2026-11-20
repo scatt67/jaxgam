@@ -521,7 +521,7 @@ class _GroupCounter:
             )
             if constant:
                 raise ValueError(
-                    "pinned compress.df produces an undefined range grid for "
+                    "mgcv's compress.df produces an undefined range grid for "
                     f"constant metric variable(s) {constant} when request "
                     "rounding is required"
                 )

@@ -3,8 +3,6 @@
 Provides the interface contract that all standard exponential family
 distributions must implement. The PIRLS algorithm relies on these
 methods for working weights, working response, and deviance computation.
-
-Design doc reference: Section 6.1
 """
 
 from __future__ import annotations
@@ -552,7 +550,7 @@ class ExponentialFamily(ABC):
         report ``regular_performance_iteration`` implement it.
         """
         raise NotImplementedError(
-            f"{type(self).__name__} does not implement pinned dev.resids "
+            f"{type(self).__name__} does not implement the dev.resids "
             "arithmetic for the discrete performance iteration."
         )
 

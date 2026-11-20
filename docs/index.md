@@ -7,6 +7,11 @@ jaxgam uses [JAX](https://github.com/google/jax) for JIT-compiled fitting
 with automatic differentiation through the PIRLS inner loop and Newton
 outer loop. No C compilation required.
 
+Beyond the default in-memory fit, jaxgam can fit from data that does not fit
+in memory, reproduce `bam(discrete=TRUE)`, and fit random effects with very
+many levels. The [user guide](guide/choosing_a_route.md) explains each
+option.
+
 ## Installation
 
 ```bash
@@ -19,21 +24,35 @@ uv sync
 ### Dependencies
 
 - Python >= 3.11
-- JAX >= 0.4.20
+- JAX and jaxlib >= 0.4.20
 - NumPy >= 1.24
 - SciPy >= 1.11
 - pandas >= 2.0
 - matplotlib >= 3.7
+- numba >= 0.58
+- scipy-openblas32 0.3.26.0.4 (a pinned OpenBLAS build, the one the reference
+  R installation links, which jaxgam loads for the specific linear-algebra
+  calls that must reproduce mgcv's results; it does not replace the BLAS that
+  NumPy and SciPy use)
+
+!!! warning "Apple silicon"
+    The default NumPy and SciPy wheels on Apple silicon use Apple Accelerate,
+    and large fits can then return wrong results or abort. `import jaxgam`
+    warns when this applies. Install the OpenBLAS builds of NumPy and SciPy
+    instead; see [Memory and performance](guide/memory_and_performance.md).
 
 ## Quick example
 
-`GAM.fit()` returns one of two result types:
+`GAM.fit()` returns one of three result types:
 
 - `result="full"` (default) → `GAMResults` with prediction, summaries, plots,
   and in-sample state.
 - `result="inference"` → lean `GAMInferenceResult` with new-data prediction and
   lightweight diagnostics, but no dense training state, `summary()`, or
   `plot()`.
+- `result="prediction"` → `GAMPredictionResult`, which only predicts on new
+  data and keeps no training rows. The streamed, discretized and operator
+  routes return this type.
 
 ```python
 import numpy as np
@@ -70,8 +89,9 @@ all families, smooth types, and post-estimation tools.
 
 ### Families
 
-Gaussian, Binomial, Poisson, Gamma, and Negative Binomial -- each with its
-default link and REML smoothing parameter selection.
+Gaussian, Binomial, Poisson, Gamma, and Negative Binomial -- each with REML
+smoothing parameter selection. Each has a default link; other links are set
+through the family class, for example `Gamma(link="log")`.
 
 ### Smooth types
 
@@ -86,7 +106,24 @@ default link and REML smoothing parameter selection.
 | `te(x1, x2)` | Tensor product smooth |
 | `ti(x1, x2)` | Tensor interaction (no main effects) |
 | `s(x, by=fac)` | Factor-by smooth (separate curve per level) |
-| `s(g, bs='re')` | Dense random effect smooth |
+| `s(g, bs='re')` | Random effect smooth |
+
+### Fitting routes
+
+The default fit holds the model matrix in memory and selects smoothing
+parameters by exact REML, as `gam(method="REML")` does. The other routes are
+opt-in:
+
+| Route | Select with | Use it for |
+|---|---|---|
+| Dense (default) | nothing | Data that fits in memory |
+| Fellner-Schall | `optimizer="efs"` | An alternative smoothing parameter optimizer, as in `gam(optimizer="efs")` |
+| Gaussian QR | `FitControl(gaussian_compression=True)` | Gaussian identity-link models with many rows |
+| Streamed | `FitControl(execution="stream")` | Data read in batches from a row source, for models built from cubic regression splines |
+| Discretized | `FitControl(execution="discrete")` | The method of `bam(discrete=TRUE)` |
+| Operator | `FitControl(execution="operator")` | Random effects with very many levels |
+
+Start with [Choosing a route](guide/choosing_a_route.md).
 
 ### Post-estimation
 
@@ -101,48 +138,58 @@ default link and REML smoothing parameter selection.
 - `GAMInferenceResult` -- a lean `result="inference"` fit that keeps new-data
   prediction and cheap diagnostics without dense training state. It is already
   ready to predict; no conversion is required.
+- `GAMPredictionResult` -- the `result="prediction"` fit: new-data prediction
+  only, with no training rows. See
+  [Prediction results](guide/prediction_results.md).
 - `GAMPredictor` -- the prediction-only, same-version picklable core returned by
-  either result's optional `to_predictor()` handoff. On an inference result,
+  a result's optional `to_predictor()` handoff. On an inference result,
   that method returns the existing core and does not reduce memory further.
 
 ## Performance
 
-jaxgam uses JAX's XLA compiler. After a one-time JIT compilation
-(~275ms with persistent disk cache), fits are 1-16x faster than R's mgcv
-at n=500 and competitive at n=10,000.
+jaxgam uses JAX's XLA compiler. The first fit in a process pays a one-time
+JIT compilation, and compiled code is cached on disk for later sessions.
+Benchmarks against R's `gam` and `bam` are in the
+[README](https://github.com/scatt67/jaxgam#performance).
 
-## v1.0 limitations
+## Limitations
 
 These are deliberate scope boundaries, not bugs:
 
 1. **No sparse solver.** Models with > ~5,000 basis functions will hit the
-   dense memory ceiling.
+   dense memory ceiling. Random effects with very many levels can use the
+   operator route instead.
 2. **Five families.** Gaussian, Binomial, Poisson, Gamma, and negative
    binomial are supported. Other extended families (Tweedie, Beta, SHASH,
    Cox PH, ordered categorical) are not yet available.
-3. **Dense design matrix must fit in memory.** Datasets with > ~10M rows
-   require chunked processing, which is not implemented.
-4. **Dense random effects only.** `bs="re"` is supported for modest
-   cardinality. High-cardinality random effects and `bs="fs"` require
-   sparse linear algebra, which is not implemented.
+3. **The default route holds the design matrix in memory.** For data that
+   does not fit, use the streamed or discretized route. Those routes return
+   prediction results only: no `summary()` or `plot()`.
+4. **No factor-smooth interactions.** `bs="fs"` is not implemented.
 5. **Single device only.** No multi-GPU or distributed fitting.
 6. **No GAMM.** Correlated random effects (`gamm()`) are not supported.
-
-See the [Design Doc](design.md) Section 1.2 for details on what
-is planned for v1.1+.
+7. **REML only.** `method="ML"` and GCV/UBRE smoothness selection are not
+   available.
 
 ## Development
 
 ```bash
-# Install dev dependencies
-uv sync --all-extras
+# Install dev dependencies (add --extra r for the R comparison tests)
+uv sync --extra dev
 
-# Run tests
-uv run pytest tests/
+# Run tests on this machine
+make test-local
+
+# Run the full suite in Docker, with the pinned R
+make test
 
 # Run linter
 make lint
 ```
 
-R comparison tests require R with mgcv and rpy2 installed. They are
-skipped automatically if R is not available.
+R comparison tests need R 4.5.2 with mgcv 1.9-3 and rpy2. They are skipped
+when R is missing or the versions differ; the Docker image has the pinned
+versions.
+
+The [Architecture](architecture/index.md) section describes how the code is
+organized, for maintainers and contributors.

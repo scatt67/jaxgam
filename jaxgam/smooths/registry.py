@@ -4,8 +4,6 @@ Provides ``get_smooth_class()`` which maps basis type strings
 (e.g. ``"tp"``, ``"ts"``) to the corresponding Smooth subclass.
 
 This module is Phase 1 (NumPy only, no JAX imports).
-
-Design doc reference: docs/design.md Section 5.1
 """
 
 from __future__ import annotations

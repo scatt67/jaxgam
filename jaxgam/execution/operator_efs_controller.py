@@ -111,8 +111,9 @@ class OperatorEFSCalibratedDomain:
     """Model shapes over which an empirical score envelope was measured.
 
     Admission also needs the regime's family, row, control and conditioning
-    checks. The measured distributions behind these limits are summarized in
-    ``docs/scale_jaxgam/efs6_operator_calibration.md``.
+    checks. The limits were measured with
+    ``scripts/benchmark_operator_efs_calibration.py`` against decimal
+    reference scores.
     """
 
     minimum_levels: int

@@ -11,8 +11,6 @@ Covers:
 8. R comparison (numerical matching via r_bridge)
 9. Phase boundary (no JAX imports)
 10. Edge cases
-
-Design doc reference: docs/design.md Section 13.2
 """
 
 from __future__ import annotations

@@ -13,7 +13,6 @@ Tests cover:
 
 (ML is not supported in v1.0; its criterion/classes were removed.)
 
-Design doc reference: Section 4.3, 4.4
 R source reference: gam.fit3.r lines 612-640 (general Laplace REML)
 """
 

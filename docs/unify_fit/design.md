@@ -1,8 +1,8 @@
 # Unified Fitting Engine: Design Document
 
-**Status:** proposed. To be executed **after** the current scaling and EFS work is complete:
-- PR9, PR11, PR12, EFS6 and PR13 composed and published;
-- §8 performance gates met.
+**Status:** proposed, not started. Its precondition is met: the scaling and EFS work was merged into `main` on 2026-11-20 as pull request #87 (commit `e919938`). The PR labels used below (PR9, PR11, PR12, EFS6, PR13) are those of the scaling plan in [`docs/scale_jaxgam/`](../scale_jaxgam/jaxgam_scaling_implementation_plan.md); all of them are part of that merge.
+
+For a description of the code as it is today, which this design starts from, see the [architecture pages](../architecture/index.md).
 
 **Plan:** [implementation_plan.md](implementation_plan.md).
 
@@ -44,7 +44,7 @@ Measurements were taken on 2026-10-24 from frozen exports of each line:
 | PR12+EFS6 | `03bbc7e` | 28 / 14,499 | 27 / 11,403 |
 | PR13 | `dcd88d5` | 21 / 11,769 | 26 / 11,343 |
 
-Re-measure on the final composed stack before starting (implementation plan Phase 0).
+Measured again on `main` after the merge (commit `e919938`, 2026-11-20): `execution/` has 36 files / 21,653 lines and `fitting/` has 33 files / 15,446 lines. The duplicate scans of §2.2 have not been re-run on that commit; do that in Phase 0.
 
 ### 2.1 Parallel implementations of the same procedure
 
@@ -88,8 +88,8 @@ The low PIRLS and operator-EFS ratios matter. Most of the duplication is **algor
 ### 2.3 Observed drift between ports
 
 - **`efsudr` ratio order.** `fitting/efs.py::efs_raw_update` computes `phi * numerator / max(0, q)`. `operator_efs_controller.py::_raw_ratio` computes `numerator / max(0, q) * phi`. Both claim pinned `efsudr` order, and they can differ in the last bit.
-- **Family allowlists.** Between 36 and 43 `isinstance(family, (Gaussian|Poisson|…))` checks in `execution/` and `fitting/` per line, instead of capability queries. AGENTS.md implementer rule 6 says "no family-name allowlists where a capability exists".
-- **Host control flow in `fitting/`.** `fitting/newton.py::NewtonOptimizer` (`while` loops with `bool(jnp.isfinite(...))` host pulls) and `fitting/data.py::FittingData.from_setup` (NumPy preparation) break the "`fitting/` is JIT-only" rule. The scaling plan's audit already noted this. Nothing in `fitting/` imports `execution/` or host SciPy, so import direction is still clean.
+- **Family allowlists.** Between 36 and 43 `isinstance(family, (Gaussian|Poisson|…))` checks in `execution/` and `fitting/` per line, instead of capability queries; on `main` after the merge there are 46. The family capability contract exists so that such allowlists are not needed.
+- **Host control flow in `fitting/`.** `fitting/newton.py::NewtonOptimizer` (`while` loops with `bool(jnp.isfinite(...))` host pulls) and `fitting/data.py::FittingData.from_setup` (NumPy preparation) break the "`fitting/` is JIT-only" rule. The scaling plan's audit already noted this. At the time of the October measurement nothing in `fitting/` imported `execution/` or host SciPy. On `main` after the merge there is one such import: `fitting/data.py::_structural_penalty_roots` imports `structural_rank` from `execution/qr.py` inside the function, to avoid a circular import. Phase 2 should remove it.
 - **Misleading pairs.** `fitting/reml.py` is the dense criterion. `execution/reml.py` is the *streamed* driver and does not use it; its kernels are in `fitting/stream_reml.py`. The same holds for `execution/nb_reml.py` ↔ `fitting/nb_stream_reml.py`.
 
 ### 2.4 Root cause
@@ -274,3 +274,4 @@ Each difference between routes moves to exactly one place:
 2. **`FittingData`:** should it become the in-memory provider's internal state, or stay as a shared Phase-1→2 transfer type? Decide from its current call sites.
 3. **Retiring `optimize_stream_reml` (canonical known-scale):** retire it outright, or keep it as a mode of `exact_lbfgs`. Its regime is a strict subset of `optimize_regular_stream_reml`.
 4. **The two §2.3 port disagreements:** which order matches pinned `efsudr`? Verify against `R/gam.fit4.r` 1.9-3 before unifying.
+5. **Sub-packages by route first?** (raised 2026-11-20, undecided) Before any unification, group `fitting/` and `execution/` into sub-packages by route (stream, efs, discrete, gaussian_qr, operator, plus dense and shared linear algebra) in one move-only PR, instead of the renames inside the flat directories that plan Phase 2 lists. It would remove the eight module names that exist in both packages and make the route folders the starting point of the providers in §5. Decide before Phase 2.

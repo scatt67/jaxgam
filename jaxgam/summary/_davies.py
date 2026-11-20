@@ -7,7 +7,7 @@ with ``X_j ~ chi2(n_j, nc_j)`` and ``X_0 ~ N(0,1)``.
 
 All internal helpers are eagerly compiled at module import time via
 ``numba.njit`` with explicit type signatures, achieving C-native
-performance. See ``_slanczos_jit`` in ``jaxgam/smooths/tprs.py``
+performance. See ``_slanczos_jit`` in ``jaxgam/smooths/utils.py``
 for the same pattern.
 
 Phase 3 code: NumPy + Numba only, no JAX imports.

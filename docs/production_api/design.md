@@ -1,5 +1,16 @@
 # Robust API Redesign: `result` Mode + Lean Inference Core
 
+> **Historical record.** This document was written while this piece of work
+> was being designed and built, and is kept as a record of it. It is not
+> maintained: the file names, line numbers, counts and "current state"
+> descriptions in it are those of the repository at that time, and it may
+> refer to documents that were later removed from the repository (for
+> example `docs/design.md` and `docs/R_SOURCE_MAP.md`, which remain in the
+> git history). For how the code is organized today see the
+> [architecture pages](../architecture/index.md); for how to use the package
+> see the [user guide](../guide/choosing_a_route.md) and the
+> [API reference](../api.md).
+
 - **Status:** Implemented (2026-08-01)
 - **Design Date:** 2026-06-05 (revised 2026-07-28 over ten review rounds)
 - **Target Branch:** `production-api`
@@ -125,7 +136,7 @@
 6. [The Shared Predict Path (Phase 1 builder + Phase 3 finish)](#6-the-shared-predict-path)
 7. [Memory Reduction: `copy_for_prediction` and the Honest Invariant](#7-memory-reduction)
 8. [Picklability](#8-picklability)
-9. [SOLID / DRY Scorecard](#9-solid-dry-scorecard)
+9. [SOLID / DRY Scorecard](#9-solid--dry-scorecard)
 10. [Numerical and Correctness Considerations](#10-numerical-and-correctness-considerations)
 11. [File Plan](#11-file-plan)
 12. [Testing Strategy](#12-testing-strategy)

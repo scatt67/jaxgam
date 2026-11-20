@@ -11,7 +11,6 @@ Supports:
 
 This module is Phase 3 (NumPy + matplotlib only, no JAX imports).
 
-Design doc reference: docs/design.md Section 10
 R source reference: R/plots.r plot.gam(), plot.mgcv.smooth()
 """
 

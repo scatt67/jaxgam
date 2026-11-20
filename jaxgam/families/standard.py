@@ -7,7 +7,6 @@ PIRLS fitting algorithm.
 PIRLS-path methods (variance, deviance_resids) are backend-agnostic:
 they accept both NumPy and JAX arrays via ``array_module()`` dispatch.
 
-Design doc reference: Section 6.2
 R source reference: R/family.R (stats package family definitions)
 """
 

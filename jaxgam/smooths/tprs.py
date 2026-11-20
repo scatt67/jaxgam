@@ -5,7 +5,6 @@ R's mgcv smooth.construct.tp.smooth.spec() and src/tprs.c.
 
 This module is Phase 1 (NumPy only, no JAX imports).
 
-Design doc reference: docs/design.md Section 5.2
 R source reference: R/smooth.r smooth.construct.tp.smooth.spec(),
                     src/tprs.c construct_tprs()
 """

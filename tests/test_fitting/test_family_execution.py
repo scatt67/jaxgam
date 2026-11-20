@@ -814,13 +814,13 @@ def test_source_g2g_is_pinned_fix_family_link_closed_form() -> None:
         np.asarray(jax.jit(SqrtLink().source_g2g)(jnp.asarray(mu))).tolist()
         == (-(mu**-0.5)).tolist()
     )
-    with pytest.raises(NotImplementedError, match="no pinned extended-family g2g"):
+    with pytest.raises(NotImplementedError, match="no extended-family g2g"):
         LogitLink().source_g2g(mu)
 
 
 def test_source_dev_resids_is_explicit_per_family() -> None:
     """Inside the domain it is the direct deviance; the base fails closed."""
-    with pytest.raises(NotImplementedError, match=r"pinned dev\.resids"):
+    with pytest.raises(NotImplementedError, match=r"the dev\.resids arithmetic"):
         _UnregisteredQuadraticFamily().source_dev_resids(
             np.ones(2), np.ones(2), np.ones(2)
         )

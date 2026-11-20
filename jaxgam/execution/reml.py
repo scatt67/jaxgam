@@ -1404,7 +1404,7 @@ def function_reduction_exit(status: int, message: str) -> bool:
 def mgcv_relative_message(test: MgcvRelativeTest) -> str:
     """State the criterion that classified a function-reduction exit."""
     return (
-        "converged by pinned mgcv newton()'s relative test after an L-BFGS-B "
+        "converged by mgcv newton()'s relative test after an L-BFGS-B "
         f"function-reduction exit: projected gradient "
         f"{test.projected_gradient_inf:.3e} <= 5*conv.tol*score.scale "
         f"{test.gradient_limit:.3e}, score change {test.score_change:.3e} <= "

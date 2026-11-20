@@ -147,7 +147,7 @@ def _reject_unsupported_formula(spec: FormulaSpec) -> None:
         if term.bs == "re" and len(term.variables) > 1:
             raise NotImplementedError(
                 f"s({','.join(term.variables)}, bs='re') is not supported by "
-                "execution='discrete': pinned mgcv bam discretizes each "
+                "execution='discrete': mgcv's bam discretizes each "
                 "variable of a multi-variable random effect as a separate "
                 "tensor margin, which the compact setup does not reproduce."
             )
@@ -393,7 +393,7 @@ def _pinned_fixed_scale(
             log_scale = trial
             step = proposed
             break
-    raise RuntimeError("Pinned fixed-sp Gaussian scale iteration did not converge.")
+    raise RuntimeError("Fixed-sp Gaussian scale iteration did not converge.")
 
 
 class CenteredMoments:

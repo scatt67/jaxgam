@@ -307,11 +307,7 @@ class GAMPredictor:
             and self._fisher_factor is None
             and self._fisher_qr_factor is None
         ):
-            raise RuntimeError(
-                "Prediction uncertainty is unavailable for this "
-                "prediction-only result. "
-                "Fit with FitControl(uncertainty='fisher' or 'covariance')."
-            )
+            raise RuntimeError(self._no_uncertainty_message())
         newdata = self._compressed(newdata, request_grid)
         if self.Vp is not None and self._fisher_qr_factor is None:
             return predict_core(
@@ -372,6 +368,20 @@ class GAMPredictor:
             return self._operator_geometry.build_predict_matrix(newdata)
         return self._predict_spec.build_predict_matrix(self._compressed(newdata, None))
 
+    def _no_uncertainty_message(self) -> str:
+        """Why ``se_fit=True`` cannot be served, and what to do instead."""
+        if self._operator_geometry is not None:
+            return (
+                "Prediction standard errors are not available on the operator "
+                "route. Use bulk_link_variance() on the fit result for "
+                "approximate link-scale variances."
+            )
+        return (
+            "Prediction uncertainty is unavailable for this "
+            "prediction-only result. "
+            "Fit with FitControl(uncertainty='fisher' or 'covariance')."
+        )
+
     def predict_iter(
         self,
         source: RowSource,
@@ -412,11 +422,7 @@ class GAMPredictor:
             and self._fisher_factor is None
             and self._fisher_qr_factor is None
         ):
-            raise RuntimeError(
-                "Prediction uncertainty is unavailable for this "
-                "prediction-only result. "
-                "Fit with FitControl(uncertainty='fisher' or 'covariance')."
-            )
+            raise RuntimeError(self._no_uncertainty_message())
         request_grid = (
             None
             if self._request_compression is None

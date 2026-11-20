@@ -1,5 +1,16 @@
 # Dense Random Effects (`bs="re"`) Implementation Design
 
+> **Historical record.** This document was written while this piece of work
+> was being designed and built, and is kept as a record of it. It is not
+> maintained: the file names, line numbers, counts and "current state"
+> descriptions in it are those of the repository at that time, and it may
+> refer to documents that were later removed from the repository (for
+> example `docs/design.md` and `docs/R_SOURCE_MAP.md`, which remain in the
+> git history). For how the code is organized today see the
+> [architecture pages](../architecture/index.md); for how to use the package
+> see the [user guide](../guide/choosing_a_route.md) and the
+> [API reference](../api.md).
+
 - **Status:** Implemented
 - **Design Date:** 2026-04-08
 - **Completion Date:** 2026-05-23
@@ -21,7 +32,7 @@
 10. [Summary / p-value Changes](#10-summary--p-value-changes)
 11. [File Plan](#11-file-plan)
 12. [Testing Strategy](#12-testing-strategy)
-13. [Implementation Order](#13-implementation-order)
+13. [Implementation Plan](#13-implementation-plan)
 
 ---
 

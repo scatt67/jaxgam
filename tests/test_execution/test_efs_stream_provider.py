@@ -135,7 +135,7 @@ def test_actual_provider_matches_coefficient_controller_and_exact_statistics(fit
     assert provider.fitting.family is provider.family
 
 
-@pytest.mark.skipif(not r_available, reason="pinned R unavailable")
+@pytest.mark.skipif(not r_available(), reason="pinned R unavailable")
 @pytest.mark.parametrize("link", ["log", "identity", "sqrt"])
 def test_live_source_provider_score_theta_and_fisher_contractions(link):
     stream, family = _fixture(link, estimated=True, smooth=True)

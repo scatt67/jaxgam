@@ -5,14 +5,19 @@ Provides the ``GAM`` class (sklearn-style API) that wires together:
 - Phase 2: ``FittingData.from_setup()`` → ``newton_optimize()`` / ``pirls_loop()``
 - Phase 3: ``GAMResults._from_fit()`` materializes the selected result type
 
-``GAM.fit()`` returns a full ``GAMResults`` by default or a lean
-``GAMInferenceResult`` when requested.
+``GAM.fit()`` returns a full ``GAMResults`` by default, a lean
+``GAMInferenceResult`` or a prediction-only ``GAMPredictionResult`` when
+requested. The pipeline above is the default dense route; the streamed,
+discretized and operator routes selected by ``FitControl.execution`` run
+their setup and fit through ``jaxgam.execution`` and return prediction
+results.
 
 Design doc reference: docs/refactor_gam_api/design.md §3.3
 """
 
 from __future__ import annotations
 
+import numbers
 import warnings
 from dataclasses import replace
 from typing import TYPE_CHECKING, Literal, overload
@@ -63,8 +68,8 @@ class GAM:
     """Generalized Additive Model specification.
 
     This class holds model specification parameters and orchestrates the
-    fit pipeline. Calling ``fit()`` returns a frozen full or lean result,
-    selected by the keyword-only ``result`` argument.
+    fit pipeline. Calling ``fit()`` returns a frozen full, inference or
+    prediction result, selected by the keyword-only ``result`` argument.
 
     Parameters
     ----------
@@ -72,20 +77,29 @@ class GAM:
         Model formula in R-style Wilkinson notation, e.g. ``"y ~ s(x)"``.
     family : str or ExponentialFamily
         Distribution family. One of ``'gaussian'``, ``'binomial'``,
-        ``'poisson'``, ``'gamma'``, or an ``ExponentialFamily`` instance.
+        ``'poisson'``, ``'gamma'``, ``'nb'``, or a family instance. Pass an
+        instance to choose a non-default link, for example
+        ``Gamma(link="log")``, or to fix the negative-binomial theta.
     method : str
-        Smoothing parameter estimation method. Only ``'REML'`` is supported
-        in v1.0; ``'ML'`` raises ``NotImplementedError`` (see notes below).
+        Smoothing parameter estimation method. Only ``'REML'`` is supported;
+        ``'ML'`` raises ``NotImplementedError``.
     sp : np.ndarray or list, optional
-        Fixed smoothing parameters. If provided, skips Newton optimization.
-    device : str, optional
-        Target device: ``'cpu'``, ``'gpu'``, or ``None`` (auto-detect).
-        GPU requires ``jax[cuda12]`` (NVIDIA) or ``jax-metal`` (Apple).
+        Fixed smoothing parameters. If provided, smoothing parameter
+        selection is skipped.
+    control : FitControl, optional
+        Execution route and resource policy: which route fits the model
+        (``execution='dense'``, ``'stream'``, ``'discrete'`` or
+        ``'operator'``), batch size, memory budgets and prediction
+        uncertainty. Defaults to ``FitControl()``, the in-memory dense fit.
     **kwargs
         Additional arguments. ``optimizer`` accepts ``"newton"`` (default)
-        or the dense ``"efs"`` route. The remaining accepted scope-guard keys
-        are ``device``, ``backend``, ``select``, ``gamma``, and ``knots``;
-        other keywords raise ``TypeError``.
+        or ``"efs"`` (extended Fellner-Schall, on the dense, streamed and
+        operator routes). ``device`` selects the target device: ``'cpu'``,
+        ``'gpu'``, or ``None`` (auto-detect); GPU requires ``jax[cuda12]``
+        (NVIDIA) or ``jax-metal`` (Apple), the operator route runs on CPU
+        only, and the test suite does not run on a GPU. The remaining
+        accepted scope-guard keys are ``backend``, ``select``, ``gamma``,
+        and ``knots``; other keywords raise ``TypeError``.
 
     Examples
     --------
@@ -161,32 +175,30 @@ class GAM:
 
         Parameters
         ----------
-        data : pandas.DataFrame or dict
-            Data frame containing the variables in the formula. A replayable
-            ``RowSource`` is accepted with ``execution='stream'``,
-            ``execution='operator'`` or the explicitly configured
-            ``execution='discrete'`` route. The operator route requires
-            ``linear_solver='pcg'`` and prediction-only retention. It accepts
-            explicit fixed ``sp`` or calibrated indexed Poisson EFS.
+        data : pandas.DataFrame, dict or RowSource
+            A DataFrame (or dict of columns) holding the variables in the
+            formula, for the default dense route. The streamed, discretized
+            and operator routes (``FitControl.execution``) take a replayable
+            ``RowSource`` from ``jaxgam.data`` instead and refuse a DataFrame.
         weights : np.ndarray, optional
-            Prior weights, shape ``(n,)``.
+            Prior weights, shape ``(n,)``. Dense route only: a ``RowSource``
+            carries its own weights.
         offset : np.ndarray, optional
-            Offset vector, shape ``(n,)``.
+            Offset vector, shape ``(n,)``. Dense route only: a ``RowSource``
+            carries its own offset.
         result : {"full", "inference", "prediction"}
             Result materialization mode. ``"full"`` retains training-backed
             diagnostics; ``"inference"`` returns a lean result that is already
-            directly usable for new-data prediction. No ``to_predictor()`` call
-            is required unless a narrower prediction-only handoff is desired.
+            directly usable for new-data prediction (no ``to_predictor()``
+            call is required unless a narrower prediction-only handoff is
+            desired); ``"prediction"`` returns a result that only predicts on
+            new data and keeps no training rows. The streamed, discretized
+            and operator routes support ``"prediction"`` only.
 
         Returns
         -------
-        GAMResults or GAMInferenceResult
-            Frozen full-diagnostic or lean-inference result. Streamed fitting
-            returns ``result='prediction'`` and supports fixed smoothing
-            parameters across the family execution contracts or EFS with QR.
-            Discrete fitting accepts fixed ``sp`` or
-            ``smoothing_strategy='working_model_reml'`` and also returns
-            ``result='prediction'``.
+        GAMResults, GAMInferenceResult or GAMPredictionResult
+            The frozen result selected by ``result``.
 
         Design doc reference: docs/refactor_gam_api/design.md §3.3
         """
@@ -297,7 +309,7 @@ class GAM:
                 ):
                     raise ValueError(
                         "Estimated NB identity/sqrt EFS has no valid default "
-                        "zero-coefficient recovery anchor for this offset; pinned "
+                        "zero-coefficient recovery anchor for this offset; "
                         "mgcv rejects the same input. Supply an offset whose "
                         "zero-coefficient means are positive."
                     )
@@ -442,7 +454,7 @@ class GAM:
             spec,
             data,
             control=OperatorPreparationControl(
-                self.control.batch_rows,
+                _operator_fit_batch_rows(self.control, data),
                 self.control.memory_budget_bytes,
                 self.control.operator.max_modest_coefficients,
             ),
@@ -507,7 +519,7 @@ class GAM:
             spec,
             source,
             control=OperatorPreparationControl(
-                self.control.batch_rows,
+                _operator_fit_batch_rows(self.control, source),
                 preparation_budget,
                 self.control.operator.max_modest_coefficients,
             ),
@@ -1664,7 +1676,7 @@ def _preflight_stream_workspace(
         raise MemoryError(
             f"Known streamed{solver_label} PIRLS workspace requires "
             f"{required} bytes, exceeding FitControl.memory_budget_bytes="
-            f"{memory_budget_bytes}. Phase-1 setup scans are budgeted separately."
+            f"{memory_budget_bytes}. Setup scans are budgeted separately."
         )
     return required
 
@@ -1701,13 +1713,32 @@ _ACCEPTED_KWARGS = frozenset(
 )
 
 
+def _operator_fit_batch_rows(control: FitControl, source: RowSource) -> int:
+    """Rows per scan of an operator fit: never more than the source holds.
+
+    The operator kernels work on batches padded to this size, and the
+    preparation and fit budgets are charged for it, so asking for more rows
+    than the source has would only allocate and budget padding. A scan of a
+    source with fewer rows than ``batch_rows`` yields the same single batch
+    either way. Prediction keeps ``FitControl.batch_rows``.
+    """
+    n_rows = source.n_rows
+    if (
+        isinstance(n_rows, bool)
+        or not isinstance(n_rows, numbers.Integral)
+        or n_rows < 1
+    ):
+        return control.batch_rows  # preparation reports the invalid source
+    return min(control.batch_rows, int(n_rows))
+
+
 def _check_scope_guards(method: str, kwargs: dict) -> None:
-    """Validate v1.0 scope guards."""
+    """Validate scope guards."""
     unknown = set(kwargs) - _ACCEPTED_KWARGS
     if unknown:
         raise TypeError(
             f"GAM() got unexpected keyword argument(s) {sorted(unknown)}. "
-            f"Accepted arguments: formula, family, method, sp, "
+            f"Accepted arguments: formula, family, method, sp, control, "
             f"{', '.join(sorted(_ACCEPTED_KWARGS))}."
         )
 
@@ -1718,20 +1749,18 @@ def _check_scope_guards(method: str, kwargs: dict) -> None:
             "penalty range-space projection of log|X'WX+S| (the C routine "
             "MLpenalty1 in gdi.c), which differs from REML's full-space "
             "determinant. Only method='REML' is available; ML is deferred "
-            "until the range-space determinant is implemented. "
-            "See docs/design.md Section 4.4."
+            "until the range-space determinant is implemented."
         )
     if method_upper != "REML":
         raise ValueError(
             f"method must be 'REML', got {method!r}. "
-            "ML is not available (see above); GCV/UBRE is planned for v1.1."
+            "ML, GCV and UBRE are not available."
         )
 
     backend = kwargs.get("backend")
     if backend is not None and backend != "jax":
         raise NotImplementedError(
-            f"backend={backend!r} is not supported in v1.0. "
-            "Only 'jax' backend is available. See docs/design.md Section 10."
+            f"backend={backend!r} is not supported. Only 'jax' backend is available."
         )
 
     device = kwargs.get("device")
@@ -1750,22 +1779,17 @@ def _check_scope_guards(method: str, kwargs: dict) -> None:
             )
 
     if kwargs.get("select", False):
-        raise NotImplementedError(
-            "select=True (shrinkage smoothing) is planned for v1.1. "
-            "See docs/design.md Section 4.6."
-        )
+        raise NotImplementedError("select=True (shrinkage smoothing) is not supported.")
 
     gamma = kwargs.get("gamma", 1.0)
     if gamma != 1.0:
         raise NotImplementedError(
-            f"gamma={gamma} is not supported in v1.0. "
+            f"gamma={gamma} is not supported. "
             "Only gamma=1.0 (standard REML) is available."
         )
 
     if kwargs.get("knots") is not None:
-        raise NotImplementedError(
-            "User-specified knots are planned for v1.1. See docs/design.md Section 5.2."
-        )
+        raise NotImplementedError("User-specified knots are not supported.")
 
 
 def _fixed_log_smoothing_parameters(sp: np.ndarray | list, n_penalties: int):

@@ -505,7 +505,7 @@ def test_gaussian_workspace_rejects_four_buffer_qr_peak_before_device(
         raise AssertionError("device resolution preceded Gaussian QR preflight")
 
     monkeypatch.setattr(api_module, "_resolve_device", fail_device)
-    with pytest.raises(MemoryError, match="Phase-1 streamed setup requires"):
+    with pytest.raises(MemoryError, match="Streamed setup requires"):
         GAM(
             formula,
             control=FitControl(
@@ -551,7 +551,7 @@ def test_fixed_ineligible_weights_use_ordinary_budget_before_qr_preflight() -> N
         > generic_budget
     )
 
-    with pytest.raises(MemoryError, match="Phase-1 streamed setup requires"):
+    with pytest.raises(MemoryError, match="Streamed setup requires"):
         GAM(
             formula,
             sp=[1.0],

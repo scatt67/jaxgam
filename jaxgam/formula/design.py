@@ -6,7 +6,6 @@ into the global coefficient space. Python equivalent of R's ``gam.setup()``.
 
 This module is Phase 1 (NumPy only, no JAX imports).
 
-Design doc reference: docs/design.md Section 13.2
 R source reference: R/gam.r gam.setup()
 """
 
@@ -186,7 +185,7 @@ class ModelSetup:
         ValueError
             If required variables are missing from data.
         """
-        # Steps are numbered 2a-2h matching the design doc (Section 13.2).
+        # Steps are numbered 2a-2h.
         # Step 1 (formula parsing) happens in parse_formula().
 
         # Keep original data for factor detection (by-variable needs dtype info)

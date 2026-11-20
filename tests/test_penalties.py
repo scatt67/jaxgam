@@ -8,8 +8,6 @@ Validates Penalty and CompositePenalty from jaxgam.penalties:
 - Rank and null space dimension
 - Edge cases (single penalty, multiple penalties, extreme log_lambda)
 - No JAX imports (Phase 1 boundary guard)
-
-Design doc reference: docs/design.md Section 10.2
 """
 
 from __future__ import annotations

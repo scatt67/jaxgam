@@ -4,7 +4,7 @@
 
 **When:** start only after the current body of work is complete (see Entry criteria). This series must be the only active work on the stack, so that every step composes once.
 
-**Shape:** a sequence of stacked PRs above the then-current stack top, one logical unification each. Each PR proves bit-identical numerics. Nothing is merged without the user.
+**Shape:** a sequence of PRs, one logical unification each, starting from `main` (the stacked PRs this plan was written against were merged into `main` as one squash commit, #87). Each PR proves bit-identical numerics. Nothing is merged without the user.
 
 ---
 
@@ -16,6 +16,8 @@ All of the following must hold before Phase 0 starts:
 2. The scaling plan's §8 performance and numerical acceptance gates are met and recorded.
 3. `verify_active_stack.py` (or its successor) passes: every head, base edge and native-stack position is verified.
 4. No other implementation branch is in flight.
+
+**Status (2026-11-20):** criteria 1 and 2 are met: that work was consolidated and merged into `main` as pull request #87 (commit `e919938`) with CI green, after the acceptance measurements were taken. Criterion 3 belonged to the stacked-PR workflow and no longer applies; the equivalent check is that Phase 0 starts from `main`. Criterion 4 must be checked again when Phase 0 starts.
 
 ---
 
@@ -66,8 +68,8 @@ Tests cover the harness itself: deterministic output, provenance refusal and dif
 ### 0.2 Architecture test, report-only
 
 Add `tests/test_architecture.py`, with an AST import scan and a scan for `isinstance` checks against concrete family classes.
-- **Enforced now:** `fitting/` never imports `execution/`, host `scipy`, `sqlite3` or file I/O; Phase-1 packages have no JAX. These already hold.
-- **Recorded as an explicit allowlist:** the current host-loop exceptions (`fitting/newton.py::NewtonOptimizer`, `fitting/data.py` preparation) and the current family `isinstance` sites (36–43 per line in October 2026). Later phases shrink the allowlist to empty.
+- **Enforced now:** `fitting/` never imports `execution/`, host `scipy`, `sqlite3` or file I/O; Phase-1 packages have no JAX. These hold on `main` with one exception to allowlist and then remove in Phase 2: `fitting/data.py::_structural_penalty_roots` imports `execution/qr.py` inside the function.
+- **Recorded as an explicit allowlist:** the current host-loop exceptions (`fitting/newton.py::NewtonOptimizer`, `fitting/data.py` preparation) and the current family `isinstance` sites (36–43 per line in October 2026; 46 on `main` after the merge). Later phases shrink the allowlist to empty.
 
 ### 0.3 Duplicate-code check, report-only
 
@@ -216,7 +218,7 @@ Each item is its own commit, and the phase ships as one PR.
 ## Phase 9: Lock in
 
 1. **Blocking guardrails.** Switch the duplicate-code check to blocking. Shrink the architecture-test allowlists to empty, or to a reviewed and justified minimum.
-2. **Docs.** Update `docs/design.md` §10 (execution routing) and `docs/api.md` where internals are described. Add the review checklist from design §7.
+2. **Docs.** Update the architecture pages under `docs/architecture/` and `docs/api.md` where internals are described. Add the review checklist from design §7.
 3. **AGENTS.md.** Propose wording to the user covering the layers, the dependency rule and "extend via `FitProvider`/solver/strategy, never by copying a controller or PIRLS loop". The user applies it.
 4. **Final report.** Before/after line counts per package, duplicate-scan results, compile counts and benchmark timings.
 

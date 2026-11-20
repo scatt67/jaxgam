@@ -7,7 +7,6 @@ Validates the constraint pipeline from jaxgam.smooths.constraints:
 - CoefficientMap: coefficient mapping and roundtrip (STRICT)
 - Phase boundary guard (no JAX imports)
 
-Design doc reference: docs/design.md Section 5.10
 R source reference: R/mgcv.r gam.side(), fixDependence()
 """
 

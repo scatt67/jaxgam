@@ -88,7 +88,7 @@ def _require_estimated_nb(family: NegativeBinomial) -> None:
         raise ValueError("EFS conditional theta requires an estimated NB theta")
     if not isinstance(family.link, (LogLink, IdentityLink, SqrtLink)):
         raise NotImplementedError(
-            "EFS conditional theta supports the pinned NB links log, identity, and sqrt"
+            "EFS conditional theta supports the NB links log, identity, and sqrt"
         )
 
 

@@ -392,9 +392,12 @@ class GAMPredictionResult:
     ``source_scans`` and ``batches_scanned`` count the complete source scans
     and batches read by the fit itself, excluding Phase-1 setup scans, on the
     streamed, discrete and operator routes alike (operator preparation is in
-    ``operator_diagnostics.preparation_*``). ``known_workspace_bytes`` is the
+    ``operator_diagnostics.preparation_*``). On a streamed Fellner--Schall
+    fit they count the final fit only; ``optimizer_diagnostics`` has the
+    scans of the whole search. ``known_workspace_bytes`` is the
     route's conservative known fit-workspace bound, excluding retained
-    Phase-1 preparation (``None`` on fixed-sp operator fits); on the discrete
+    Phase-1 preparation (``None`` on fixed-sp operator fits and on streamed
+    Fellner--Schall fits); on the discrete
     route it covers the indexed design (host tables, device actions) and the
     solver workspace. Discrete fits
     additionally report ``fit_peak_bytes``, which adds the retained compact
@@ -619,7 +622,8 @@ class GAMPredictionResult:
             parse_formula(self.formula),
             training_source,
             control=OperatorPreparationControl(
-                self._batch_rows,
+                # As in the fit: never more rows per scan than the source has.
+                min(self._batch_rows, int(training_source.n_rows)),
                 system_budget,
                 max(1, geometry.raw_width),
             ),
@@ -815,7 +819,9 @@ class GAMPredictionResult:
             model.modest_columns,
             model.random_effects,
             model.n_coef,
-            model.batch_rows,
+            # The fit scans at most the source's row count per batch;
+            # prediction requests keep the batch size the caller asked for.
+            control.batch_rows,
             model.modest_raw_width,
             model.metadata_bound_bytes,
         )

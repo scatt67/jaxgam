@@ -4,7 +4,7 @@ Provides:
 - ``array_module`` / ``is_jax_array``: runtime NumPy/JAX dispatch for
   backend-agnostic code (links, families).
 - ``to_jax`` / ``to_numpy``: Phase 1→2 and Phase 2→3 device transfer
-  boundaries (design.md §1.3).
+  boundaries.
 - ``cho_factor``: plain Cholesky with a diagonal-relative fallback jitter.
 - ``penalized_cholesky`` / ``penalized_solve``: penalized Hessian solves
   for PIRLS.
@@ -41,7 +41,7 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Device transfer (Phase 1→2 and Phase 2→3 boundaries, design.md §1.3)
+# Device transfer (Phase 1→2 and Phase 2→3 boundaries)
 # ---------------------------------------------------------------------------
 
 

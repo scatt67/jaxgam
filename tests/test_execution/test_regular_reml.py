@@ -1711,7 +1711,7 @@ def test_function_reduction_exit_within_mgcv_relative_test_converges(
     assert result.converged
     assert result.projected_gradient_inf == 2.0 * ((12.0 + 1e-4) - 12.0)
     assert result.projected_gradient_inf > StreamREMLControl().gtol
-    assert "converged by pinned mgcv newton()'s relative test" in result.message
+    assert "converged by mgcv newton()'s relative test" in result.message
     assert "<= 5*conv.tol*score.scale 5.000e-03" in result.message
     assert result.message.startswith(_FUNCTION_REDUCTION_EXIT)
 
@@ -1828,9 +1828,7 @@ def test_public_exact_stream_poisson_ten_smooths_converges_across_windows() -> N
         assert fit.convergence_info.startswith(
             "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH"
         )
-        assert "converged by pinned mgcv newton()'s relative test" in (
-            fit.convergence_info
-        )
+        assert "converged by mgcv newton()'s relative test" in (fit.convergence_info)
     assert "source step window(s)" in fit.convergence_info
     windows = int(fit.convergence_info.split("; ")[1].split(" ")[0])
     assert windows > 1

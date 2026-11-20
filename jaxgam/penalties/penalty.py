@@ -6,7 +6,6 @@ and the combined weighted penalty is S_lambda = sum_j exp(log_lambda_j) * S_j.
 
 This module is Phase 1 (NumPy only, no JAX imports).
 
-Design doc reference: docs/design.md Section 10.2 (structured penalties)
 R source reference: R/smooth.r smooth.construct.*.smooth.spec()$S
 """
 
