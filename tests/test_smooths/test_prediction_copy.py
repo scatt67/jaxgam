@@ -21,6 +21,7 @@ from jaxgam.smooths.cubic import (
 )
 from jaxgam.smooths.random_effects import RandomEffectSmooth
 from jaxgam.smooths.registry import smooth_registry
+from jaxgam.smooths.tensor import TensorProductSmooth
 from jaxgam.smooths.tprs import TPRSShrinkageSmooth, TPRSSmooth
 from tests.helpers import _AssertCollector, check_that
 from tests.tolerances import STRICT
@@ -105,10 +106,6 @@ def _copy_cases() -> list[tuple[str, object, dict[str, object]]]:
             spec = SmoothSpec(variables=["x"], bs=key, k=6)
         smooth = smooth_cls(spec)
         smooth.setup(train)
-        if key in ("te", "ti"):
-            # Tensor currently has no design cache. Seed one so the defensive
-            # guard remains covered if that implementation changes.
-            smooth._X = np.eye(2)
         if key == "gp":
             # setup clears this dead store; repopulate it to exercise the
             # prediction-copy defense independently of that source fix.
@@ -333,3 +330,75 @@ def test_predict_spec_equivalence_aliasing_and_lazy_cache() -> None:
                 )
 
     collector.raise_if_any("PredictSpec equivalence and ownership")
+
+
+def test_setup_consumes_training_bases_without_affecting_same_length_newdata() -> None:
+    """Setup transfers training rows while prediction evaluates supplied rows."""
+    n = 64
+    x = np.linspace(0.01, 0.99, n)
+    z = np.linspace(0.98, 0.02, n)
+    data = pd.DataFrame({"x": x, "z": z, "y": np.sin(2 * np.pi * x)})
+    setup = ModelSetup.build(
+        parse_formula("y ~ s(x, bs='tp', k=8) + te(x, z, bs='cr', k=5)"), data
+    )
+
+    smooths = [term.smooth for term in setup.coef_map.terms if term.smooth]
+    assert all(
+        getattr(node, "_X", None) is None
+        for smooth in smooths
+        for node in _smooth_graph(smooth)
+    )
+
+    newdata = pd.DataFrame({"x": x[::-1], "z": z, "y": data["y"]})
+    X_new = setup.build_predict_matrix(newdata)
+    X_training = setup.build_predict_matrix(data)
+    assert X_new.shape == X_training.shape
+    assert not np.allclose(X_new, X_training)
+
+
+def test_model_setup_does_not_rebuild_training_bases(monkeypatch) -> None:
+    """Model assembly consumes setup-owned marginal and tensor bases once."""
+    data = pd.DataFrame(
+        {
+            "x": np.linspace(0.01, 0.99, 48),
+            "z": np.linspace(0.99, 0.01, 48),
+            "y": np.linspace(-1.0, 1.0, 48),
+        }
+    )
+
+    def rebuilt_basis(*_args, **_kwargs):
+        raise AssertionError("ModelSetup rebuilt a smooth training basis")
+
+    monkeypatch.setattr(TPRSSmooth, "build_design_matrix", rebuilt_basis)
+    monkeypatch.setattr(TensorProductSmooth, "build_design_matrix", rebuilt_basis)
+    setup = ModelSetup.build(
+        parse_formula("y ~ s(x, bs='tp', k=8) + te(x, z, bs='cr', k=5)"), data
+    )
+
+    assert setup.X.shape[0] == len(data)
+    assert all(
+        getattr(node, "_X", None) is None
+        for term in setup.coef_map.terms
+        if term.smooth
+        for node in _smooth_graph(term.smooth)
+    )
+
+
+def test_numeric_by_direct_design_remains_valid_after_training_handoff() -> None:
+    """A consumed by-wrapper evaluates matching-size input through prediction."""
+    x = np.linspace(0.01, 0.99, 32)
+    z = np.linspace(0.2, 1.4, 32)
+    data = {"x": x, "z": z}
+    base = TPRSSmooth(SmoothSpec(variables=["x"], bs="tp", k=7))
+    base.setup(data)
+    wrapper = NumericBySmooth(
+        base,
+        SmoothSpec(variables=["x"], bs="tp", k=7, by="z"),
+        by_variable="z",
+    )
+
+    X_training = wrapper.consume_training_design_matrix(data)
+    X_direct = wrapper.build_design_matrix(data)
+
+    assert base._X is None
+    np.testing.assert_allclose(X_direct, X_training, rtol=STRICT.rtol, atol=STRICT.atol)

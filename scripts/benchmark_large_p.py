@@ -14,9 +14,6 @@ Produces ``scripts/large_p_results.png``.
 from __future__ import annotations
 
 import functools
-import os
-import pathlib
-import shutil
 import time
 from statistics import geometric_mean
 
@@ -75,6 +72,11 @@ def setup_r():
     import rpy2.robjects as ro
     from rpy2.robjects.packages import importr
 
+    from tests.r_bridge import RBridge
+
+    ok, reason = RBridge.check_versions()
+    if not ok:
+        raise RuntimeError(f"Pinned R/mgcv benchmark reference unavailable: {reason}")
     importr("mgcv")
     return ro
 
@@ -166,14 +168,10 @@ def main() -> None:
 
     ro = setup_r()
 
-    # Clear JAX persistent compilation cache
-    cache_dir = os.environ.get(
-        "JAX_COMPILATION_CACHE_DIR",
-        str(pathlib.Path.home() / ".cache" / "jaxgam" / "jax"),
+    print(
+        "Compilation cache is left unchanged. Use benchmark_scaling.py for "
+        "isolated cold-cache evidence."
     )
-    if os.path.isdir(cache_dir):
-        shutil.rmtree(cache_dir)
-        print(f"Cleared JAX compilation cache: {cache_dir}")
 
     # Pre-generate datasets
     print("Generating datasets...")
@@ -190,8 +188,9 @@ def main() -> None:
 
     total = len(BASIS_DIMS) * len(FAMILIES) * len(N_SIZES)
 
-    # --- Python true cold ---
-    print("Python true-cold benchmark (no prior JIT)...")
+    # This process has no preceding benchmark fit, but its persistent cache
+    # state is unknown. Isolated cold timing belongs in the scaling harness.
+    print("Python first-fit benchmark (persistent cache state unknown)...")
     done = 0
     for k in BASIS_DIMS:
         for family in FAMILIES:
@@ -276,8 +275,8 @@ def main() -> None:
 
     print("=" * 120)
     print(
-        f"LARGE-P BENCHMARK  |  R: gam(REML) vs bam(fREML, {BAM_NTHREADS}t)"
-        "  |  jaxgam: true cold"
+        f"LARGE-P BENCHMARK  |  R: gam(REML); bam(fREML, {BAM_NTHREADS}t) contextual"
+        "  |  jaxgam: first fit (persistent cache state unknown)"
     )
     print("=" * 120)
     header = (
@@ -356,7 +355,7 @@ def main() -> None:
         x - width,
         py_vals,
         width,
-        label="jaxgam (true cold)",
+        label="jaxgam (first fit; cache state unknown)",
         color="#1f77b4",
     )
     bars_rg = ax.bar(
@@ -394,7 +393,7 @@ def main() -> None:
     ax.set_xticks(x)
     ax.set_xticklabels(x_labels, fontsize=12)
     ax.set_title(
-        f"jaxgam (true cold) vs R mgcv at n={N_SIZES[0]:,}\n"
+        f"jaxgam first fit (cache state unknown) vs R gam at n={N_SIZES[0]:,}\n"
         "(geometric mean across gaussian & poisson)",
         fontsize=13,
     )

@@ -38,6 +38,18 @@ RUN uv sync --extra dev --extra r --frozen --no-install-project
 # ── Stage 4: Source code + project install (rebuilt on code changes) ──
 FROM py-deps AS test
 
+# The embedded pinned R oracle links OpenBLAS (pthread) here, as do SciPy and
+# the pinned source-LAPACK provider. Multithreaded OpenBLAS changes reduction
+# order with the machine's core count, so R reference values would differ
+# between a local image and a native runner. Pin one BLAS thread so every R
+# comparison sees the same reference arithmetic.
+ENV OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+
+# The scaling harness tests create a tiny committed checkout to verify that
+# isolated benchmark children fail closed on source/provenance mismatches.
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY jaxgam/ jaxgam/
 COPY tests/ tests/
 COPY scripts/ scripts/

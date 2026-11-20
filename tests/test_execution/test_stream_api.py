@@ -1,0 +1,640 @@
+"""Public fixed-sp RowSource routing for streamed PIRLS."""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from jaxgam import GAM, FitControl, GAMPredictionResult
+from jaxgam.data.source import DataFrameRowSource
+from tests.helpers import _AssertCollector, r_available
+from tests.tolerances import MODERATE, STRICT
+
+
+class _CappedSource(DataFrameRowSource):
+    """Force preparation through a chosen physical batch partition."""
+
+    def __init__(self, data: pd.DataFrame, cap: int) -> None:
+        super().__init__(data, response="y")
+        self._cap = cap
+
+    def scan(self, batch_rows: int):
+        return super().scan(min(batch_rows, self._cap))
+
+
+def _data(family: str, *, zero_weights: bool = False) -> pd.DataFrame:
+    rng = np.random.default_rng(918)
+    x = np.linspace(-0.8, 1.1, 67)
+    offset = 0.12 * np.sin(2.0 * x)
+    weight = 0.2 + rng.random(len(x))
+    if zero_weights:
+        weight[::11] = 0.0
+    eta = 0.2 + 0.7 * x + offset
+    if family == "gaussian":
+        y = eta + rng.normal(scale=0.18, size=len(x))
+    elif family == "poisson":
+        y = rng.poisson(np.exp(eta))
+    else:
+        y = rng.binomial(1, 1.0 / (1.0 + np.exp(-eta)))
+    return pd.DataFrame({"x": x, "y": y, "weight": weight, "offset": offset})
+
+
+@pytest.mark.parametrize("family", ["gaussian", "poisson", "binomial"])
+@pytest.mark.parametrize("batch_rows", [7, 23])
+def test_public_stream_fixed_sp_matches_dense_with_source_weights_and_offsets(
+    family: str, batch_rows: int
+) -> None:
+    data = _data(family)
+    source = DataFrameRowSource(
+        data,
+        response="y",
+        weights=data.weight.to_numpy(),
+        offset=data.offset.to_numpy(),
+    )
+    formula = 'y ~ s(x, bs="cr", k=6)'
+    streamed = GAM(
+        formula,
+        family=family,
+        sp=[0.3],
+        control=FitControl(execution="stream", batch_rows=batch_rows),
+    ).fit(source, result="prediction")
+    dense = GAM(formula, family=family, sp=[0.3]).fit(
+        data,
+        weights=data.weight.to_numpy(),
+        offset=data.offset.to_numpy(),
+        result="prediction",
+    )
+
+    collector = _AssertCollector()
+    collector.check("prediction result", lambda: assert_is_prediction(streamed))
+    collector.check(
+        "coefficients",
+        lambda: np.testing.assert_allclose(
+            streamed.coefficients,
+            dense.coefficients,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "score",
+        lambda: np.testing.assert_allclose(
+            streamed.score, dense.score, rtol=MODERATE.rtol, atol=MODERATE.atol
+        ),
+    )
+    collector.check(
+        "offset prediction",
+        lambda: np.testing.assert_allclose(
+            streamed.predict(data[["x"]], offset=data.offset.to_numpy()),
+            dense.predict(data[["x"]], offset=data.offset.to_numpy()),
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.raise_if_any("public streamed fixed-sp dense parity")
+
+
+def test_public_qr_solver_is_explicit_and_matches_dense() -> None:
+    """The public policy selects QR and reports the route it actually ran."""
+    family = "gaussian"
+    data = _data(family)
+    source = DataFrameRowSource(
+        data,
+        response="y",
+        weights=data.weight.to_numpy(),
+        offset=data.offset.to_numpy(),
+    )
+    formula = 'y ~ s(x, bs="cr", k=6)'
+    result = GAM(
+        formula,
+        family=family,
+        sp=[0.3],
+        control=FitControl(execution="stream", linear_solver="qr", batch_rows=7),
+    ).fit(source, result="prediction")
+    dense = GAM(formula, family=family, sp=[0.3]).fit(
+        data,
+        weights=data.weight.to_numpy(),
+        offset=data.offset.to_numpy(),
+        result="prediction",
+    )
+    assert result.execution_route == "stream_qr"
+    assert result.execution_fallback_reason is None
+    np.testing.assert_allclose(
+        result.predict(data[["x"]], offset=data.offset.to_numpy()),
+        dense.predict(data[["x"]], offset=data.offset.to_numpy()),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+@pytest.mark.parametrize(
+    ("seed", "scale", "batch_cap"),
+    [(881, -1.0, 1), (882, 1.0, 7), (883, -1.0, 100), (881, 2.0, 1)],
+)
+def test_public_qr_uses_preparation_owned_parametric_alias_map(
+    seed: int, scale: float, batch_cap: int
+) -> None:
+    rng = np.random.default_rng(seed)
+    x = rng.normal(size=83)
+    data = pd.DataFrame(
+        {"x": x, "z": scale * x, "y": 1.0 + 0.3 * x + rng.normal(scale=0.1, size=83)}
+    )
+    source = _CappedSource(data, batch_cap)
+    result = GAM(
+        "y ~ x + z",
+        sp=[],
+        control=FitControl(execution="stream", linear_solver="qr", batch_rows=7),
+    ).fit(source, result="prediction")
+    dense = GAM("y ~ x + z", sp=[]).fit(data, result="prediction")
+    assert result.execution_route == "stream_qr"
+    assert len(result.coefficients) == 2
+    np.testing.assert_allclose(
+        result.coefficients,
+        dense.coefficients,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        result.predict(data[["x", "z"]]),
+        dense.predict(data[["x", "z"]]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+def assert_is_prediction(result: object) -> None:
+    """Keep the collector's public-route checks compact and named."""
+    assert isinstance(result, GAMPredictionResult)
+    assert result.execution_path == "jax"
+    assert result.execution_route == "stream"
+    assert result.execution_fallback_reason is None
+    assert result.lambda_strategy == "fixed"
+
+
+def test_public_stream_fisher_and_point_retention() -> None:
+    data = _data("gaussian")
+    source = DataFrameRowSource(data, response="y", offset=data.offset.to_numpy())
+    formula = 'y ~ s(x, bs="cr", k=6)'
+    fisher = GAM(
+        formula,
+        sp=[0.2],
+        control=FitControl(execution="stream", uncertainty="fisher", batch_rows=9),
+    ).fit(source, result="prediction")
+    dense = GAM(formula, sp=[0.2], control=FitControl(uncertainty="fisher")).fit(
+        data, offset=data.offset.to_numpy(), result="prediction"
+    )
+    actual = fisher.predict(data[["x"]], offset=data.offset.to_numpy(), se_fit=True)
+    expected = dense.predict(data[["x"]], offset=data.offset.to_numpy(), se_fit=True)
+    np.testing.assert_allclose(
+        actual[0], expected[0], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    np.testing.assert_allclose(
+        actual[1], expected[1], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+
+    point = GAM(formula, sp=[0.2], control=FitControl(execution="stream")).fit(
+        source, result="prediction"
+    )
+    assert not hasattr(point, "setup")
+    assert point._predictor.Vp is None
+    assert point._predictor._fisher_factor is None
+    assert all(
+        value.shape != (len(data),)
+        for value in point.__dict__.values()
+        if isinstance(value, np.ndarray)
+    )
+
+
+def test_public_stream_accepts_real_zero_and_extreme_prior_weights() -> None:
+    data = _data("poisson", zero_weights=True)
+    data.loc[data.index[1], "weight"] = 1e-14
+    data.loc[data.index[2], "weight"] = 1e8
+    result = GAM(
+        'y ~ s(x, bs="cr", k=6)',
+        family="poisson",
+        sp=[0.2],
+        control=FitControl(execution="stream", batch_rows=8),
+    ).fit(
+        DataFrameRowSource(data, response="y", weights=data.weight.to_numpy()),
+        result="prediction",
+    )
+    assert result.converged
+    assert np.isfinite(result.deviance)
+
+
+def test_public_stream_covariance_budget_and_route_guards() -> None:
+    data = _data("gaussian")
+    source = DataFrameRowSource(data, response="y")
+    formula = 'y ~ s(x, bs="cr", k=6)'
+    # Phase-1 setup is the first budgeted stage: one byte cannot scan a row.
+    with pytest.raises(MemoryError, match="Phase-1 streamed setup requires"):
+        GAM(
+            formula,
+            sp=[0.2],
+            control=FitControl(
+                execution="stream", uncertainty="covariance", memory_budget_bytes=1
+            ),
+        ).fit(source, result="prediction")
+    # A budget that admits setup's batches still rejects the PIRLS workspace
+    # its requested 200,000-row fit batches would need.
+    with pytest.raises(MemoryError, match="Known streamed PIRLS workspace"):
+        GAM(
+            formula,
+            sp=[0.2],
+            control=FitControl(
+                execution="stream",
+                uncertainty="covariance",
+                batch_rows=200_000,
+                memory_budget_bytes=20_000_000,
+            ),
+        ).fit(source, result="prediction")
+    covariance = GAM(
+        formula,
+        sp=[0.2],
+        control=FitControl(
+            execution="stream", uncertainty="covariance", memory_budget_bytes=20_000_000
+        ),
+    ).fit(source, result="prediction")
+    assert covariance._predictor.Vp is not None
+
+    with pytest.raises(TypeError, match="RowSource"):
+        GAM(formula, sp=[0.2]).fit(source)
+    with pytest.raises(TypeError, match="requires a replayable RowSource"):
+        GAM(formula, sp=[0.2], control=FitControl(execution="stream")).fit(data)
+    with pytest.raises(NotImplementedError, match="result='prediction'"):
+        GAM(formula, sp=[0.2], control=FitControl(execution="stream")).fit(source)
+    with pytest.raises(
+        NotImplementedError, match="Exact streamed REML requires linear_solver='qr'"
+    ):
+        GAM(formula, control=FitControl(execution="stream")).fit(
+            source, result="prediction"
+        )
+    with pytest.raises(ValueError, match="owned by the RowSource"):
+        GAM(formula, sp=[0.2], control=FitControl(execution="stream")).fit(
+            source, weights=np.ones(len(data)), result="prediction"
+        )
+    with pytest.raises(
+        NotImplementedError,
+        match="NB observed-information fitting requires linear_solver='qr'",
+    ):
+        GAM(formula, family="nb", sp=[0.2], control=FitControl(execution="stream")).fit(
+            source, result="prediction"
+        )
+    with pytest.raises(NotImplementedError, match="requires execution='stream'"):
+        GAM(formula, sp=[0.2], control=FitControl(linear_solver="qr")).fit(data)
+
+
+class _RecordingSource(DataFrameRowSource):
+    """Record requested scan sizes and the yielded batch lengths."""
+
+    def __init__(self, data: pd.DataFrame, **kwargs) -> None:
+        super().__init__(data, response="y", **kwargs)
+        self.scans: list[list[int]] = []
+
+    def scan(self, batch_rows: int):
+        record = [batch_rows, 0]
+        self.scans.append(record)
+        for batch in super().scan(batch_rows):
+            record[1] = max(record[1], len(batch.row_positions))
+            yield batch
+
+
+def _spy_prepare_model(monkeypatch, *, setup_batch_rows: int | None = None) -> list:
+    """Record public setup controls; optionally force only the setup partition."""
+    import jaxgam.api as api_module
+
+    calls = []
+    original = api_module.prepare_model
+
+    def spy(*args, **kwargs):
+        calls.append(dict(kwargs))
+        if setup_batch_rows is not None:
+            kwargs["batch_rows"] = setup_batch_rows
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(api_module, "prepare_model", spy)
+    return calls
+
+
+def test_public_stream_threads_fit_control_into_setup(monkeypatch) -> None:
+    from jaxgam.formula.prepare import SetupWorkspace
+
+    calls = _spy_prepare_model(monkeypatch)
+    data = _data("gaussian")
+    formula = 'y ~ s(x, bs="cr", k=6)'
+    control = FitControl(execution="stream", batch_rows=9)
+    source = _RecordingSource(data)
+    GAM(formula, sp=[0.2], control=control).fit(source, result="prediction")
+    assert calls[-1]["batch_rows"] == 9
+    assert calls[-1]["maximum_bytes"] == control.memory_budget_bytes
+    # Only the two one-row setup peaks differ from the requested size.
+    assert {requested for requested, _ in source.scans} == {1, 9}
+    assert all(largest <= requested for requested, largest in source.scans)
+
+    workspaces = []
+    original = SetupWorkspace.batch_rows
+
+    def record(self, requested, maximum_bytes):
+        workspaces.append(self)
+        return original(self, requested, maximum_bytes)
+
+    monkeypatch.setattr(SetupWorkspace, "batch_rows", record)
+    GAM(formula, sp=[0.2], control=control).fit(
+        _RecordingSource(data), result="prediction"
+    )
+    # Shrink setup to five-row scans while the fit keeps its 65,536 request.
+    budget = workspaces[-1].bytes_for_rows(6) - 1
+    shrunk = _RecordingSource(data)
+    result = GAM(
+        formula,
+        sp=[0.2],
+        control=FitControl(execution="stream", memory_budget_bytes=budget),
+    ).fit(shrunk, result="prediction")
+    assert result.converged
+    # Knot, centering, then initial beta with the rank factor and valid domain.
+    setup_scans = shrunk.scans[2 : 2 + 4]
+    assert [requested for requested, _ in shrunk.scans[:2]] == [1, 1]
+    assert {requested for requested, _ in setup_scans} == {5}
+    assert {requested for requested, _ in shrunk.scans[6:]} == {65_536}
+
+
+def _stream_fit_fields(result) -> dict[str, np.ndarray]:
+    return {
+        "coefficients": np.asarray(result.coefficients),
+        "smoothing_params": np.asarray(result.smoothing_params),
+        "deviance": np.asarray(result.deviance),
+        "scale": np.asarray(result.scale),
+        "edf_total": np.asarray(result.edf_total),
+    }
+
+
+@pytest.mark.parametrize(
+    ("family", "optimizer", "solver"),
+    [
+        ("gaussian", "newton", "cholesky"),
+        ("poisson", "newton", "qr"),
+        ("poisson", "efs", "qr"),
+    ],
+)
+def test_public_stream_fits_are_invariant_to_setup_partition(
+    monkeypatch, family: str, optimizer: str, solver: str
+) -> None:
+    """Fixed-sp and EFS-estimated public fits agree at STRICT across setup sizes.
+
+    The fit partition is held at FitControl.batch_rows; only the Phase-1 scan
+    size changes, so any difference would come from setup reductions.
+    """
+    data = _data(family)
+    formula = 'y ~ x2 + s(x, bs="cr", k=6)'
+    data["x2"] = np.cos(3.0 * data.x)
+    fits = {}
+    for setup_batch_rows in (len(data), 11, 1):
+        _spy_prepare_model(monkeypatch, setup_batch_rows=setup_batch_rows)
+        model = GAM(
+            formula,
+            family=family,
+            optimizer=optimizer,
+            sp=None if optimizer == "efs" else [0.3],
+            control=FitControl(execution="stream", linear_solver=solver, batch_rows=13),
+        )
+        source = DataFrameRowSource(
+            data,
+            response="y",
+            weights=data.weight.to_numpy(),
+            offset=data.offset.to_numpy(),
+        )
+        fits[setup_batch_rows] = _stream_fit_fields(
+            model.fit(source, result="prediction")
+        )
+        monkeypatch.undo()
+    reference = fits.pop(len(data))
+    collector = _AssertCollector()
+    for setup_batch_rows, fields in fits.items():
+        for name, value in fields.items():
+            collector.check(
+                f"{name} at setup batch_rows={setup_batch_rows}",
+                lambda value=value, name=name: np.testing.assert_allclose(
+                    value, reference[name], rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+    collector.raise_if_any(f"{family}/{optimizer} setup-partition invariance")
+
+
+@pytest.mark.parametrize(
+    ("family", "solver"), [("gaussian", "cholesky"), ("poisson", "qr")]
+)
+def test_public_fixed_sp_stream_fit_is_invariant_to_fit_control_batch_rows(
+    family: str, solver: str
+) -> None:
+    """FitControl.batch_rows sizes setup and fit scans; fixed-sp fits agree."""
+    data = _data(family)
+    data["x2"] = np.cos(3.0 * data.x)
+    fits = {}
+    for batch_rows in (len(data), 13, 5):
+        source = DataFrameRowSource(
+            data,
+            response="y",
+            weights=data.weight.to_numpy(),
+            offset=data.offset.to_numpy(),
+        )
+        fits[batch_rows] = _stream_fit_fields(
+            GAM(
+                'y ~ x2 + s(x, bs="cr", k=6)',
+                family=family,
+                sp=[0.3],
+                control=FitControl(
+                    execution="stream", linear_solver=solver, batch_rows=batch_rows
+                ),
+            ).fit(source, result="prediction")
+        )
+    reference = fits.pop(len(data))
+    collector = _AssertCollector()
+    for batch_rows, fields in fits.items():
+        for name, value in fields.items():
+            collector.check(
+                f"{name} at batch_rows={batch_rows}",
+                lambda value=value, name=name: np.testing.assert_allclose(
+                    value, reference[name], rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+    collector.raise_if_any(f"{family} fixed-sp FitControl.batch_rows invariance")
+
+
+def test_stream_workspace_reserves_final_edf_and_candidate_matrices() -> None:
+    """Tiny batches do not eliminate simultaneous coefficient-space buffers."""
+    from jaxgam.api import _preflight_stream_workspace
+
+    p, batch_rows = 100, 1
+    # Five coefficient matrices alone omit previous/candidate systems and
+    # final Fisher-EDF triangular solves, even with just one streamed row.
+    incomplete_budget = (5 * p * p + 3 * batch_rows * p + 8 * batch_rows + 4 * p) * 8
+    with pytest.raises(MemoryError, match="Known streamed PIRLS workspace"):
+        _preflight_stream_workspace(p, batch_rows, incomplete_budget)
+    _preflight_stream_workspace(p, batch_rows, 2_000_000)
+
+
+def test_stream_qr_workspace_counts_live_merge_arrays() -> None:
+    from jaxgam.api import _preflight_stream_workspace
+
+    p, batch_rows = 20, 2048
+    cholesky_budget = (12 * p * p + 3 * batch_rows * p + 8 * batch_rows + 4 * p) * 8
+    _preflight_stream_workspace(p, batch_rows, cholesky_budget)
+    with pytest.raises(MemoryError, match="Known streamed QR PIRLS workspace"):
+        _preflight_stream_workspace(p, batch_rows, cholesky_budget, linear_solver="qr")
+    qr_budget = (14 * p * p + 4 * batch_rows * p + 12 * batch_rows + 6 * p) * 8
+    _preflight_stream_workspace(p, batch_rows, qr_budget, linear_solver="qr")
+
+
+def test_public_stream_accepts_empty_fixed_sp_for_unpenalized_model() -> None:
+    data = _data("gaussian")
+    source = DataFrameRowSource(data, response="y")
+    result = GAM(
+        "y ~ x",
+        sp=[],
+        control=FitControl(execution="stream", batch_rows=8),
+        device="cpu",
+    ).fit(source, result="prediction")
+    dense = GAM("y ~ x", sp=[]).fit(data, result="prediction")
+    assert result.smoothing_params.shape == (0,)
+    assert result.converged
+    np.testing.assert_allclose(
+        result.score, dense.score, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+
+
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
+def test_public_stream_fixed_sp_matches_pinned_r_predictions_and_scale(
+    r_bridge,
+) -> None:
+    """The public RowSource route keeps the fixed-sp R contract end-to-end."""
+    from tests.r_bridge import RBridge
+
+    data = _data("gaussian")[["x", "y"]]
+    formula = 'y ~ s(x, bs="cr", k=6)'
+    reference = RBridge().fit_gam(formula, data, family="gaussian")
+    result = GAM(
+        formula,
+        sp=reference["smoothing_params"],
+        control=FitControl(execution="stream", uncertainty="fisher", batch_rows=7),
+    ).fit(DataFrameRowSource(data, response="y"), result="prediction")
+    prediction, se = result.predict(data[["x"]], se_fit=True)
+    expected = r_bridge.predict_gam(
+        formula, data, data[["x"]], family="gaussian", pred_type="response", se_fit=True
+    )
+    collector = _AssertCollector()
+    collector.check(
+        "coefficients",
+        lambda: np.testing.assert_allclose(
+            result.coefficients,
+            reference["coefficients"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "prediction",
+        lambda: np.testing.assert_allclose(
+            prediction,
+            expected["predictions"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "standard error",
+        lambda: np.testing.assert_allclose(
+            se, expected["se"], rtol=MODERATE.rtol, atol=MODERATE.atol
+        ),
+    )
+    collector.check(
+        "reported scale",
+        lambda: np.testing.assert_allclose(
+            result.scale, reference["scale"], rtol=MODERATE.rtol, atol=MODERATE.atol
+        ),
+    )
+    collector.raise_if_any("public streamed fixed-sp R parity")
+
+
+def _many_smooth_source(family: str, n_smooths: int, n_rows: int = 240):
+    from jaxgam.data.source import ArrayRowSource
+
+    rng = np.random.default_rng(1_119)
+    columns = {f"x{index}": rng.uniform(size=n_rows) for index in range(n_smooths)}
+    eta = 0.3 + 0.4 * sum(np.sin(3.0 * value) for value in columns.values())
+    if family == "poisson":
+        y = rng.poisson(np.exp(eta)).astype(float)
+    else:
+        y = eta + rng.normal(scale=0.2, size=n_rows)
+    return ArrayRowSource(columns, y=y)
+
+
+_STREAM_ROUTES = {
+    # route: (family, fixed sp, FitControl keywords)
+    "stream_gaussian_qr": ("gaussian", False, {"gaussian_compression": True}),
+    "stream_exact_reml_qr": ("gaussian", False, {"linear_solver": "qr"}),
+    "stream_qr": ("poisson", True, {"linear_solver": "qr"}),
+}
+
+
+def _route_fit(route: str, n_smooths: int, source) -> GAMPredictionResult:
+    family, fixed, keywords = _STREAM_ROUTES[route]
+    formula = "y ~ " + " + ".join(
+        f"s(x{index}, bs='cr', k=5)" for index in range(n_smooths)
+    )
+    return GAM(
+        formula,
+        family=family,
+        sp=[0.5] * n_smooths if fixed else None,
+        control=FitControl(execution="stream", batch_rows=64, **keywords),
+    ).fit(source, result="prediction")
+
+
+@pytest.mark.parametrize("route", sorted(_STREAM_ROUTES))
+@pytest.mark.parametrize("n_smooths", [2, 4])
+def test_streamed_fit_hashes_its_source_twice(
+    monkeypatch, route: str, n_smooths: int
+) -> None:
+    """One content hash when the fit starts and one when it ends.
+
+    Setup and fitting ask for the fingerprint before and after every scan;
+    outside one fit's scope each request rehashed the whole source.
+    """
+    from jaxgam.data.source import ArrayRowSource
+
+    hashes: list[int] = []
+    content_fingerprint = ArrayRowSource._content_fingerprint
+
+    def counted_fingerprint(self):
+        hashes.append(1)
+        return content_fingerprint(self)
+
+    monkeypatch.setattr(ArrayRowSource, "_content_fingerprint", counted_fingerprint)
+    result = _route_fit(route, n_smooths, _many_smooth_source(route, n_smooths))
+    assert result.execution_route == route
+    assert np.all(np.isfinite(np.asarray(result.coefficients)))
+    assert len(hashes) == 2
+
+
+@pytest.mark.parametrize("route", sorted(_STREAM_ROUTES))
+def test_streamed_fit_raises_when_its_source_changes_during_the_fit(
+    monkeypatch, route: str
+) -> None:
+    """A source mutated after setup raises when the fit ends."""
+    from jaxgam.data.source import ArrayRowSource
+
+    source = _many_smooth_source(route, 2)
+    scans: list[int] = []
+    scan = ArrayRowSource.scan
+
+    def mutating_scan(self, batch_rows):
+        scans.append(1)
+        if len(scans) == 6:
+            # Rows already read by setup now differ from the source.
+            self._y[0] += 1.0
+        return scan(self, batch_rows)
+
+    monkeypatch.setattr(ArrayRowSource, "scan", mutating_scan)
+    with pytest.raises(RuntimeError, match="RowSource changed during the fit"):
+        _route_fit(route, 2, source)
+    assert len(scans) > 6

@@ -1,0 +1,846 @@
+"""Shared, row-separable family primitives for bounded fitting backends.
+
+This module is intentionally a small Phase-2 consumer of methods declared on
+``ExponentialFamily``.  It does not select a family by name and it does not
+route public fits.  Dense PIRLS retains its existing operation order; the
+streamed and future provider paths can opt into these primitives after their
+own release-specific preflight.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, fields
+from functools import partial
+from typing import TYPE_CHECKING
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from jaxgam.families.base import (
+    ExponentialFamily,
+    FamilyExecutionCapabilities,
+    FamilyPadding,
+    FamilyParameterSnapshot,
+    StreamReductionPolicy,
+)
+from jaxgam.fitting.pirls import _W_MAX, _W_MIN, canonical_working_quantities
+from jaxgam.jax_utils import _materialize_source_operation
+
+if TYPE_CHECKING:
+    from jaxgam.formula.prepare import PreparedModel
+
+
+@dataclass(frozen=True)
+class FamilyExecutionContext:
+    """Frozen static family/link configuration carried in a JIT cache key."""
+
+    static_config: tuple[object, ...]
+    capabilities: FamilyExecutionCapabilities
+    padding: FamilyPadding
+    reduction_policy: StreamReductionPolicy
+    theta_mode: str
+    phi_mode: str
+
+    @classmethod
+    def from_family(cls, family: ExponentialFamily) -> FamilyExecutionContext:
+        snapshot = family.execution_parameter_snapshot()
+        return cls(
+            static_config=family.execution_static_config(),
+            capabilities=family.execution_capabilities(),
+            padding=family.execution_padding(),
+            reduction_policy=family.stream_reduction_policy(),
+            theta_mode=snapshot.theta_mode,
+            phi_mode=snapshot.phi_mode,
+        )
+
+
+@dataclass(frozen=True)
+class FamilyExecutionLineage:
+    """Prepared/source lineage plus immutable family configuration snapshots.
+
+    Call :meth:`validate` immediately before every cached device dispatch.
+    JAX can legitimately reuse a previously compiled executable without
+    retracing Python static arguments, so trace-time context validation alone
+    cannot observe a mutation made after that executable entered the cache.
+    """
+
+    source_fingerprint: str
+    basis_fingerprint: str
+    context: FamilyExecutionContext
+    parameters: FamilyParameterSnapshot
+
+    @classmethod
+    def from_prepared(
+        cls, prepared: PreparedModel, family: ExponentialFamily
+    ) -> FamilyExecutionLineage:
+        fitting = prepared.fitting
+        if fitting is None:
+            raise ValueError("Family execution requires fitting preparation.")
+        if (
+            fitting.family_execution_static_config is None
+            or fitting.family_parameter_snapshot is None
+        ):
+            raise NotImplementedError(
+                "Prepared family lacks the CPU execution-contract snapshots "
+                "required by streamed fitting."
+            )
+        if fitting.family_execution_static_config != family.execution_static_config():
+            raise RuntimeError(
+                "Family or link static configuration changed after fitting "
+                "preparation; prepare again."
+            )
+        if fitting.family_parameter_snapshot != family.execution_parameter_snapshot():
+            raise RuntimeError(
+                "Family parameter state changed after fitting preparation; "
+                "prepare again."
+            )
+        return cls(
+            source_fingerprint=prepared.source_fingerprint,
+            basis_fingerprint=prepared.basis_fingerprint,
+            context=FamilyExecutionContext.from_family(family),
+            parameters=family.execution_parameter_snapshot(),
+        )
+
+    def validate(self, prepared: PreparedModel, family: ExponentialFamily) -> None:
+        """Fail closed when source, basis, family/link, or state was mutated."""
+        if prepared.source_fingerprint != self.source_fingerprint:
+            raise RuntimeError("RowSource changed after family execution preparation.")
+        if prepared.basis_fingerprint != self.basis_fingerprint:
+            raise RuntimeError(
+                "Prepared basis changed after family execution preparation."
+            )
+        fitting = prepared.fitting
+        if fitting is None:
+            raise RuntimeError(
+                "Prepared fitting metadata disappeared after preparation."
+            )
+        if (
+            fitting.family_name != family.family_name
+            or fitting.link_name != type(family.link).__qualname__
+        ):
+            raise RuntimeError(
+                "Prepared family/link metadata changed after preparation."
+            )
+        if FamilyExecutionContext.from_family(family) != self.context:
+            raise RuntimeError(
+                "Family or link static configuration changed after preparation."
+            )
+        if family.execution_parameter_snapshot() != self.parameters:
+            raise RuntimeError(
+                "Family parameter state changed after preparation; construct a "
+                "new execution lineage."
+            )
+
+
+@dataclass(frozen=True)
+class FamilyExecutionParameters:
+    """Explicit dynamic theta passed to JIT primitives as an array leaf.
+
+    Scale remains a distinct fit-state argument to the likelihood reduction in
+    this bounded first stage.  PR8.1 will introduce a lineage-bound trial
+    scale snapshot rather than carry an unused ``log_phi`` placeholder here.
+    """
+
+    log_theta: jax.Array
+
+    @classmethod
+    def from_snapshot(
+        cls, snapshot: FamilyParameterSnapshot
+    ) -> FamilyExecutionParameters:
+        return cls(log_theta=jnp.asarray(snapshot.log_theta, dtype=jnp.float64))
+
+
+_PARAMETER_FIELDS = [field.name for field in fields(FamilyExecutionParameters)]
+jax.tree_util.register_pytree_node(
+    FamilyExecutionParameters,
+    lambda state: ([getattr(state, name) for name in _PARAMETER_FIELDS], None),
+    lambda _, children: FamilyExecutionParameters(
+        **dict(zip(_PARAMETER_FIELDS, children, strict=True))
+    ),
+)
+
+
+@dataclass(frozen=True)
+class BatchWorkingQuantities:
+    """Raw information plus legacy-clipped solver quantities for one batch."""
+
+    eta: jax.Array
+    mu: jax.Array
+    working_weight: jax.Array
+    fisher_weight: jax.Array
+    observed_weight: jax.Array
+    working_response: jax.Array
+    deviance: jax.Array
+    domain_ok: jax.Array
+
+
+_BATCH_FIELDS = [field.name for field in fields(BatchWorkingQuantities)]
+jax.tree_util.register_pytree_node(
+    BatchWorkingQuantities,
+    lambda result: ([getattr(result, name) for name in _BATCH_FIELDS], None),
+    lambda _, children: BatchWorkingQuantities(
+        **dict(zip(_BATCH_FIELDS, children, strict=True))
+    ),
+)
+
+
+@dataclass(frozen=True)
+class InitialBatchWorkingQuantities:
+    """Raw first-iteration systems evaluated at a supplied per-row eta.
+
+    ``observed_weight`` is the smooth direct-deviance curvature.  The
+    ``newton_weight``/``newton_response`` pair is the literal alpha-adjusted
+    arithmetic in pinned ``gam.fit3`` for regular noncanonical links; it is
+    not clipped, absolutized, or sent to a positive-definite solver here.
+    A later signed-system route must decide whether the step is indefinite
+    and reproduce mgcv's step-local Fisher fallback.
+    ``informative_mask`` is the source ``good`` selection, independent of
+    whether a selected or observed curvature is numerically zero.
+    """
+
+    eta: jax.Array
+    mu: jax.Array
+    fisher_weight: jax.Array
+    fisher_response: jax.Array
+    observed_weight: jax.Array
+    newton_alpha_raw: jax.Array
+    newton_alpha: jax.Array
+    newton_weight: jax.Array
+    newton_response: jax.Array
+    input_ok: jax.Array
+    domain_ok: jax.Array
+    alpha_resolution_unresolved: jax.Array
+    working_inputs_ok: jax.Array
+    informative_mask: jax.Array
+    informative_count: jax.Array
+    fisher_system_ok: jax.Array
+    newton_system_ok: jax.Array
+    observed_information_ok: jax.Array
+    working_system_admissible: jax.Array
+
+
+_INITIAL_BATCH_WORKING_FIELDS = [
+    field.name for field in fields(InitialBatchWorkingQuantities)
+]
+jax.tree_util.register_pytree_node(
+    InitialBatchWorkingQuantities,
+    lambda result: (
+        [getattr(result, name) for name in _INITIAL_BATCH_WORKING_FIELDS],
+        None,
+    ),
+    lambda _, children: InitialBatchWorkingQuantities(
+        **dict(zip(_INITIAL_BATCH_WORKING_FIELDS, children, strict=True))
+    ),
+)
+
+
+@dataclass(frozen=True)
+class RegularFletcherStatistics:
+    """Bounded sufficient statistics for one regular-family scale reduction.
+
+    ``correction_sum`` and ``n_valid_rows`` deliberately do not use prior
+    weights.  This is the ``mean(...)`` and ``n.true`` convention in pinned
+    ``gam.fit3.r``; real zero-weight rows remain in both quantities.
+    """
+
+    pearson_sum: jax.Array
+    correction_sum: jax.Array
+    n_valid_rows: jax.Array
+    input_ok: jax.Array
+
+
+_FLETCHER_STAT_FIELDS = [field.name for field in fields(RegularFletcherStatistics)]
+jax.tree_util.register_pytree_node(
+    RegularFletcherStatistics,
+    lambda result: ([getattr(result, name) for name in _FLETCHER_STAT_FIELDS], None),
+    lambda _, children: RegularFletcherStatistics(
+        **dict(zip(_FLETCHER_STAT_FIELDS, children, strict=True))
+    ),
+)
+
+
+@dataclass(frozen=True)
+class RegularFletcherScale:
+    """Pinned-R Fletcher scalar plus explicit stream-admissibility status.
+
+    When the post-clamp ``s.bar`` is non-finite, pinned mgcv retains the
+    Pearson scalar and skips the correction.  In particular raw ``-inf`` is
+    first clamped to ``-0.9`` and therefore *does* apply the correction.
+    ``stream_admissible`` is intentionally stricter for a future streamed
+    caller: it is false when the post-clamp value is non-finite, so a caller
+    can fail closed without changing dense ``fletcher_scale`` behavior.
+    """
+
+    scale: jax.Array
+    pearson_scale: jax.Array
+    s_bar: jax.Array
+    correction_applied: jax.Array
+    input_ok: jax.Array
+    stream_admissible: jax.Array
+
+
+_FLETCHER_SCALE_FIELDS = [field.name for field in fields(RegularFletcherScale)]
+jax.tree_util.register_pytree_node(
+    RegularFletcherScale,
+    lambda result: ([getattr(result, name) for name in _FLETCHER_SCALE_FIELDS], None),
+    lambda _, children: RegularFletcherScale(
+        **dict(zip(_FLETCHER_SCALE_FIELDS, children, strict=True))
+    ),
+)
+
+
+def _response_valid(family: ExponentialFamily, y: jax.Array) -> jax.Array:
+    """JIT counterpart to the static response-support descriptor."""
+    support = family.response_support
+    lower = y >= support.lower if support.lower_inclusive else y > support.lower
+    upper = y <= support.upper if support.upper_inclusive else y < support.upper
+    return jnp.isfinite(y) & lower & upper
+
+
+def _validate_context(
+    family: ExponentialFamily, context: FamilyExecutionContext
+) -> None:
+    """Run at trace time; makes frozen config part of the JIT contract."""
+    if FamilyExecutionContext.from_family(family) != context:
+        raise RuntimeError(
+            "Family execution context is stale; rebuild it after mutating a "
+            "family or link."
+        )
+
+
+def _require_capabilities(context: FamilyExecutionContext, *capabilities: str) -> None:
+    """Reject missing mathematical primitives before tracing AD arithmetic."""
+    missing = [name for name in capabilities if not getattr(context.capabilities, name)]
+    if missing:
+        raise NotImplementedError(
+            "Family execution context does not provide required capabilities: "
+            + ", ".join(missing)
+        )
+
+
+def sanitize_batch_inputs(
+    X: jax.Array,
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    valid: jax.Array,
+    beta: jax.Array,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Make every unused tail finite before link/family arithmetic."""
+    valid = jnp.asarray(valid, dtype=bool)
+    finite_X = jnp.all(jnp.isfinite(X), axis=1)
+    finite_vectors = jnp.isfinite(y) & jnp.isfinite(prior_weight) & jnp.isfinite(offset)
+    weight_ok = prior_weight >= 0.0
+    response_ok = _response_valid(family, y)
+    real_ok = valid & finite_X & finite_vectors & weight_ok & response_ok
+    padding = context.padding
+    X_safe = jnp.where(real_ok[:, None], X, 0.0)
+    y_safe = jnp.where(real_ok, y, padding.response)
+    weight_safe = jnp.where(real_ok, prior_weight, 0.0)
+    offset_safe = jnp.where(real_ok, offset, 0.0)
+    eta_raw = X_safe @ beta + offset_safe
+    eta_ok = real_ok & jnp.isfinite(eta_raw) & family.valid_eta(eta_raw)
+    eta_safe = jnp.where(eta_ok, eta_raw, padding.eta)
+    mu = family.link.inverse(eta_safe)
+    domain_per_row = real_ok & eta_ok & family.valid_mu(mu)
+    return y_safe, weight_safe, offset_safe, eta_safe, mu, domain_per_row
+
+
+def _require_regular_fletcher_policy(context: FamilyExecutionContext) -> None:
+    """Reject a scale formula unless the family explicitly owns it."""
+    if (
+        not context.capabilities.regular_fletcher_scale
+        or context.reduction_policy.reported_scale != "regular_fletcher"
+    ):
+        raise NotImplementedError(
+            "Family execution context does not provide regular Fletcher "
+            "reported-scale reductions."
+        )
+
+
+@partial(jax.jit, static_argnames=("family", "context"))
+def batch_regular_fletcher_statistics(
+    X: jax.Array,
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    valid: jax.Array,
+    beta: jax.Array,
+    parameters: FamilyExecutionParameters,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+) -> RegularFletcherStatistics:
+    """Reduce one sanitized batch for a regular-family Fletcher scale.
+
+    This primitive evaluates padding through the family-owned safe eta, then
+    masks it from all three statistics.  It is intentionally independent of
+    the current streamed PIRLS host route; Gamma remains unreleased there.
+    """
+    _validate_context(family, context)
+    _require_capabilities(context, "row_separable")
+    _require_regular_fletcher_policy(context)
+    y_safe, weight_safe, _offset_safe, _eta, mu, domain_per_row = sanitize_batch_inputs(
+        X, y, prior_weight, offset, valid, beta, family, context
+    )
+    valid = jnp.asarray(valid, dtype=bool)
+    real = valid & domain_per_row
+    pearson, correction, n_valid_rows = family.regular_fletcher_statistics_from_batch(
+        y_safe, mu, weight_safe, real
+    )
+    theta_finite = jnp.all(jnp.isfinite(parameters.log_theta))
+    return RegularFletcherStatistics(
+        pearson_sum=pearson,
+        correction_sum=correction,
+        n_valid_rows=n_valid_rows,
+        input_ok=jnp.all(~valid | domain_per_row) & theta_finite,
+    )
+
+
+@partial(jax.jit, static_argnames=("family", "context"))
+def merge_regular_fletcher_statistics(
+    left: RegularFletcherStatistics,
+    right: RegularFletcherStatistics,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+) -> RegularFletcherStatistics:
+    """Merge regular Fletcher summaries without retaining source rows."""
+    _validate_context(family, context)
+    _require_regular_fletcher_policy(context)
+    return RegularFletcherStatistics(
+        pearson_sum=left.pearson_sum + right.pearson_sum,
+        correction_sum=left.correction_sum + right.correction_sum,
+        n_valid_rows=left.n_valid_rows + right.n_valid_rows,
+        input_ok=left.input_ok & right.input_ok,
+    )
+
+
+@partial(jax.jit, static_argnames=("family", "context"))
+def finalize_regular_fletcher_scale(
+    statistics: RegularFletcherStatistics,
+    edf: jax.Array,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+) -> RegularFletcherScale:
+    """Apply pinned mgcv's Fletcher finite-correction fallback.
+
+    Unlike dense :func:`jaxgam.fitting.reml.fletcher_scale`, this reports the
+    R fallback when post-clamp ``s.bar`` is non-finite.  Raw ``-inf`` clamps
+    to ``-0.9`` and remains a valid correction.  It does not modify dense
+    code; callers that need a fail-closed streamed state must require
+    ``stream_admissible`` themselves.
+    """
+    _validate_context(family, context)
+    _require_regular_fletcher_policy(context)
+    denominator = statistics.n_valid_rows - edf
+    pearson_scale = statistics.pearson_sum / denominator
+    correction_mean = statistics.correction_sum / statistics.n_valid_rows
+    s_bar = jnp.maximum(-0.9, correction_mean)
+    correction_applied = jnp.isfinite(s_bar)
+    scale = jnp.where(
+        correction_applied,
+        pearson_scale / (1.0 + s_bar),
+        pearson_scale,
+    )
+    denominator_ok = jnp.isfinite(denominator) & (denominator > 0.0)
+    stream_admissible = (
+        statistics.input_ok
+        & correction_applied
+        & denominator_ok
+        & jnp.isfinite(statistics.pearson_sum)
+        & jnp.isfinite(scale)
+        & (scale > 0.0)
+    )
+    return RegularFletcherScale(
+        scale=scale,
+        pearson_scale=pearson_scale,
+        s_bar=s_bar,
+        correction_applied=correction_applied,
+        input_ok=statistics.input_ok,
+        stream_admissible=stream_admissible,
+    )
+
+
+@partial(jax.jit, static_argnames=("family", "context"))
+def batch_working_quantities(
+    X: jax.Array,
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    valid: jax.Array,
+    beta: jax.Array,
+    parameters: FamilyExecutionParameters,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+) -> BatchWorkingQuantities:
+    """Compute generic masked family quantities without family-name dispatch.
+
+    Raw observed information is returned without clipping.  The positive
+    Fisher weight is clipped only for the legacy coefficient-system consumer;
+    a future signed-observed solver must choose its own policy explicitly.
+    """
+    _validate_context(family, context)
+    _require_capabilities(
+        context,
+        "row_separable",
+        "fisher_working_system",
+        "observed_information",
+        "direct_deviance",
+        "differentiable_deviance",
+    )
+    y_safe, weight_safe, offset_safe, eta, mu, domain_per_row = sanitize_batch_inputs(
+        X, y, prior_weight, offset, valid, beta, family, context
+    )
+    theta_finite = jnp.all(jnp.isfinite(parameters.log_theta))
+    theta_safe = jnp.where(
+        jnp.isfinite(parameters.log_theta), parameters.log_theta, 0.0
+    )
+    fisher_raw, z = canonical_working_quantities(
+        family,
+        y_safe,
+        mu,
+        eta,
+        weight_safe,
+        offset_safe,
+        log_theta=theta_safe,
+    )
+
+    def _deviance_at_eta(eta_value: jax.Array) -> jax.Array:
+        mu_value = family.link.inverse(eta_value)
+        return jnp.sum(
+            family.deviance_derivative_contributions_for_parameters(
+                y_safe, mu_value, weight_safe, theta_safe
+            )
+        )
+
+    grad = jax.grad(_deviance_at_eta)
+    _, second = jax.jvp(grad, (eta,), (jnp.ones_like(eta),))
+    observed_raw = 0.5 * second
+    valid = jnp.asarray(valid, dtype=bool)
+    working_weight = jnp.where(valid, jnp.clip(fisher_raw, _W_MIN, _W_MAX), 0.0)
+    working_response = jnp.where(valid, z, 0.0)
+    direct = family.deviance_contributions_for_parameters(
+        y_safe, mu, weight_safe, theta_safe
+    )
+    domain_ok = (
+        jnp.all(jnp.logical_or(~valid, domain_per_row))
+        & theta_finite
+        & jnp.all(jnp.isfinite(fisher_raw))
+        & jnp.all(jnp.isfinite(observed_raw))
+        & jnp.all(jnp.isfinite(z))
+        & jnp.all(jnp.isfinite(direct))
+    )
+    return BatchWorkingQuantities(
+        eta=eta,
+        mu=mu,
+        working_weight=working_weight,
+        fisher_weight=fisher_raw,
+        observed_weight=observed_raw,
+        working_response=working_response,
+        deviance=jnp.sum(jnp.where(valid, direct, 0.0)),
+        domain_ok=domain_ok,
+    )
+
+
+def _initial_materialize(value: jax.Array) -> jax.Array:
+    """Keep an R vector operation rounded before the next operation.
+
+    nextafter(x, x) preserves every finite value exactly. Unlike an XLA
+    optimization barrier alone, its bit-level lowering prevents CPU fusion
+    from changing cancellation across these source-owned boundaries.
+    """
+    return _materialize_source_operation(value)
+
+
+@jax.jit
+def _initial_newton_quantities(
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    eta: jax.Array,
+    mu: jax.Array,
+    variance: jax.Array,
+    mu_eta: jax.Array,
+    dvar: jax.Array,
+    d2link: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Literal gam.fit3 first-system arithmetic from materialized inputs."""
+    residual = _initial_materialize(y - mu)
+    variance_term = _initial_materialize(dvar / variance)
+    link_term = _initial_materialize(d2link * mu_eta)
+    alpha_terms = _initial_materialize(variance_term + link_term)
+    correction = _initial_materialize(residual * alpha_terms)
+    alpha_raw = _initial_materialize(1.0 + correction)
+    alpha = jnp.where(alpha_raw == 0.0, jnp.finfo(jnp.float64).eps, alpha_raw)
+    weighted_alpha = _initial_materialize(prior_weight * alpha)
+    mu_eta_squared = _initial_materialize(mu_eta**2)
+    numerator = _initial_materialize(weighted_alpha * mu_eta_squared)
+    weight = _initial_materialize(numerator / variance)
+    denominator = _initial_materialize(mu_eta * alpha)
+    response_correction = _initial_materialize(residual / denominator)
+    linear_predictor = _initial_materialize(eta - offset)
+    response = _initial_materialize(linear_predictor + response_correction)
+    return alpha_raw, alpha, weight, response
+
+
+@partial(jax.jit, static_argnames=("family", "context", "source_signed_recovery"))
+def batch_initial_working_quantities(
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    valid: jax.Array,
+    eta_start: jax.Array,
+    parameters: FamilyExecutionParameters,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+    *,
+    source_signed_recovery: bool = False,
+) -> InitialBatchWorkingQuantities:
+    """Evaluate first W/z from an explicit dynamic per-row starting eta.
+
+    This deliberately does not accept ``X`` or ``beta``.  R's ``start=NULL``
+    first loop uses ``eta = linkfun(mustart)`` before a weighted least-squares
+    coefficient exists.  Padding is made finite before inverse-link or
+    direct-deviance arithmetic and masked only after raw W/z are formed.
+
+    Only a source-style signed controller may enable unresolved-roundoff
+    recovery. The raw diagnostic and literal alpha arithmetic remain intact;
+    that controller must own factor admissibility, Fisher retry, trial-domain
+    backtracking, and final observed-score/Fisher-reporting checks.
+    """
+    _validate_context(family, context)
+    _require_capabilities(
+        context,
+        "row_separable",
+        "fisher_working_system",
+        "observed_information",
+        "differentiable_deviance",
+    )
+    if context.capabilities.dynamic_theta:
+        raise NotImplementedError(
+            "Initial working systems with dynamic theta are deferred to PR7.5; "
+            "the current regular-family primitive must not mix static family "
+            "variance with explicit trial theta."
+        )
+    valid = jnp.asarray(valid, dtype=bool)
+    normalized_y = family.execution_initial_response(y, prior_weight)
+    finite_vectors = (
+        jnp.isfinite(normalized_y)
+        & jnp.isfinite(prior_weight)
+        & jnp.isfinite(offset)
+        & jnp.isfinite(eta_start)
+    )
+    response_ok = _response_valid(family, normalized_y)
+    real_input = valid & finite_vectors & (prior_weight >= 0.0) & response_ok
+    padding = context.padding
+    y_safe = jnp.where(real_input, normalized_y, padding.response)
+    weight_safe = jnp.where(real_input, prior_weight, 0.0)
+    offset_safe = jnp.where(real_input, offset, 0.0)
+    eta_safe = jnp.where(real_input, eta_start, padding.eta)
+    mu_candidate = family.link.inverse(eta_safe)
+    eta_domain = family.valid_eta(eta_safe)
+    mu_domain = family.valid_mu(mu_candidate)
+    domain_rows = real_input & eta_domain & mu_domain & jnp.isfinite(mu_candidate)
+
+    variance_candidate = family.execution_initial_variance(mu_candidate)
+    mu_eta_candidate = family.link.mu_eta(eta_safe)
+    positive_domain = domain_rows & (weight_safe > 0.0)
+    variance_ok = jnp.isfinite(variance_candidate) & (variance_candidate != 0.0)
+    mu_eta_finite = jnp.isfinite(mu_eta_candidate)
+    # gam.fit3 excludes a finite zero mu.eta from ``good`` but treats
+    # non-finite working inputs (and a zero/non-finite variance) as errors.
+    # Keep that distinction separate from the operational row mask.
+    working_inputs_ok = jnp.all(~positive_domain | (variance_ok & mu_eta_finite))
+    informative = (
+        positive_domain & variance_ok & mu_eta_finite & (mu_eta_candidate != 0.0)
+    )
+    # mgcv forms W/z only for ``good = weights > 0 & mu.eta != 0``. Evaluate
+    # all other rows at finite family padding so undefined unused arithmetic
+    # cannot poison an otherwise informative batch.
+    y_work = jnp.where(informative, y_safe, padding.response)
+    weight_work = jnp.where(informative, weight_safe, 0.0)
+    offset_work = jnp.where(informative, offset_safe, 0.0)
+    eta_work = jnp.where(informative, eta_safe, padding.eta)
+    # Materialize the named gam.fit3 vectors before forming alpha.
+    mu = _initial_materialize(family.link.inverse(eta_work))
+    variance = _initial_materialize(family.execution_initial_variance(mu))
+    mu_eta = _initial_materialize(family.link.mu_eta(eta_work))
+    fisher_weight = weight_work * mu_eta**2 / variance
+    fisher_response = (eta_work - offset_work) + (y_work - mu) / mu_eta
+
+    def _deviance_at_eta(eta_value: jax.Array) -> jax.Array:
+        mu_value = family.link.inverse(eta_value)
+        return jnp.sum(
+            family.deviance_derivative_contributions_for_parameters(
+                y_work,
+                mu_value,
+                weight_work,
+                parameters.log_theta,
+            )
+        )
+
+    gradient = jax.grad(_deviance_at_eta)
+    _, second = jax.jvp(gradient, (eta_work,), (jnp.ones_like(eta_work),))
+    observed_weight = 0.5 * second
+    dvar = _initial_materialize(family.execution_initial_dvar(mu))
+    d2link = _initial_materialize(family.link.second_derivative(mu))
+    alpha_raw, alpha, newton_weight, newton_response = _initial_newton_quantities(
+        y_work, weight_work, offset_work, eta_work, mu, variance, mu_eta, dvar, d2link
+    )
+
+    theta_finite = jnp.all(jnp.isfinite(parameters.log_theta))
+    input_ok = jnp.all(~valid | real_input)
+    domain_ok = input_ok & jnp.all(~valid | domain_rows) & theta_finite
+    if context.capabilities.initial_alpha_resolution == "unresolved_near_zero":
+        alpha_resolution_unresolved = (
+            informative
+            & family.initial_alpha_resolution_unresolved(y_work, mu, alpha_raw)
+        )
+    else:
+        alpha_resolution_unresolved = jnp.zeros_like(informative)
+    fisher_system_ok = jnp.all(~informative | jnp.isfinite(fisher_weight)) & jnp.all(
+        ~informative | jnp.isfinite(fisher_response)
+    )
+    newton_system_ok = (
+        jnp.all(~informative | jnp.isfinite(alpha_raw))
+        & jnp.all(~informative | jnp.isfinite(alpha))
+        & jnp.all(~informative | jnp.isfinite(newton_weight))
+        & jnp.all(~informative | jnp.isfinite(newton_response))
+    )
+    observed_information_ok = jnp.all(~informative | jnp.isfinite(observed_weight))
+    if context.capabilities.coefficient_system == "fisher":
+        selected_system_ok = fisher_system_ok
+        selected_alpha_resolution_unresolved = jnp.zeros((), dtype=bool)
+    else:
+        selected_system_ok = newton_system_ok
+        selected_alpha_resolution_unresolved = jnp.any(alpha_resolution_unresolved)
+    working_system_admissible = (
+        domain_ok
+        & working_inputs_ok
+        & selected_system_ok
+        & (source_signed_recovery | ~selected_alpha_resolution_unresolved)
+    )
+    return InitialBatchWorkingQuantities(
+        eta=eta_safe,
+        mu=mu_candidate,
+        fisher_weight=jnp.where(informative, fisher_weight, 0.0),
+        fisher_response=jnp.where(informative, fisher_response, 0.0),
+        observed_weight=jnp.where(informative, observed_weight, 0.0),
+        newton_alpha_raw=jnp.where(informative, alpha_raw, 0.0),
+        newton_alpha=jnp.where(informative, alpha, 0.0),
+        newton_weight=jnp.where(informative, newton_weight, 0.0),
+        newton_response=jnp.where(informative, newton_response, 0.0),
+        input_ok=input_ok,
+        domain_ok=domain_ok,
+        alpha_resolution_unresolved=alpha_resolution_unresolved,
+        working_inputs_ok=working_inputs_ok,
+        informative_mask=informative,
+        informative_count=jnp.sum(informative, dtype=jnp.int64),
+        fisher_system_ok=fisher_system_ok,
+        newton_system_ok=newton_system_ok,
+        observed_information_ok=observed_information_ok,
+        working_system_admissible=working_system_admissible,
+    )
+
+
+InitialWorkingStatus = tuple[jax.Array, jax.Array]
+
+
+@jax.jit
+def initial_working_status(
+    batch: InitialBatchWorkingQuantities,
+) -> InitialWorkingStatus:
+    """Project one batch to selected-system validity and informative count."""
+    return batch.working_system_admissible, batch.informative_count
+
+
+@jax.jit
+def merge_initial_working_status(
+    left: InitialWorkingStatus, right: InitialWorkingStatus
+) -> InitialWorkingStatus:
+    """Compose bounded batch status without treating empty batches as failures."""
+    return left[0] & right[0], left[1] + right[1]
+
+
+@jax.jit
+def finalize_initial_working_status(status: InitialWorkingStatus) -> jax.Array:
+    """Require global selected-system validity and at least one informative row."""
+    return status[0] & (status[1] > 0)
+
+
+@partial(jax.jit, static_argnames=("family", "context", "max_y"))
+def batch_saturated_loglikelihood(
+    y: jax.Array,
+    prior_weight: jax.Array,
+    valid: jax.Array,
+    scale: jax.Array,
+    parameters: FamilyExecutionParameters,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+    *,
+    max_y: int = 0,
+) -> tuple[jax.Array, jax.Array]:
+    """Return a masked direct saturated likelihood and an input/domain flag."""
+    _validate_context(family, context)
+    _require_capabilities(context, "row_separable", "saturated_loglikelihood")
+    valid = jnp.asarray(valid, dtype=bool)
+    response_ok = _response_valid(family, y)
+    finite = jnp.isfinite(y) & jnp.isfinite(prior_weight)
+    real_ok = valid & response_ok & finite & (prior_weight >= 0.0)
+    y_safe = jnp.where(real_ok, y, context.padding.response)
+    weight_safe = jnp.where(real_ok, prior_weight, 0.0)
+    theta_finite = jnp.all(jnp.isfinite(parameters.log_theta))
+    theta_safe = jnp.where(
+        jnp.isfinite(parameters.log_theta), parameters.log_theta, 0.0
+    )
+    value = family.saturated_loglikelihood_for_parameters(
+        y_safe, weight_safe, scale, theta_safe, max_y=max_y
+    )
+    return (
+        value,
+        jnp.all(~valid | real_ok)
+        & theta_finite
+        & jnp.isfinite(scale)
+        & (scale > 0.0)
+        & jnp.isfinite(value),
+    )
+
+
+@partial(jax.jit, static_argnames=("family", "context"))
+def batch_execution_summary(
+    y: jax.Array,
+    prior_weight: jax.Array,
+    valid: jax.Array,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+) -> tuple[jax.Array, ...]:
+    """Build family-owned bounded metadata leaves for one source batch."""
+    _validate_context(family, context)
+    _require_capabilities(context, "row_separable")
+    return family.execution_summary_from_batch(y, prior_weight, valid)
+
+
+@partial(jax.jit, static_argnames=("family", "context"))
+def merge_execution_summaries(
+    left: tuple[jax.Array, ...],
+    right: tuple[jax.Array, ...],
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+) -> tuple[jax.Array, ...]:
+    """Merge same-family bounded summary pytrees without row retention."""
+    _validate_context(family, context)
+    _require_capabilities(context, "row_separable")
+    return family.merge_execution_summaries(left, right)
+
+
+def finalize_execution_summary(
+    summary: object, family: ExponentialFamily
+) -> dict[str, float]:
+    """Finalize a global host reduction exactly once and reject bad real rows."""
+    host_summary = jax.tree.map(np.asarray, summary)
+    result = family.finalize_execution_summary(host_summary)
+    if not family.execution_summary_input_ok(host_summary):
+        raise ValueError("Family execution summary contains non-finite real rows.")
+    return result

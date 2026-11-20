@@ -1,0 +1,831 @@
+"""Conformance tests for family-owned bounded execution primitives."""
+
+from __future__ import annotations
+
+import ast
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pandas as pd
+import pytest
+
+from jaxgam.families.base import REAL, ExponentialFamily
+from jaxgam.families.execution_inventory import FAMILY_EXECUTION_INVENTORY
+from jaxgam.families.negative_binomial import NegativeBinomial
+from jaxgam.families.registry import family_registry
+from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
+from jaxgam.fitting.family_execution import (
+    FamilyExecutionContext,
+    FamilyExecutionLineage,
+    FamilyExecutionParameters,
+    RegularFletcherStatistics,
+    batch_execution_summary,
+    batch_regular_fletcher_statistics,
+    batch_saturated_loglikelihood,
+    batch_working_quantities,
+    finalize_execution_summary,
+    finalize_regular_fletcher_scale,
+    merge_execution_summaries,
+    merge_regular_fletcher_statistics,
+)
+from jaxgam.fitting.pirls import canonical_working_quantities
+from jaxgam.fitting.reml import fletcher_scale, pearson_rss
+from jaxgam.links.links import (
+    IdentityLink,
+    InverseLink,
+    Link,
+    LogitLink,
+    LogLink,
+    SqrtLink,
+)
+from jaxgam.links.registry import link_registry
+from tests.helpers import r_available
+from tests.r_bridge import RBridge
+from tests.tolerances import MODERATE, STRICT
+
+
+class _ScaledIdentityLink(Link):
+    """Stateful link used to prove config is not keyed only by identity."""
+
+    def __init__(self, scale: float) -> None:
+        self.scale = scale
+
+    def link(self, mu):
+        return mu / self.scale
+
+    def inverse(self, eta):
+        return eta * self.scale
+
+    def derivative(self, mu):
+        xp = jnp if isinstance(mu, jax.Array) else np
+        return xp.ones_like(mu) / self.scale
+
+
+class _UnregisteredQuadraticFamily(ExponentialFamily):
+    """A family never added to the registry or a driver allowlist."""
+
+    family_name = "unregistered_quadratic"
+    response_support = REAL
+    scale_known = True
+    canonical_link_cls = _ScaledIdentityLink
+
+    def __init__(self, scale: float = 1.0) -> None:
+        super().__init__(_ScaledIdentityLink(scale))
+
+    @property
+    def default_link(self) -> Link:
+        return IdentityLink()
+
+    def variance(self, mu):
+        xp = jnp if isinstance(mu, jax.Array) else np
+        return xp.ones_like(mu)
+
+    def dvar(self, mu):
+        xp = jnp if isinstance(mu, jax.Array) else np
+        return xp.zeros_like(mu)
+
+    def saturated_loglik(self, y, wt, scale, *, max_y: int = 0):  # noqa: ARG002
+        return jnp.sum(jnp.where(wt > 0, -0.5 * jnp.log(scale / wt), 0.0))
+
+    def deviance_resids(self, y, mu, wt):
+        xp = jnp if isinstance(y, jax.Array) else np
+        return xp.sign(y - mu) * xp.sqrt(wt * (y - mu) ** 2)
+
+    def deviance_contributions(self, y, mu, wt):
+        return wt * (y - mu) ** 2
+
+    def deviance_derivative_contributions(self, y, mu, wt):
+        return wt * (y - mu) ** 2
+
+    def aic(self, y, mu, wt, scale):  # noqa: ARG002
+        return float(np.sum(wt * (y - mu) ** 2))
+
+    def _initialize_impl(self, y, wt):  # noqa: ARG002
+        return y.copy()
+
+    def valid_mu(self, mu):
+        xp = jnp if isinstance(mu, jax.Array) else np
+        return xp.isfinite(mu)
+
+    def valid_eta(self, eta):
+        xp = jnp if isinstance(eta, jax.Array) else np
+        return xp.isfinite(eta)
+
+
+class _VectorSummaryFamily(_UnregisteredQuadraticFamily):
+    """Proves summary pytrees are family-owned rather than fixed scalars."""
+
+    def execution_summary_from_batch(self, y, wt, valid):
+        base = super().execution_summary_from_batch(y, wt, valid)
+        safe_y = jnp.where(valid, y, 0.0)
+        return (*base, jnp.array([jnp.sum(safe_y), jnp.max(safe_y)]))
+
+    def merge_execution_summaries(self, left, right):
+        return (
+            left[0] + right[0],
+            left[1] + right[1],
+            left[2] + right[2],
+            jnp.logical_and(left[3], right[3]),
+            jnp.array([left[4][0] + right[4][0], jnp.maximum(left[4][1], right[4][1])]),
+        )
+
+    def finalize_execution_summary(self, summary):
+        base = super().finalize_execution_summary(summary[:4])
+        base["response_sum"] = float(summary[4][0])
+        base["response_max"] = float(summary[4][1])
+        return base
+
+
+class _NoObservedInformationFamily(_UnregisteredQuadraticFamily):
+    def execution_capabilities(self):
+        return replace(super().execution_capabilities(), observed_information=False)
+
+
+@pytest.mark.parametrize(
+    ("family", "y", "mu"),
+    [
+        (Gaussian(), [0.0, 2.0], [0.5, 1.0]),
+        (Binomial(), [0.0, 1.0], [0.25, 0.75]),
+        (Poisson(), [0.0, 2.0], [0.8, 1.5]),
+        (Gamma(), [1.0, 2.0], [0.8, 1.5]),
+        (NegativeBinomial(theta=2.0, fixed=True), [0.0, 2.0], [0.8, 1.5]),
+    ],
+)
+def test_direct_deviance_matches_legacy_residual_square(family, y, mu) -> None:
+    y_array = jnp.asarray(y)
+    mu_array = jnp.asarray(mu)
+    weight = jnp.asarray([1.0, 2.0])
+    direct = family.deviance_contributions(y_array, mu_array, weight)
+    legacy = family.deviance_resids(y_array, mu_array, weight) ** 2
+    np.testing.assert_allclose(direct, legacy, rtol=STRICT.rtol, atol=STRICT.atol)
+
+
+def test_generic_working_primitive_reuses_dense_fisher_arithmetic() -> None:
+    family = Poisson()
+    context = FamilyExecutionContext.from_family(family)
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    X = jnp.array([[1.0], [1.0]])
+    y = jnp.array([1.0, 3.0])
+    weight = jnp.array([1.0, 0.0])
+    offset = jnp.array([0.2, -0.1])
+    beta = jnp.array([0.4])
+    result = batch_working_quantities(
+        X, y, weight, offset, jnp.array([True, True]), beta, parameters, family, context
+    )
+    eta = X @ beta + offset
+    mu = family.link.inverse(eta)
+    dense_weight, dense_z = canonical_working_quantities(
+        family, y, mu, eta, weight, offset
+    )
+    np.testing.assert_allclose(
+        result.fisher_weight, dense_weight, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    np.testing.assert_allclose(
+        result.working_response, dense_z, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+
+
+@pytest.mark.parametrize("link", [InverseLink(), LogLink(), IdentityLink()])
+def test_gamma_regular_fletcher_statistics_are_batch_and_padding_invariant(
+    link: Link,
+) -> None:
+    """All advertised Gamma links retain R's unweighted correction rows."""
+    family = Gamma(link=link)
+    context = FamilyExecutionContext.from_family(family)
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    X = jnp.array([[0.8], [1.0], [1.2], [1.4]])
+    y = jnp.array([0.75, 1.1, 0.9, 1.6])
+    weight = jnp.array([1.0, 0.0, 2.0, 0.5])
+    offset = jnp.zeros(4)
+    valid = jnp.ones(4, dtype=bool)
+    beta = jnp.array([1.0])
+
+    whole = batch_regular_fletcher_statistics(
+        X, y, weight, offset, valid, beta, parameters, family, context
+    )
+    tail = batch_regular_fletcher_statistics(
+        jnp.vstack((X[2:], jnp.array([[jnp.nan]]))),
+        jnp.concatenate((y[2:], jnp.array([jnp.nan]))),
+        jnp.concatenate((weight[2:], jnp.array([jnp.nan]))),
+        jnp.concatenate((offset[2:], jnp.array([jnp.nan]))),
+        jnp.array([True, True, False]),
+        beta,
+        parameters,
+        family,
+        context,
+    )
+    merged = merge_regular_fletcher_statistics(
+        batch_regular_fletcher_statistics(
+            X[:2],
+            y[:2],
+            weight[:2],
+            offset[:2],
+            valid[:2],
+            beta,
+            parameters,
+            family,
+            context,
+        ),
+        tail,
+        family,
+        context,
+    )
+    for field in ("pearson_sum", "correction_sum", "n_valid_rows", "input_ok"):
+        np.testing.assert_allclose(
+            np.asarray(getattr(merged, field)),
+            np.asarray(getattr(whole, field)),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    mu = family.link.inverse(X[:, 0])
+    expected_correction = jnp.sum(family.dvar(mu) * (y - mu) / family.variance(mu))
+    np.testing.assert_allclose(
+        whole.pearson_sum,
+        pearson_rss(y, mu, weight, family),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        whole.correction_sum,
+        expected_correction,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert int(whole.n_valid_rows) == 4
+    assert bool(whole.input_ok)
+
+    reduced = finalize_regular_fletcher_scale(whole, jnp.array(1.25), family, context)
+    dense = fletcher_scale(y, mu, weight, family, jnp.array(1.25))
+    np.testing.assert_allclose(reduced.scale, dense, rtol=STRICT.rtol, atol=STRICT.atol)
+    assert bool(reduced.correction_applied)
+    assert bool(reduced.stream_admissible)
+
+
+@pytest.mark.parametrize(
+    (
+        "correction_sum",
+        "edf",
+        "input_ok",
+        "expected_scale",
+        "applied",
+        "admissible",
+    ),
+    [
+        (jnp.nan, 1.0, True, 2.5, False, False),
+        (jnp.inf, 1.0, True, 2.5, False, False),
+        (-jnp.inf, 1.0, True, 25.0, True, True),
+        (0.0, 3.0, True, jnp.inf, True, False),
+        (0.0, 1.0, False, 2.5, True, False),
+    ],
+)
+def test_regular_fletcher_edge_status_keeps_r_scalar_separate_from_stream_gate(
+    correction_sum: float,
+    edf: float,
+    input_ok: bool,
+    expected_scale: float,
+    applied: bool,
+    admissible: bool,
+) -> None:
+    family = Gamma()
+    context = FamilyExecutionContext.from_family(family)
+    summary = RegularFletcherStatistics(
+        pearson_sum=jnp.array(5.0),
+        correction_sum=jnp.array(correction_sum),
+        n_valid_rows=jnp.array(3),
+        input_ok=jnp.array(input_ok),
+    )
+    result = finalize_regular_fletcher_scale(summary, jnp.array(edf), family, context)
+    np.testing.assert_allclose(
+        result.scale,
+        expected_scale,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert bool(result.correction_applied) is applied
+    assert bool(result.input_ok) is input_ok
+    assert bool(result.stream_admissible) is admissible
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv unavailable")
+def test_regular_fletcher_scale_matches_pinned_r_and_dense_in_finite_domain() -> None:
+    """R model$scale is Fletcher, unlike the optimized REML scale."""
+    rng = np.random.default_rng(9073)
+    x = np.linspace(-1.0, 1.0, 51)
+    y = np.exp(0.2 + 0.45 * x + rng.normal(scale=0.18, size=len(x)))
+    r_fit = RBridge().fit_gam("y ~ x", pd.DataFrame({"x": x, "y": y}), "gamma")
+    family = Gamma(link=IdentityLink())
+    context = FamilyExecutionContext.from_family(family)
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    mu = jnp.asarray(r_fit["fitted_values"])
+    summary = batch_regular_fletcher_statistics(
+        mu[:, None],
+        jnp.asarray(y),
+        jnp.ones(len(y)),
+        jnp.zeros(len(y)),
+        jnp.ones(len(y), dtype=bool),
+        jnp.ones(1),
+        parameters,
+        family,
+        context,
+    )
+    reduced = finalize_regular_fletcher_scale(
+        summary, jnp.asarray(r_fit["edf_total"]), family, context
+    )
+    dense = fletcher_scale(
+        jnp.asarray(y), mu, jnp.ones(len(y)), family, jnp.asarray(r_fit["edf_total"])
+    )
+    np.testing.assert_allclose(reduced.scale, dense, rtol=STRICT.rtol, atol=STRICT.atol)
+    np.testing.assert_allclose(
+        reduced.scale, r_fit["scale"], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+
+
+def test_regular_fletcher_primitive_rejects_family_without_explicit_policy() -> None:
+    family = Gaussian()
+    context = FamilyExecutionContext.from_family(family)
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    with pytest.raises(NotImplementedError, match="regular Fletcher"):
+        batch_regular_fletcher_statistics(
+            jnp.ones((1, 1)),
+            jnp.ones(1),
+            jnp.ones(1),
+            jnp.zeros(1),
+            jnp.ones(1, dtype=bool),
+            jnp.ones(1),
+            parameters,
+            family,
+            context,
+        )
+
+
+def test_dense_default_working_helper_is_bitwise_unchanged() -> None:
+    """The optional explicit-theta hook must not perturb existing dense calls."""
+    family = Poisson()
+    y = jnp.array([1.0, 3.0])
+    mu = jnp.array([1.2, 0.9])
+    eta = jnp.log(mu) + jnp.array([0.2, -0.1])
+    weight = jnp.array([1.0, 0.0])
+    offset = jnp.array([0.2, -0.1])
+    actual = jax.jit(
+        lambda y, mu, eta, weight, offset: canonical_working_quantities(
+            family, y, mu, eta, weight, offset
+        )
+    )(y, mu, eta, weight, offset)
+    expected = jax.jit(
+        lambda y, mu, eta, weight, offset: (
+            family.working_weights(mu, weight),
+            family.working_response(y, mu, eta - offset),
+        )
+    )(y, mu, eta, weight, offset)
+    np.testing.assert_array_equal(actual[0], expected[0])
+    np.testing.assert_array_equal(actual[1], expected[1])
+
+
+def test_padding_uses_safe_eta_before_inverse_link_evaluation() -> None:
+    family = Gamma()
+    context = FamilyExecutionContext.from_family(family)
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    result = batch_working_quantities(
+        jnp.array([[1.0], [jnp.nan]]),
+        jnp.array([1.0, jnp.nan]),
+        jnp.array([1.0, jnp.nan]),
+        jnp.array([0.0, jnp.nan]),
+        jnp.array([True, False]),
+        jnp.array([1.0]),
+        parameters,
+        family,
+        context,
+    )
+    assert bool(result.domain_ok)
+    assert bool(jnp.all(jnp.isfinite(result.mu)))
+    assert float(result.working_weight[1]) == 0.0
+
+
+def test_negative_real_weight_and_missing_capability_fail_closed() -> None:
+    family = Poisson()
+    context = FamilyExecutionContext.from_family(family)
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    invalid = batch_working_quantities(
+        jnp.ones((1, 1)),
+        jnp.ones(1),
+        jnp.array([-1.0]),
+        jnp.zeros(1),
+        jnp.array([True]),
+        jnp.zeros(1),
+        parameters,
+        family,
+        context,
+    )
+    assert not bool(invalid.domain_ok)
+
+    unsupported = _NoObservedInformationFamily()
+    unsupported_context = FamilyExecutionContext.from_family(unsupported)
+    unsupported_parameters = FamilyExecutionParameters.from_snapshot(
+        unsupported.execution_parameter_snapshot()
+    )
+    with pytest.raises(NotImplementedError, match="observed_information"):
+        batch_working_quantities(
+            jnp.ones((1, 1)),
+            jnp.ones(1),
+            jnp.ones(1),
+            jnp.zeros(1),
+            jnp.array([True]),
+            jnp.zeros(1),
+            unsupported_parameters,
+            unsupported,
+            unsupported_context,
+        )
+
+
+@pytest.mark.parametrize(
+    ("family", "y", "beta", "expected"),
+    [
+        (Poisson(), 1.0, 0.0, 1.0),
+        (Binomial(), 0.5, 0.0, 0.25),
+        (Gamma(link=LogLink()), 1.0, 0.0, 1.0),
+        (NegativeBinomial(theta=2.0, fixed=True), 1.0, 0.0, 2.0 / 3.0),
+    ],
+)
+def test_exact_fit_observed_information_uses_smooth_deviance(
+    family, y: float, beta: float, expected: float
+) -> None:
+    """No reporting clamp may halve curvature at an exact fit."""
+    context = FamilyExecutionContext.from_family(family)
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    result = batch_working_quantities(
+        jnp.ones((1, 1)),
+        jnp.array([y]),
+        jnp.ones(1),
+        jnp.zeros(1),
+        jnp.array([True]),
+        jnp.array([beta]),
+        parameters,
+        family,
+        context,
+    )
+    np.testing.assert_allclose(
+        result.observed_weight, [expected], rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    np.testing.assert_allclose(
+        result.fisher_weight, [expected], rtol=STRICT.rtol, atol=STRICT.atol
+    )
+
+
+def test_noncanonical_gamma_observed_hessian_matches_nearby_finite_difference() -> None:
+    family = Gamma(link=LogLink())
+    y = jnp.array([1.0])
+    wt = jnp.ones(1)
+
+    def deviance(eta):
+        mu = family.link.inverse(eta)
+        return jnp.sum(family.deviance_derivative_contributions(y, mu, wt))
+
+    eta = jnp.array([0.03])
+    observed = 0.5 * jax.hessian(deviance)(eta)[0, 0]
+    step = 1e-4
+    finite_difference = (
+        0.5
+        * (deviance(eta + step) - 2.0 * deviance(eta) + deviance(eta - step))
+        / step**2
+    )
+    np.testing.assert_allclose(observed, finite_difference, rtol=2e-7, atol=2e-7)
+
+
+def test_unregistered_family_executes_and_mutation_invalidates_lineage() -> None:
+    family = _UnregisteredQuadraticFamily(scale=1.0)
+
+    def prepared_for(current_family):
+        return SimpleNamespace(
+            source_fingerprint="source",
+            basis_fingerprint="basis",
+            fitting=SimpleNamespace(
+                family_name=current_family.family_name,
+                link_name=type(current_family.link).__qualname__,
+                family_execution_static_config=current_family.execution_static_config(),
+                family_parameter_snapshot=current_family.execution_parameter_snapshot(),
+            ),
+        )
+
+    prepared = prepared_for(family)
+    lineage = FamilyExecutionLineage.from_prepared(prepared, family)
+    context = lineage.context
+    parameters = FamilyExecutionParameters.from_snapshot(lineage.parameters)
+    args = (
+        jnp.array([[1.0]]),
+        jnp.array([3.0]),
+        jnp.array([1.0]),
+        jnp.array([0.0]),
+        jnp.array([True]),
+        jnp.array([1.0]),
+        parameters,
+        family,
+    )
+    before = batch_working_quantities(*args, context).deviance
+    family.link.scale = 2.0
+    with pytest.raises(RuntimeError, match="static configuration changed"):
+        lineage.validate(prepared, family)
+    refreshed = FamilyExecutionLineage.from_prepared(prepared_for(family), family)
+    after = batch_working_quantities(*args, refreshed.context).deviance
+    assert float(before) != float(after)
+
+
+def test_summary_rejects_nonfinite_real_row_and_merges_nb_metadata() -> None:
+    family = NegativeBinomial(theta=2.0, fixed=True)
+    context = FamilyExecutionContext.from_family(family)
+    bad = batch_execution_summary(
+        jnp.array([1.0, jnp.nan]),
+        jnp.ones(2),
+        jnp.array([True, True]),
+        family,
+        context,
+    )
+    with pytest.raises(ValueError, match="non-finite real rows"):
+        finalize_execution_summary(bad, family)
+
+    left = batch_execution_summary(
+        jnp.array([0.0, 3.0]), jnp.ones(2), jnp.array([True, True]), family, context
+    )
+    right = batch_execution_summary(
+        jnp.array([2.0]), jnp.ones(1), jnp.array([True]), family, context
+    )
+    summary = merge_execution_summaries(left, right, family, context)
+    final = finalize_execution_summary(summary, family)
+    assert final["max_count"] == 3.0
+    assert final["integer_counts"]
+    assert final["n_valid_rows"] == 3.0
+
+
+def test_family_owned_vector_summary_pytree_survives_merge_and_finalize() -> None:
+    family = _VectorSummaryFamily()
+    context = FamilyExecutionContext.from_family(family)
+    left = batch_execution_summary(
+        jnp.array([1.0, 2.0]), jnp.ones(2), jnp.array([True, True]), family, context
+    )
+    right = batch_execution_summary(
+        jnp.array([3.0]), jnp.ones(1), jnp.array([True]), family, context
+    )
+    final = finalize_execution_summary(
+        merge_execution_summaries(left, right, family, context), family
+    )
+    assert final["response_sum"] == 6.0
+    assert final["response_max"] == 3.0
+
+
+def test_saturated_likelihood_and_inventory_are_jittable_complete() -> None:
+    family = Poisson()
+    context = FamilyExecutionContext.from_family(family)
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    value, valid = batch_saturated_loglikelihood(
+        jnp.array([0.0, 2.0]),
+        jnp.ones(2),
+        jnp.array([True, True]),
+        jnp.array(1.0),
+        parameters,
+        family,
+        context,
+    )
+    assert bool(valid)
+    assert bool(jnp.isfinite(value))
+    assert len(FAMILY_EXECUTION_INVENTORY) == 48
+    assert all(entry.dense_status for entry in FAMILY_EXECUTION_INVENTORY)
+    regular = [entry for entry in FAMILY_EXECUTION_INVENTORY if entry.family != "nb"]
+    assert len(regular) == 32
+    assert all(entry.r_constructor_status == "accepted" for entry in regular)
+    inverse_squared = next(
+        entry
+        for entry in regular
+        if entry.family == "gaussian" and entry.link == "inverse_squared"
+    )
+    assert inverse_squared.r_constructor_link == "1/mu^2"
+    assert not inverse_squared.r_advertised
+    assert inverse_squared.efs_status == "internal_pinned_parity"
+    assert all(entry.efs_status == "internal_pinned_parity" for entry in regular)
+    assert all(
+        any(evidence.startswith("tests/") for evidence in entry.evidence)
+        for entry in regular
+    )
+
+    nb = [entry for entry in FAMILY_EXECUTION_INVENTORY if entry.family == "nb"]
+    assert len(nb) == 16
+    assert sum(entry.r_constructor_status == "accepted" for entry in nb) == 6
+    assert sum(entry.efs_status == "r_rejected" for entry in nb) == 10
+    assert (
+        sum(entry.efs_status.startswith("internal_pinned_parity") for entry in nb) == 6
+    )
+    assert all(
+        entry.r_advertised for entry in nb if entry.r_constructor_status == "accepted"
+    )
+    nb_log = next(
+        entry
+        for entry in FAMILY_EXECUTION_INVENTORY
+        if entry.family == "nb"
+        and entry.link == "log"
+        and entry.parameter_mode == "estimated_theta"
+    )
+    assert nb_log.default_link
+    assert not nb_log.mathematical_canonical
+    assert not nb_log.legacy_route_is_canonical
+    assert nb_log.efs_status == "internal_pinned_parity_with_named_boundary"
+    assert "near_poisson_selected_theta_loose_exception" in (
+        nb_log.numerical_boundaries
+    )
+    for entry in nb:
+        if entry.r_constructor_status == "accepted":
+            assert any(evidence.startswith("tests/") for evidence in entry.evidence)
+        else:
+            assert any(
+                evidence.endswith(
+                    "test_known_scale_efs_rejects_links_rejected_by_pinned_nb"
+                )
+                for evidence in entry.evidence
+            )
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_execution_inventory_matches_pinned_r_constructors_and_evidence() -> None:
+    """Tie registered cells to pinned R construction and checked-in tests."""
+    links = link_registry.available
+    families = family_registry.available
+    expected_cells: set[tuple[str, str, str]] = set()
+    for family in families:
+        modes = ("fixed_theta", "estimated_theta") if family == "nb" else ("none",)
+        expected_cells.update((family, link, mode) for link in links for mode in modes)
+    entries = {
+        (entry.family, entry.link, entry.parameter_mode): entry
+        for entry in FAMILY_EXECUTION_INVENTORY
+    }
+    assert set(entries) == expected_cells
+
+    for entry in FAMILY_EXECUTION_INVENTORY:
+        family_cls = family_registry.get_class(entry.family)
+        if entry.family == "nb":
+            instance = family_cls(
+                theta=1.2,
+                fixed=entry.parameter_mode == "fixed_theta",
+                link=entry.link,
+            )
+        else:
+            instance = family_cls(link=entry.link)
+        assert instance.family_name.lower() == entry.family
+
+    r_accepts = RBridge(mode="rpy2").family_constructor_acceptance(
+        (
+            "identity",
+            "log",
+            "logit",
+            "inverse",
+            "probit",
+            "cloglog",
+            "sqrt",
+            "1/mu^2",
+        )
+    )
+    assert len(r_accepts) == 40
+    for entry in FAMILY_EXECUTION_INVENTORY:
+        assert r_accepts[(entry.family, entry.r_constructor_link)] == (
+            entry.r_constructor_status == "accepted"
+        )
+
+    repository = Path(__file__).resolve().parents[2]
+    for entry in FAMILY_EXECUTION_INVENTORY:
+        for evidence in entry.evidence:
+            if not evidence.startswith("tests/"):
+                continue
+            test_path, qualified_name = evidence.split("::", maxsplit=1)
+            parts = qualified_name.split("::")
+            tree = ast.parse((repository / test_path).read_text())
+            if len(parts) == 1:
+                found = any(
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == parts[0]
+                    for node in tree.body
+                )
+            elif len(parts) == 2:
+                found = any(
+                    isinstance(node, ast.ClassDef)
+                    and node.name == parts[0]
+                    and any(
+                        isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and method.name == parts[1]
+                        for method in node.body
+                    )
+                    for node in tree.body
+                )
+            else:
+                found = False
+            assert found, evidence
+
+
+_PERFORMANCE_ITERATION = [
+    (Poisson(), True),
+    (Poisson(link="identity"), True),
+    (Poisson(link="sqrt"), True),
+    (Binomial(), True),
+    (Binomial(link="probit"), True),
+    (Binomial(link="cloglog"), True),
+    (Binomial(link="log"), True),
+    (Gamma(), True),
+    (Gamma(link="log"), True),
+    (Gamma(link="identity"), True),
+    # Additive Gaussian has its own frozen working model; other links and
+    # estimated-theta NB are not ported to the discrete performance iteration.
+    (Gaussian(), False),
+    (Gaussian(link="log"), False),
+    (NegativeBinomial(), False),
+    (NegativeBinomial(theta=2.0, fixed=True), False),
+]
+
+
+@pytest.mark.parametrize(("family", "expected"), _PERFORMANCE_ITERATION, ids=repr)
+def test_regular_performance_iteration_capability_names_pinned_links(
+    family, expected
+) -> None:
+    """Pinned poisson()/binomial()/Gamma() links, and nothing else."""
+    capability = family.execution_capabilities().regular_performance_iteration
+    assert capability is expected
+    if capability:
+        rows = family.source_dev_resids(
+            jnp.asarray([0.25, 0.75]), jnp.asarray([0.4, 0.6]), jnp.ones(2)
+        )
+        np.testing.assert_allclose(
+            rows,
+            family.deviance_contributions(
+                jnp.asarray([0.25, 0.75]), jnp.asarray([0.4, 0.6]), jnp.ones(2)
+            ),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+
+@pytest.mark.parametrize(
+    ("family", "expected"),
+    [
+        (NegativeBinomial(), True),
+        (NegativeBinomial(link="identity"), True),
+        (NegativeBinomial(theta=2.0, fixed=True, link="sqrt"), True),
+        (Poisson(), False),
+        (Gaussian(), False),
+    ],
+    ids=repr,
+)
+def test_extended_performance_iteration_capability_names_nb_links(
+    family, expected
+) -> None:
+    """Pinned nb() accepts log, identity and sqrt; regular families are not
+    extended."""
+    capabilities = family.execution_capabilities()
+    assert capabilities.extended_performance_iteration is expected
+    if expected:
+        assert not capabilities.regular_performance_iteration
+
+
+def test_source_g2g_is_pinned_fix_family_link_closed_form() -> None:
+    """``fix.family.link`` (gam.fit3.r) g2g for the links nb() accepts.
+
+    dDeta (gam.fit4.r) short-cuts the identity link before calling g2g, so
+    the identity form is never reached by the NB route; it is still R's.
+    """
+    mu = np.array([0.25, 1.0, 4.0, 9.0])
+    np.testing.assert_array_equal(IdentityLink().source_g2g(mu), np.zeros(4))
+    np.testing.assert_array_equal(LogLink().source_g2g(mu), np.full(4, -1.0))
+    np.testing.assert_array_equal(SqrtLink().source_g2g(mu), -(mu**-0.5))
+    assert (
+        np.asarray(jax.jit(SqrtLink().source_g2g)(jnp.asarray(mu))).tolist()
+        == (-(mu**-0.5)).tolist()
+    )
+    with pytest.raises(NotImplementedError, match="no pinned extended-family g2g"):
+        LogitLink().source_g2g(mu)
+
+
+def test_source_dev_resids_is_explicit_per_family() -> None:
+    """Inside the domain it is the direct deviance; the base fails closed."""
+    with pytest.raises(NotImplementedError, match=r"pinned dev\.resids"):
+        _UnregisteredQuadraticFamily().source_dev_resids(
+            np.ones(2), np.ones(2), np.ones(2)
+        )
+    np.testing.assert_allclose(
+        Gaussian().source_dev_resids(np.array([1.0, 2.0]), np.ones(2), np.ones(2)),
+        [0.0, 1.0],
+        rtol=STRICT.rtol,
+    )

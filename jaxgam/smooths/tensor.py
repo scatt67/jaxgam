@@ -24,7 +24,75 @@ from scipy import linalg
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
+from jaxgam.smooths.source_lapack import (
+    SourceConstraintQR,
+    source_matprod,
+    source_svd,
+)
+from jaxgam.smooths.source_penalty_coordinates import (
+    scipy_uses_accelerate_lapack,
+    source_symmetric_max_eigenvalue,
+)
 from jaxgam.smooths.utils import row_tensor as _row_tensor
+
+#: smooth.construct.tensor.smooth.spec skips a margin reparameterization when
+#: ``sv$d[np]/sv$d[1] < .Machine$double.eps^.66`` ("unstable ... not done").
+_REPARAMETERIZATION_FLOOR = np.finfo(float).eps ** 0.66
+
+
+class SourceColumnMeans:
+    """R's ``colMeans``: long-double column sums in source row order.
+
+    do_colsum accumulates each column in ``LDOUBLE`` and divides there, so the
+    accumulator's precision follows the platform's ``long double`` as R's does.
+    """
+
+    def __init__(self, width: int) -> None:
+        self._sum = np.zeros(width, dtype=np.longdouble)
+        self.count = 0
+
+    def add(self, rows: npt.NDArray[np.floating]) -> None:
+        rows = np.asarray(rows, dtype=np.longdouble)
+        if len(rows):
+            # cumsum's running sums fix the sequential source-row order.
+            stacked = np.vstack((self._sum[np.newaxis], rows))
+            self._sum = np.cumsum(stacked, axis=0)[-1].copy()
+            self.count += len(rows)
+
+    def result(self) -> npt.NDArray[np.float64]:
+        if self.count == 0:
+            raise ValueError("Cannot average columns without rows.")
+        return np.asarray(self._sum / np.longdouble(self.count), dtype=np.float64)
+
+
+def source_margin_constraint(
+    rows: npt.NDArray[np.floating],
+) -> SourceConstraintQR:
+    """smoothCon's ti-margin centering constraint ``qr(t(colMeans(X)))``."""
+    means = SourceColumnMeans(rows.shape[1])
+    means.add(rows)
+    return SourceConstraintQR.from_column(means.result())
+
+
+def source_margin_reparameterization(
+    Xp: npt.NDArray[np.floating],
+) -> npt.NDArray[np.float64] | None:
+    """Return ``sv$v %*% (t(sv$u)/sv$d)`` for ``sv <- svd(Xp)``, or ``None``.
+
+    ``None`` is smooth.r's "reparameterization unstable for margin" branch.
+    """
+    u, d, vt = source_svd(Xp)
+    if d[-1] / d[0] < _REPARAMETERIZATION_FLOOR:
+        return None
+    return source_matprod(np.ascontiguousarray(vt.T), u.T / d[:, np.newaxis])
+
+
+def source_reparameterized_penalty(
+    S: npt.NDArray[np.floating], XP: npt.NDArray[np.floating]
+) -> npt.NDArray[np.float64]:
+    """smooth.r's ``t(XP) %*% Sm %*% XP``, evaluated left to right."""
+    return source_matprod(source_matprod(np.ascontiguousarray(XP.T), S), XP)
+
 
 # ---------------------------------------------------------------------------
 # TensorProductSmooth (te)
@@ -49,6 +117,7 @@ class TensorProductSmooth(Smooth):
         self._marginals: list[Smooth] = []
         self._penalties: list[Penalty] = []
         self._XP_list: list[npt.NDArray[np.floating] | None] = []
+        self._X: npt.NDArray[np.floating] | None = None
 
     def copy_for_prediction(self) -> TensorProductSmooth:
         """Drop tensor penalties and fitting caches on nested marginals."""
@@ -61,78 +130,70 @@ class TensorProductSmooth(Smooth):
         ]
         return clone
 
-    @staticmethod
-    def _svd_reparameterize(
-        marginal: Smooth,
-        X: npt.NDArray[np.floating],
-        S: npt.NDArray[np.floating],
-        data: dict[str, npt.NDArray[np.floating]],
-        Z: npt.NDArray[np.floating] | None = None,
-    ) -> (
-        tuple[
-            npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]
+    def copy_for_training(self) -> TensorProductSmooth:
+        """Return a predict-only copy whose margins evaluate training rows."""
+        clone = self.copy_for_prediction()
+        clone._marginals = [
+            marginal.copy_for_training() for marginal in self._marginals
         ]
-        | None
-    ):
-        """SVD reparameterize a marginal smooth for tensor product construction.
+        return clone
 
-        Replicates R's SVD reparameterization from
-        ``smooth.construct.tensor.smooth.spec``. Creates evenly-spaced
-        evaluation points, computes the prediction matrix, takes its SVD,
-        and transforms the design and penalty matrices.
+    def _margin_constraint(self, j: int) -> SourceConstraintQR | None:
+        """Return margin ``j``'s absorbed centering constraint (ti only)."""
+        constraints = getattr(self, "_constraints", None)
+        return None if not constraints else constraints[j]
 
-        Parameters
-        ----------
-        marginal : Smooth
-            The marginal smooth object (must be 1D).
-        X : np.ndarray
-            Design matrix (possibly constrained for ti).
-        S : np.ndarray
-            Penalty matrix (possibly constrained for ti).
-        data : dict[str, np.ndarray]
-            Training data dictionary.
-        Z : np.ndarray or None
-            Constraint absorption matrix for ti(), or None for te().
+    def _reparameterize_margin(
+        self,
+        j: int,
+        marginal: Smooth,
+        lower: float,
+        upper: float,
+        width: int,
+    ) -> npt.NDArray[np.float64] | None:
+        """Compute smooth.r's margin reparameterization ``XP`` or ``None``.
 
-        Returns
-        -------
-        tuple or None
-            ``(X_new, S_new, XP)`` if successful, ``None`` if condition
-            number is too poor to reparameterize safely.
+        The evaluation points are ``seq(min(x), max(x), length=np)`` and the
+        margin is predicted (with any absorbed constraint) at them. Classes
+        that are already optimal (``noterp``) and multi-covariate margins keep
+        their basis.
         """
-        var = marginal.spec.variables[0]
-        x = data[var]
-        n_cols = X.shape[1]
-
-        # Evenly spaced evaluation points across covariate range
-        eval_x = np.linspace(np.min(x), np.max(x), n_cols)
-        eval_data = {var: eval_x}
-
-        # Prediction matrix at eval points
-        Xp = marginal.predict_matrix(eval_data)
-
-        # Apply constraint absorption if ti()
-        if Z is not None:
-            Xp = Xp @ Z
-
-        # SVD
-        U, d, Vt = np.linalg.svd(Xp, full_matrices=False)
-
-        # Condition check: skip if too ill-conditioned
-        eps = np.finfo(float).eps
-        if d[-1] / d[0] < eps ** (2.0 / 3.0):
+        if marginal._noterp or len(marginal.spec.variables) != 1:
             return None
+        points = np.linspace(lower, upper, width)
+        Xp = marginal.predict_matrix({marginal.spec.variables[0]: points})
+        constraint = self._margin_constraint(j)
+        if constraint is not None:
+            Xp = constraint.absorb_rows(Xp)
+        return source_margin_reparameterization(Xp)
 
-        # Reparameterization matrix: V @ diag(1/d) @ U.T
-        V = Vt.T
-        XP = V @ (U.T / d[:, np.newaxis])
+    def _transform_margin(
+        self, j: int, X: npt.NDArray[np.floating]
+    ) -> npt.NDArray[np.floating]:
+        """Apply margin ``j``'s constraint (PredictMat) and ``%*% XP``."""
+        constraint = self._margin_constraint(j)
+        if constraint is not None:
+            X = constraint.absorb_rows(X)
+        XP = self._XP_list[j]
+        return X if XP is None else source_matprod(X, XP)
 
-        # Transform design and penalty
-        X_new = X @ XP
-        S_new = XP.T @ S @ XP
-        S_new = 0.5 * (S_new + S_new.T)
-
-        return X_new, S_new, XP
+    def _reparameterize_margins(
+        self,
+        X_list: list[npt.NDArray[np.floating]],
+        S_list: list[npt.NDArray[np.floating]],
+        data: dict[str, npt.NDArray[np.floating]],
+    ) -> None:
+        """Set ``_XP_list`` and transform the margin bases and penalties."""
+        self._XP_list = []
+        for j, marginal in enumerate(self._marginals):
+            values = np.asarray(data[marginal.spec.variables[0]], dtype=float)
+            XP = self._reparameterize_margin(
+                j, marginal, np.min(values), np.max(values), X_list[j].shape[1]
+            )
+            self._XP_list.append(XP)
+            if XP is not None:
+                X_list[j] = source_matprod(X_list[j], XP)
+                S_list[j] = source_reparameterized_penalty(S_list[j], XP)
 
     def _resolve_marginal_m(self, n_margins: int) -> list[int | None]:
         """Resolve the per-marginal penalty order ``m`` from ``spec.extra_args``.
@@ -175,14 +236,18 @@ class TensorProductSmooth(Smooth):
         )
 
     def _create_marginals(
-        self, data: dict[str, npt.NDArray[np.floating]]
+        self, data: dict[str, npt.NDArray[np.floating]], *, scaled: bool = False
     ) -> list[tuple[Smooth, npt.NDArray[np.floating], npt.NDArray[np.floating]]]:
-        """Create and setup marginal smooths, returning (smooth, X, S_raw).
+        """Create and setup marginal smooths, returning (smooth, X, S).
+
+        ``te`` margins use ``smooth.construct`` penalties (``S_raw``); ``ti``
+        margins pass ``scaled=True`` for smoothCon's scaled penalties, since R
+        constructs constrained margins with ``smoothCon``.
 
         Returns
         -------
         list of (Smooth, np.ndarray, np.ndarray)
-            Each tuple is (marginal_smooth, design_matrix, raw_penalty_matrix).
+            Each tuple is (marginal_smooth, design_matrix, penalty_matrix).
         """
         # R te()/ti() default marginal k is 5^d per margin (R/smooth.r te():
         # ``if (sum(is.na(k))||is.null(k)) k <- 5^d``). All jaxgam margins are
@@ -206,16 +271,28 @@ class TensorProductSmooth(Smooth):
                 extra_args=extra,
             )
             # Lazy import to break circular dependency: registry → tensor → registry
+            from jaxgam.smooths.cubic import CubicRegressionSmooth
             from jaxgam.smooths.registry import get_smooth_class
 
             smooth_cls = get_smooth_class(self.spec.bs)
             marginal = smooth_cls(marginal_spec)
-            marginal.setup(data)
-            X_j = marginal.build_design_matrix(data)
+            # R's te() uses smooth.construct() for unconstrained cubic
+            # marginals. ti() uses smoothCon() and retains its existing
+            # normalization policy.
+            raw_cubic = (
+                self.spec.smooth_type == "te"
+                and self.spec.bs in ("cr", "cs")
+                and isinstance(marginal, CubicRegressionSmooth)
+            )
+            if raw_cubic:
+                marginal.setup(data, _normalize_penalty=False)
+            else:
+                marginal.setup(data)
+            X_j = marginal.consume_training_design_matrix()
             # Get the normalized penalty and undo smoothCon normalization
             S_normalized = marginal.build_penalty_matrices()[0].S
-            S_raw = S_normalized * marginal._s_scale
-            marginals_info.append((marginal, X_j, S_raw))
+            S_raw = S_normalized if raw_cubic else S_normalized * marginal._s_scale
+            marginals_info.append((marginal, X_j, S_normalized if scaled else S_raw))
         return marginals_info
 
     def _get_marginal_matrices(
@@ -275,10 +352,16 @@ class TensorProductSmooth(Smooth):
         penalties = []
 
         for j in range(n_marginals):
-            # Normalize by largest eigenvalue (matching R)
-            eigvals_j = linalg.eigvalsh(S_list[j])
-            max_eigval = np.max(np.abs(eigvals_j))
-            S_norm = S_list[j] / max_eigval if max_eigval > 0 else S_list[j].copy()
+            # smooth.r: Sm/eigen(Sm, symmetric=TRUE, only.values=TRUE)$values[1],
+            # La_rs's value-only DSYEVR on the pinned provider. Cubic margins
+            # keep SciPy's EVR where SciPy links Accelerate (PR9 provider rule).
+            matrix = np.asarray(S_list[j], dtype=np.float64)
+            largest = (
+                linalg.eigvalsh(matrix, lower=True, driver="evr")[-1]
+                if self.spec.bs in ("cr", "cs") and scipy_uses_accelerate_lapack()
+                else source_symmetric_max_eigenvalue(matrix)
+            )
+            S_norm = S_list[j] / largest if largest > 0 else S_list[j].copy()
 
             # Build Kronecker product: I ⊗ ... ⊗ S_norm ⊗ ... ⊗ I
             P = np.array([[1.0]])
@@ -310,17 +393,7 @@ class TensorProductSmooth(Smooth):
         X_list, S_list = self._get_marginal_matrices(marginals_info)
 
         # SVD reparameterize 1D marginals without noterp
-        self._XP_list = []
-        for j, marginal in enumerate(self._marginals):
-            if not marginal._noterp and len(marginal.spec.variables) == 1:
-                result = self._svd_reparameterize(marginal, X_list[j], S_list[j], data)
-                if result is not None:
-                    X_list[j], S_list[j], XP = result
-                    self._XP_list.append(XP)
-                else:
-                    self._XP_list.append(None)
-            else:
-                self._XP_list.append(None)
+        self._reparameterize_margins(X_list, S_list, data)
 
         dims = [X.shape[1] for X in X_list]
         self.n_coefs = int(np.prod(dims))
@@ -328,6 +401,7 @@ class TensorProductSmooth(Smooth):
 
         # Build tensor design matrix
         X_tensor = self._build_tensor_design(X_list)
+        self._X = X_tensor
 
         # Build tensor penalty matrices
         self._penalties = self._build_tensor_penalties(
@@ -336,11 +410,17 @@ class TensorProductSmooth(Smooth):
 
         # Apply smoothCon normalization — R normalizes each penalty
         # by its own 1-norm (not all by S[0]'s norm)
-        max_x_sq = np.linalg.norm(X_tensor, ord=np.inf) ** 2
+        # R's smoothCon uses base::norm(), which dispatches to LAPACK DLANGE.
+        # Preserve that reduction order: NumPy's row/column sums can differ by
+        # one ULP before the penalty scaling division.
+        matrix_norm = linalg.get_lapack_funcs("lange", (X_tensor,))
+        # R's norm(X, "I")^2 is R_pow with y == 2, i.e. x * x.
+        norm_x = matrix_norm(b"I", X_tensor)
+        max_x_sq = norm_x * norm_x
         if max_x_sq > 0:
             normalized = []
             for p in self._penalties:
-                maS = np.linalg.norm(p.S, ord=1) / max_x_sq
+                maS = matrix_norm(b"O", p.S) / max_x_sq
                 normalized.append(
                     Penalty(p.S / maS, rank=p.rank, null_space_dim=p.null_space_dim)
                 )
@@ -367,11 +447,24 @@ class TensorProductSmooth(Smooth):
     ) -> npt.NDArray[np.floating]:
         """Build prediction matrix for new data."""
         self._require_setup()
-        matrices = [m.predict_matrix(new_data) for m in self._marginals]
-        for j, XP in enumerate(self._XP_list):
-            if XP is not None:
-                matrices[j] = matrices[j] @ XP
-        return self._build_tensor_design(matrices)
+        return self._compose_margins(
+            [m.predict_matrix(new_data) for m in self._marginals]
+        )
+
+    def training_matrix(
+        self, data: dict[str, npt.NDArray[np.floating]]
+    ) -> npt.NDArray[np.floating]:
+        """Row-tensor the margins' source training rows (smoothCon's ``X``)."""
+        self._require_setup()
+        return self._compose_margins([m.training_matrix(data) for m in self._marginals])
+
+    def _compose_margins(
+        self, matrices: list[npt.NDArray[np.floating]]
+    ) -> npt.NDArray[np.floating]:
+        """Transform each margin as Predict.matrix.tensor.smooth and row-tensor."""
+        return self._build_tensor_design(
+            [self._transform_margin(j, X) for j, X in enumerate(matrices)]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +489,7 @@ class TensorInteractionSmooth(TensorProductSmooth):
     def __init__(self, spec: SmoothSpec) -> None:
         super().__init__(spec)
         self._Z_list: list[npt.NDArray[np.floating]] = []
+        self._constraints: list[SourceConstraintQR] = []
 
     @staticmethod
     def _absorb_constraint(
@@ -420,17 +514,15 @@ class TensorInteractionSmooth(TensorProductSmooth):
         X_c : np.ndarray
             Constrained design matrix, shape ``(n, k-1)``.
         S_c : np.ndarray
-            Constrained penalty matrix, shape ``(k-1, k-1)``.
+            Constrained penalty matrix, shape ``(k-1, k-1)``, symmetrized.
+            Setup keeps smoothCon's unsymmetrized ``Z'SZ`` instead, which
+            tensor.prod.penalties symmetrizes after the Kronecker product.
         Z : np.ndarray
             Constraint absorption matrix, shape ``(k, k-1)``.
         """
-        c = X.sum(axis=0)
-        Q, _ = np.linalg.qr(c[:, np.newaxis], mode="complete")
-        Z = Q[:, 1:]
-        X_c = X @ Z
-        S_c = Z.T @ S @ Z
-        S_c = 0.5 * (S_c + S_c.T)
-        return X_c, S_c, Z
+        constraint = source_margin_constraint(X)
+        S_c = constraint.absorb_penalty(S)
+        return constraint.absorb_rows(X), (S_c + S_c.T) * 0.5, constraint.basis()
 
     def setup(self, data: dict[str, npt.NDArray[np.floating]]) -> None:
         """Construct tensor interaction basis from data.
@@ -440,35 +532,25 @@ class TensorInteractionSmooth(TensorProductSmooth):
         data : dict[str, np.ndarray]
             Must contain keys matching all variables in ``self.spec.variables``.
         """
-        # Create and setup marginal smooths
-        marginals_info = self._create_marginals(data)
+        # Create and setup marginal smooths (smoothCon-scaled penalties)
+        marginals_info = self._create_marginals(data, scaled=True)
         self._marginals = [info[0] for info in marginals_info]
         X_list_raw, S_list_raw = self._get_marginal_matrices(marginals_info)
 
-        # Absorb sum-to-zero constraints into each marginal
-        X_list = []
-        S_list = []
-        self._Z_list = []
-        for X_j, S_j in zip(X_list_raw, S_list_raw, strict=True):
-            X_c, S_c, Z = self._absorb_constraint(X_j, S_j)
-            X_list.append(X_c)
-            S_list.append(S_c)
-            self._Z_list.append(Z)
+        # Absorb smoothCon's centering constraint into each marginal
+        self._constraints = [source_margin_constraint(X_j) for X_j in X_list_raw]
+        self._Z_list = [constraint.basis() for constraint in self._constraints]
+        X_list = [
+            constraint.absorb_rows(X_j)
+            for constraint, X_j in zip(self._constraints, X_list_raw, strict=True)
+        ]
+        S_list = [
+            constraint.absorb_penalty(S_j)
+            for constraint, S_j in zip(self._constraints, S_list_raw, strict=True)
+        ]
 
         # SVD reparameterize constrained 1D marginals without noterp
-        self._XP_list = []
-        for j, marginal in enumerate(self._marginals):
-            if not marginal._noterp and len(marginal.spec.variables) == 1:
-                result = self._svd_reparameterize(
-                    marginal, X_list[j], S_list[j], data, Z=self._Z_list[j]
-                )
-                if result is not None:
-                    X_list[j], S_list[j], XP = result
-                    self._XP_list.append(XP)
-                else:
-                    self._XP_list.append(None)
-            else:
-                self._XP_list.append(None)
+        self._reparameterize_margins(X_list, S_list, data)
 
         constrained_dims = [X.shape[1] for X in X_list]
         self.n_coefs = int(np.prod(constrained_dims))
@@ -479,6 +561,7 @@ class TensorInteractionSmooth(TensorProductSmooth):
 
         # Build tensor design matrix from constrained marginals
         X_tensor = self._build_tensor_design(X_list)
+        self._X = X_tensor
 
         # Build tensor penalties from constrained marginals
         constrained_ranks = [
@@ -523,12 +606,6 @@ class TensorInteractionSmooth(TensorProductSmooth):
         constraint absorption and SVD reparameterization to new data.
         """
         self._require_setup()
-        X_list_raw = [m.predict_matrix(new_data) for m in self._marginals]
-        matrices = []
-        for j, (X, Z) in enumerate(zip(X_list_raw, self._Z_list, strict=True)):
-            X_j = X @ Z
-            XP = self._XP_list[j]
-            if XP is not None:
-                X_j = X_j @ XP
-            matrices.append(X_j)
-        return self._build_tensor_design(matrices)
+        return self._compose_margins(
+            [m.predict_matrix(new_data) for m in self._marginals]
+        )

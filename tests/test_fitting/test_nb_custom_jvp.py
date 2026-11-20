@@ -27,7 +27,7 @@ from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.newton import _diff_score, _fit_and_score_impl
 from jaxgam.fitting.pirls import pirls_loop
-from jaxgam.jax_utils import build_S_lambda, cho_factor
+from jaxgam.jax_utils import cho_factor
 from tests.helpers import _make_nb_data, _setup_fd
 from tests.tolerances import MODERATE, STRICT
 
@@ -47,9 +47,14 @@ def _build_diff_score_kwargs(fd: FittingData, joint_theta: bool):
         "y": fd.y,
         "wt": fd.wt,
         "offset": offset,
-        "S_list": fd.S_list,
+        "penalty_structure": fd.penalty_structure,
         "singleton_eig_constants": fd.singleton_eig_constants,
         "multi_block_proj_S": fd.multi_block_proj_S,
+        "count_indices": (
+            fd.count_prefix_plan.indices
+            if fd.count_prefix_plan is not None
+            else jnp.zeros(fd.n_obs, dtype=jnp.int32)
+        ),
         "family": fd.family,
         "pirls_tol": 1e-8,
         "joint_theta": joint_theta,
@@ -62,6 +67,11 @@ def _build_diff_score_kwargs(fd: FittingData, joint_theta: bool):
         "multi_block_ranks": fd.multi_block_ranks,
         "p": fd.n_coef,
         "max_y": fd.max_y,
+        "integer_counts": (
+            fd.count_prefix_plan.integer_counts
+            if fd.count_prefix_plan is not None
+            else True
+        ),
     }
 
 
@@ -76,7 +86,7 @@ def _converge_pirls(fd):
         np.asarray(offset) if fd.offset is not None else None,
     )
     log_lambda = fd.log_lambda_init.copy()
-    S_lambda = build_S_lambda(log_lambda, fd.S_list, fd.n_coef)
+    S_lambda = fd.S_lambda(log_lambda)
     pirls_result = pirls_loop(
         fd.X,
         fd.y,
@@ -367,7 +377,7 @@ class TestIFTDbetaDtheta:
         offset = fd.offset if fd.offset is not None else jnp.zeros(fd.n_obs)
 
         # Base PIRLS result
-        S_lambda = build_S_lambda(log_lambda, fd.S_list, fd.n_coef)
+        S_lambda = fd.S_lambda(log_lambda)
         pirls_base = pirls_loop(
             fd.X,
             fd.y,

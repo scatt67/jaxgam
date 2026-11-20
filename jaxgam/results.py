@@ -12,32 +12,225 @@ Design doc reference: docs/refactor_gam_api/design.md §3.4, §4.1, §7
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+import numbers
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+import numpy.typing as npt
 import scipy.linalg as sla
 
+from jaxgam.control import FitControl
+from jaxgam.fitting.state import EFSOptimizerDiagnostics
 from jaxgam.inference._core import finish_prediction, predict_core
 from jaxgam.inference.predictor import GAMPredictor
 from jaxgam.jax_utils import to_numpy
+from jaxgam.smooths.source_arithmetic import libm_exp
 
 if TYPE_CHECKING:
     import matplotlib.figure
     import pandas as pd
 
-    from jaxgam.families.base import ExponentialFamily
-    from jaxgam.fitting.data import FittingData
-    from jaxgam.fitting.newton import NewtonResult
+    from jaxgam.data.source import RowSource
+    from jaxgam.execution.discrete import DiscreteFit
+    from jaxgam.execution.operator import PCGControl
+    from jaxgam.execution.operator_bulk_variance import (
+        BulkOperatorVariance,
+        BulkVarianceCalibration,
+    )
+    from jaxgam.execution.operator_fit import OperatorFitDiagnostics, OperatorFitResult
+    from jaxgam.families.base import ExponentialFamily, FamilyParameterSnapshot
+    from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
+    from jaxgam.fitting.state import ConsumedFitResult, StreamFitState
+    from jaxgam.formula.continuous_metadata import ContinuousDiscretizationMetadata
     from jaxgam.formula.design import ModelSetup, SmoothInfo
+    from jaxgam.formula.predict_matrix import Data
+    from jaxgam.formula.prepare import PreparedModel
     from jaxgam.formula.terms import FormulaSpec
     from jaxgam.smooths.constraints import CoefficientMap
     from jaxgam.summary.summary import GAMSummary
 
 
+def _report_smoothing_params(
+    reported: npt.ArrayLike,
+    supplied: npt.ArrayLike | None,
+) -> np.ndarray:
+    """Return the smoothing parameters a result reports, supplied ones verbatim.
+
+    Every route fits with ``log(sp)`` and its optimizers carry log smoothing
+    parameters, so the fit's own natural-scale vector is ``exp(log(sp))``.
+    That round trip is not exact in floating point: it misses most decimal
+    inputs by one or more units in the last place, and by different amounts
+    on different CPUs and math libraries. A caller-supplied smoothing
+    parameter is an input, not an estimate, so every result builder reports
+    the supplied float64 values themselves. ``supplied=None`` (estimated
+    smoothing parameters) returns the fit's values unchanged.
+
+    This is reporting only: the fit has already used its own log values, and
+    nothing here feeds back into fitting.
+
+    Parameters
+    ----------
+    reported : array-like
+        The fit's natural-scale smoothing parameters, shape ``(m,)``.
+    supplied : array-like or None
+        The caller's ``sp`` (a scalar is accepted for one penalty), converted
+        with the same ``float64`` conversion the fitting routes log-transform.
+
+    Returns
+    -------
+    np.ndarray
+        A new float64 vector of shape ``(m,)``.
+    """
+    values = np.array(reported, dtype=np.float64, copy=True)
+    if supplied is None:
+        return values
+    given = np.array(np.atleast_1d(np.asarray(supplied, dtype=np.float64)), copy=True)
+    if given.shape != values.shape:
+        raise ValueError(
+            f"supplied smoothing parameters have shape {given.shape}, but the fit "
+            f"reports shape {values.shape}"
+        )
+    return given
+
+
 def _offset_was_nonzero(setup: ModelSetup) -> bool:
     """Whether fitting used an external offset that prediction cannot recover."""
     return setup.offset is not None and not np.allclose(setup.offset, 0.0)
+
+
+def _transform_coefficients_cpu(
+    fitting_data: FittingData, coefficients: npt.NDArray[np.floating]
+) -> npt.NDArray[np.floating]:
+    """Map fitting coefficients to public coordinates without device transfer."""
+    result = coefficients.copy()
+    for block in fitting_data.penalty_structure.blocks:
+        transform = block.transform
+        if transform.kind == "identity":
+            continue
+        values = to_numpy(transform.values)
+        local = result[block.start : block.stop]
+        result[block.start : block.stop] = (
+            values @ local if transform.kind == "dense" else values * local
+        )
+    return result
+
+
+def _prepared_transform_coefficients_cpu(
+    prepared, coefficients: npt.NDArray[np.floating]
+) -> npt.NDArray[np.floating]:
+    """Map prepared fitting coordinates to public coordinates without rows."""
+    from jaxgam.penalties.structure import DenseTransform, DiagonalTransform
+
+    assert prepared.fitting is not None
+    result = np.array(coefficients, copy=True)
+    for block in prepared.fitting.penalty_structure.blocks:
+        transform = block.transform
+        local = result[block.start : block.stop]
+        if isinstance(transform, DenseTransform):
+            result[block.start : block.stop] = transform.matrix @ local
+        elif isinstance(transform, DiagonalTransform):
+            result[block.start : block.stop] = transform.diagonal * local
+    return result
+
+
+def _rotate_covariance(
+    covariance: npt.NDArray[np.floating],
+    rotation: tuple[tuple[int, int, npt.NDArray[np.floating]], ...],
+) -> npt.NDArray[np.floating]:
+    """``T C T'`` for gam.reparam block maps ``(start, stop, T)``."""
+    if not rotation:
+        return covariance
+    result = np.array(covariance, copy=True)
+    for start, stop, T in rotation:
+        result[start:stop, :] = T @ result[start:stop, :]
+        result[:, start:stop] = result[:, start:stop] @ T.T
+    return result
+
+
+def _factor_transforms(
+    fitting_data: FittingData,
+    rotation: tuple[tuple[int, int, npt.NDArray[np.floating]], ...],
+) -> tuple[tuple[int, int, str, npt.NDArray[np.floating]], ...]:
+    """Per-block maps from the Fisher factor's coordinates to public ones.
+
+    One entry per block: the local transform ``D``, composed as ``D T`` with
+    the block's gam.reparam map when the factor is in stable coordinates.
+    """
+    rotations = {start: (stop, T) for start, stop, T in rotation}
+    transforms = []
+    for block in fitting_data.penalty_structure.blocks:
+        kind = block.transform.kind
+        values = to_numpy(block.transform.values)
+        if block.start in rotations:
+            stop, T = rotations.pop(block.start)
+            if stop != block.stop:
+                raise ValueError("stable rotation does not match its penalty block")
+            if kind == "dense":
+                values = values @ T
+            elif kind == "diagonal":
+                values = values[:, None] * T
+            else:
+                values = T
+            transforms.append((block.start, block.stop, "dense", values))
+        elif kind != "identity":
+            transforms.append((block.start, block.stop, kind, values))
+    if rotations:
+        raise ValueError("stable rotation has no penalty block")
+    return tuple(transforms)
+
+
+def _prepared_fisher_transforms(
+    prepared,
+) -> tuple[tuple[int, int, str, npt.NDArray[np.floating]], ...]:
+    """Describe frozen local-D transforms for factor-based prediction SEs."""
+    from jaxgam.penalties.structure import DenseTransform, DiagonalTransform
+
+    assert prepared.fitting is not None
+    transforms = []
+    for block in prepared.fitting.penalty_structure.blocks:
+        transform = block.transform
+        if isinstance(transform, DenseTransform):
+            transforms.append((block.start, block.stop, "dense", transform.matrix))
+        elif isinstance(transform, DiagonalTransform):
+            transforms.append((block.start, block.stop, "diagonal", transform.diagonal))
+    return tuple(transforms)
+
+
+def _prepared_transform_covariance_cpu(
+    prepared, covariance: npt.NDArray[np.floating]
+) -> npt.NDArray[np.floating]:
+    """Apply all local-D transforms, retaining public cross-block covariance."""
+    result = np.array(covariance, copy=True)
+    for start, stop, kind, values in _prepared_fisher_transforms(prepared):
+        if kind == "dense":
+            result[start:stop, :] = values @ result[start:stop, :]
+            result[:, start:stop] = result[:, start:stop] @ values.T
+        else:
+            result[start:stop, :] *= values[:, None]
+            result[:, start:stop] *= values[None, :]
+    return result
+
+
+def _transform_covariance_cpu(
+    fitting_data: FittingData, covariance: npt.NDArray[np.floating]
+) -> npt.NDArray[np.floating]:
+    """Apply each local transform on both covariance sides on the CPU."""
+    result = covariance.copy()
+    for block in fitting_data.penalty_structure.blocks:
+        transform = block.transform
+        if transform.kind == "identity":
+            continue
+        values = to_numpy(transform.values)
+        start, stop = block.start, block.stop
+        if transform.kind == "dense":
+            result[start:stop, :] = values @ result[start:stop, :]
+            result[:, start:stop] = result[:, start:stop] @ values.T
+        else:
+            result[start:stop, :] = values[:, None] * result[start:stop, :]
+            result[:, start:stop] = result[:, start:stop] * values[None, :]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +257,11 @@ class _FitDiagnostics:
     method: str
     lambda_strategy: str
     execution_path: str
+    execution_route: str = field(default="dense", kw_only=True)
+    execution_fallback_reason: str | None = field(default=None, kw_only=True)
+    optimizer_diagnostics: EFSOptimizerDiagnostics | None = field(
+        default=None, kw_only=True
+    )
     n: int
 
 
@@ -150,6 +348,764 @@ class GAMInferenceResult(_FitDiagnostics):
 
 
 @dataclass(frozen=True)
+class StreamExactOptimizerDiagnostics:
+    """Bounded all-evaluation diagnostics for exact streamed REML.
+
+    Inner iterations sum executed PIRLS loop passes over initial, accepted,
+    rejected and local-probe trials. Final source coefficient solves for the
+    score are separate (one per regular/NB fit); observed/Fisher factor solves
+    are not counted in that field. The startup scans prepare parameters but
+    do not fit coefficients.
+    Derivative time covers host work after each PIRLS fit returns through
+    synchronized source score and gradient, including validation/replay and
+    first-use JIT compilation. Pending fit-owned device buffers are drained
+    before this timer starts.
+    """
+
+    status: int
+    n_evaluations: int
+    n_accepted: int
+    projected_gradient_inf: float
+    accepted_score_history: tuple[float, ...]
+    startup_source_scans: int
+    startup_batches_scanned: int
+    cumulative_inner_iterations: int = 0
+    cumulative_final_refit_solves: int = 0
+    cumulative_derivative_s: float = 0.0
+
+
+#: Default limit, in Monte Carlo standard errors, for the selected exact
+#: calibration in :meth:`GAMPredictionResult.bulk_link_variance`.
+BULK_CALIBRATION_MAX_STANDARD_ERRORS = 5.0
+
+
+@dataclass(frozen=True)
+class GAMPredictionResult:
+    """Small, picklable result surface for bounded new-data prediction.
+
+    This deliberately has no training rows, setup, EDF vectors, or mandatory
+    covariance.  It retains only scalar convergence diagnostics and a frozen
+    :class:`GAMPredictor`.  Discrete fits also record ``prediction_policy``
+    and ``discretization``: a bounded per-group/per-term record of the
+    fitted ``compress.df`` grids whose size does not depend on ``n``.
+
+    ``source_scans`` and ``batches_scanned`` count the complete source scans
+    and batches read by the fit itself, excluding Phase-1 setup scans, on the
+    streamed, discrete and operator routes alike (operator preparation is in
+    ``operator_diagnostics.preparation_*``). ``known_workspace_bytes`` is the
+    route's conservative known fit-workspace bound, excluding retained
+    Phase-1 preparation (``None`` on fixed-sp operator fits); on the discrete
+    route it covers the indexed design (host tables, device actions) and the
+    solver workspace. Discrete fits
+    additionally report ``fit_peak_bytes``, which adds the retained compact
+    setup tables and is the bound that route checks against
+    ``fit_memory_budget_bytes`` (``FitControl.memory_budget_bytes``); the
+    streamed routes have no counterpart because their prepared setup is
+    budgeted separately during preparation.
+
+    Fixed-sp operator fits have ``score=None`` and ``edf_total=None``, since
+    no score or trace provider runs, and ``scale=None`` for unknown-scale
+    families; known-scale families report their actual scale of one.
+    Calibrated operator EFS fits report the selected score, its
+    ``score_error_bound`` and ``edf_total``. Other routes retain their
+    existing numeric score, scale, and EDF.
+    """
+
+    _predictor: GAMPredictor
+    deviance: float
+    score: float | None
+    scale: float | None
+    theta: float | None
+    smoothing_params: np.ndarray
+    edf_total: float | None
+    converged: bool
+    n_iter: int
+    convergence_info: str
+    method: str
+    lambda_strategy: str
+    execution_path: str
+    execution_route: str = field(default="dense", kw_only=True)
+    execution_fallback_reason: str | None = field(default=None, kw_only=True)
+    score_scale: float | None = field(default=None, kw_only=True)
+    # Admitted absolute error bound on the operator EFS ``score``; ``None``
+    # on every other route and when no calibrated bound was admitted.
+    score_error_bound: float | None = field(default=None, kw_only=True)
+    # Calibration that produced ``score_error_bound``; "unavailable" when an
+    # operator EFS fit ended without an admitted bound.
+    score_bound_method: str | None = field(default=None, kw_only=True)
+    source_scans: int | None = field(default=None, kw_only=True)
+    batches_scanned: int | None = field(default=None, kw_only=True)
+    known_workspace_bytes: int | None = field(default=None, kw_only=True)
+    optimizer_diagnostics: EFSOptimizerDiagnostics | None = field(
+        default=None, kw_only=True
+    )
+    exact_optimizer_diagnostics: StreamExactOptimizerDiagnostics | None = field(
+        default=None, kw_only=True
+    )
+    smoothing_strategy: str | None = field(default=None, kw_only=True)
+    discretization_strategy: str | None = field(default=None, kw_only=True)
+    prediction_policy: str | None = field(default=None, kw_only=True)
+    discretization: ContinuousDiscretizationMetadata | None = field(
+        default=None, kw_only=True
+    )
+    working_model_proposal_evaluations: int | None = field(default=None, kw_only=True)
+    fit_peak_bytes: int | None = field(default=None, kw_only=True)
+    fit_memory_budget_bytes: int | None = field(default=None, kw_only=True)
+    operator_diagnostics: OperatorFitDiagnostics | None = field(
+        default=None, kw_only=True
+    )
+    _operator_source_fingerprint: str | None = field(default=None, kw_only=True)
+    _operator_source_replay_digest: str | None = field(default=None, kw_only=True)
+    _operator_family_static_config: tuple[object, ...] | None = field(
+        default=None, kw_only=True
+    )
+    _operator_family_parameter_snapshot: FamilyParameterSnapshot | None = field(
+        default=None, kw_only=True
+    )
+    n: int
+    _batch_rows: int = 65_536
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "smoothing_params", np.array(self.smoothing_params))
+        self.smoothing_params.setflags(write=False)
+
+    def __setstate__(self, state: dict) -> None:
+        state.setdefault("discretization", None)
+        self.__dict__.update(state)
+        self.smoothing_params.setflags(write=False)
+
+    @property
+    def coefficients(self) -> np.ndarray:
+        return self._predictor.coefficients
+
+    @property
+    def family(self) -> ExponentialFamily:
+        return self._predictor.family
+
+    @property
+    def formula(self) -> str:
+        return self._predictor.formula
+
+    def predict(
+        self,
+        newdata: pd.DataFrame | dict,
+        pred_type: str = "response",
+        se_fit: bool = False,
+        offset: np.ndarray | None = None,
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+        """Predict a concrete new-data batch from compact retained state."""
+        return self._predictor._predict(
+            newdata,
+            pred_type=pred_type,
+            se_fit=se_fit,
+            offset=offset,
+            warning_stacklevel=4,
+        )
+
+    def predict_iter(
+        self,
+        source: RowSource,
+        batch_rows: int | None = None,
+        *,
+        pred_type: str = "response",
+        se_fit: bool = False,
+    ) -> Iterator[tuple[np.ndarray, np.ndarray | tuple[np.ndarray, np.ndarray]]]:
+        """Yield ordered bounded prediction batches from a replayable source."""
+        return self._predictor.predict_iter(
+            source,
+            self._batch_rows if batch_rows is None else batch_rows,
+            pred_type=pred_type,
+            se_fit=se_fit,
+        )
+
+    def predict_matrix(self, newdata: Data) -> np.ndarray:
+        """Build a budgeted constrained prediction matrix for a concrete batch."""
+        return self._predictor.predict_matrix(newdata)
+
+    def to_predictor(self) -> GAMPredictor:
+        return self._predictor
+
+    def bulk_link_variance(
+        self,
+        training_source: RowSource,
+        calibration_data: Data,
+        *,
+        probes: int,
+        seed: int,
+        memory_budget_bytes: int,
+        control: PCGControl | None = None,
+        scale: float | None = None,
+        max_calibration_standard_errors: float = BULK_CALIBRATION_MAX_STANDARD_ERRORS,
+    ) -> tuple[BulkOperatorVariance, BulkVarianceCalibration]:
+        """Build calibrated bulk Fisher uncertainty for an operator fit.
+
+        The result retains no training rows or source. The caller replays the
+        original training source, whose fingerprint and row digest must match
+        the accepted fit. The returned provider streams arbitrary prediction
+        sources through ``estimate_iter`` and reports approximate link-scale
+        variances with Monte Carlo errors and solver/source diagnostics.
+        Unknown-scale families require an externally established scale.
+        Selected calibration checks those rows only and does not bound
+        unselected rows or iterative-solve bias. Each selected row's
+        ``probes * estimate / exact`` is chi-square with ``probes`` degrees of
+        freedom; the call raises when its equivalent standard normal deviate
+        exceeds ``max_calibration_standard_errors`` in absolute value (the
+        default 5 is a two-sided level of 5.7e-7 per row).
+        """
+        from jaxgam.data.source import RowSource
+        from jaxgam.execution.operator import FrozenScanSystem, PCGControl
+        from jaxgam.execution.operator_bulk_variance import BulkOperatorVariance
+        from jaxgam.execution.operator_fit import FrozenOperatorWorkingState
+        from jaxgam.formula.operator_prepare import (
+            OperatorPreparationControl,
+            prepare_operator_model,
+        )
+        from jaxgam.formula.parser import parse_formula
+        from jaxgam.inference.operator_geometry import _rows
+
+        if (
+            self.execution_route != "operator"
+            or self._operator_source_fingerprint is None
+        ):
+            raise RuntimeError("Bulk Fisher uncertainty requires an operator result.")
+        if not self.converged:
+            raise RuntimeError("Bulk Fisher uncertainty requires a converged fit.")
+        if (
+            self.family.execution_static_config() != self._operator_family_static_config
+            or self.family.execution_parameter_snapshot()
+            != self._operator_family_parameter_snapshot
+        ):
+            raise RuntimeError("Family, link or theta changed after the operator fit.")
+        if not isinstance(training_source, RowSource):
+            raise TypeError(
+                "Bulk Fisher uncertainty requires a replayable training source."
+            )
+        if (
+            training_source.n_rows != self.n
+            or training_source.fingerprint() != self._operator_source_fingerprint
+        ):
+            raise RuntimeError(
+                "Training source differs from the accepted operator fit."
+            )
+        if _rows(calibration_data) < 1:
+            raise ValueError("Selected exact calibration requires at least one row.")
+        if self.scale is not None:
+            if scale is not None and scale != self.scale:
+                raise ValueError("Known-scale family requires its fitted Fisher scale.")
+            scale = self.scale
+        if scale is None:
+            raise ValueError("Unknown-scale family requires an explicit Fisher scale.")
+        if (
+            isinstance(max_calibration_standard_errors, bool)
+            or not isinstance(max_calibration_standard_errors, numbers.Real)
+            or not np.isfinite(max_calibration_standard_errors)
+            or max_calibration_standard_errors <= 0
+        ):
+            raise ValueError("Calibration standard-error limit must be positive.")
+        if (
+            isinstance(memory_budget_bytes, bool)
+            or not isinstance(memory_budget_bytes, int)
+            or memory_budget_bytes < 2
+        ):
+            raise ValueError("Bulk memory budget must be a positive integer.")
+        if control is not None and not isinstance(control, PCGControl):
+            raise TypeError("Bulk variance requires PCGControl.")
+        if control is None:
+            control = PCGControl()
+        system_budget = memory_budget_bytes // 2
+        geometry = self._predictor._operator_geometry
+        assert geometry is not None
+        model = prepare_operator_model(
+            parse_formula(self.formula),
+            training_source,
+            control=OperatorPreparationControl(
+                self._batch_rows,
+                system_budget,
+                max(1, geometry.raw_width),
+            ),
+        )
+        if (
+            model.source_fingerprint != self._operator_source_fingerprint
+            or model.source_replay_digest != self._operator_source_replay_digest
+            or model.n_coef != len(self.coefficients)
+        ):
+            raise RuntimeError("Replayed operator model differs from the accepted fit.")
+        state = FrozenOperatorWorkingState(
+            model,
+            self.family,
+            np.asarray(self.coefficients, dtype=np.float64),
+            system_budget,
+            system_budget,
+        )
+        system = FrozenScanSystem(
+            model,
+            training_source,
+            np.log(self.smoothing_params),
+            curvature_from_rows=state.fisher_curvature,
+            memory_budget_bytes=system_budget,
+        )
+        provider = BulkOperatorVariance(
+            system,
+            scale=scale,
+            memory_budget_bytes=memory_budget_bytes,
+            probes=probes,
+            seed=seed,
+            replay_preparation_scans=model.completed_preparation_scans,
+            control=control,
+        ).build()
+        calibration = provider.calibrate(calibration_data)
+        if calibration.maximum_absolute_deviate > max_calibration_standard_errors:
+            raise RuntimeError(
+                "Bulk Fisher approximation failed selected exact calibration: "
+                "chi-square pivot at "
+                f"{calibration.maximum_absolute_deviate:.3g} equivalent standard "
+                "normal deviates."
+            )
+        return provider, calibration
+
+    def materialize_covariance(self, memory_budget_bytes: int) -> np.ndarray:
+        """Explicitly build public ``Vp`` only after a caller budgets it."""
+        if (
+            isinstance(memory_budget_bytes, bool)
+            or not isinstance(memory_budget_bytes, int)
+            or memory_budget_bytes <= 0
+        ):
+            raise ValueError("memory_budget_bytes must be a positive integer.")
+        if self._predictor.Vp is not None:
+            return self._predictor.Vp
+        L = self._predictor._fisher_factor
+        qr_factor = self._predictor._fisher_qr_factor
+        if L is None and qr_factor is None:
+            raise RuntimeError("No covariance provider was retained for this result.")
+        p = L.shape[0] if L is not None else qr_factor.n_coef
+        # The legacy lower-factor path retains three p-by-p work arrays.
+        # QR covariance action additionally needs projection/permutation,
+        # triangular, reconstruction, and output buffers at the same time.
+        required_multiplier = 3 if L is not None else 12
+        required = required_multiplier * p * p * np.dtype(float).itemsize
+        if required > memory_budget_bytes:
+            raise MemoryError(
+                f"Vp materialization requires {required} workspace bytes, "
+                "exceeding budget "
+                f"{memory_budget_bytes} bytes."
+            )
+        if L is not None:
+            Z = sla.solve_triangular(L, np.eye(p), lower=True)
+            covariance = self._predictor._fisher_scale * (Z.T @ Z)
+        else:
+            covariance = self._predictor._fisher_scale * qr_factor.hessian_inverse(
+                np.eye(p)
+            )
+        for start, stop, kind, values in self._predictor._fisher_transforms:
+            if kind == "dense":
+                covariance[start:stop, :] = values @ covariance[start:stop, :]
+                covariance[:, start:stop] = covariance[:, start:stop] @ values.T
+            elif kind == "diagonal":
+                covariance[start:stop, :] *= values[:, None]
+                covariance[:, start:stop] *= values[None, :]
+        covariance.setflags(write=False)
+        return covariance
+
+    @classmethod
+    def _from_discrete(
+        cls,
+        *,
+        fit_state: DiscreteFit,
+        family: ExponentialFamily,
+        formula: str,
+        method: str,
+        control: FitControl,
+        supplied_smoothing_params: npt.ArrayLike | None = None,
+    ) -> GAMPredictionResult:
+        """Build a row-free result for any discrete-route fit state.
+
+        ``supplied_smoothing_params`` is the caller's ``sp``; it is reported
+        verbatim (see :func:`_report_smoothing_params`).
+        """
+        policy = control.discretization
+        assert policy is not None
+        # Record the policy prediction actually follows; the metadata also
+        # keeps the requested one when they differ.
+        prediction_policy = (
+            policy.prediction_policy
+            if fit_state.discretization is None
+            else fit_state.discretization.prediction_policy
+        )
+        fitted_family = copy.deepcopy(family)
+        if fit_state.log_theta is not None:
+            # The extended family's final (fixed or estimated) theta.
+            fitted_family.put_theta(np.array([fit_state.log_theta]))
+        predictor = GAMPredictor(
+            coefficients=fit_state.coefficients,
+            Vp=fit_state.covariance,
+            family=fitted_family,
+            formula=formula,
+            offset_was_nonzero=fit_state.offset_was_nonzero,
+            _predict_spec=fit_state.predict_spec,
+            _fisher_factor=fit_state.fisher_factor,
+            _fisher_qr_factor=fit_state.fisher_qr_factor,
+            _fisher_transforms=fit_state.fisher_transforms,
+            _fisher_scale=fit_state.scale,
+            _output_budget_bytes=control.output_budget_bytes,
+            _memory_budget_bytes=control.memory_budget_bytes,
+            _prediction_policy=prediction_policy,
+            _request_compression=fit_state.request_compression,
+        )
+        return cls(
+            _predictor=predictor,
+            deviance=fit_state.deviance,
+            score=fit_state.score,
+            scale=fit_state.scale,
+            theta=None
+            if fit_state.log_theta is None
+            else float(np.exp(fit_state.log_theta)),
+            smoothing_params=_report_smoothing_params(
+                fit_state.smoothing_params, supplied_smoothing_params
+            ),
+            edf_total=fit_state.edf_total,
+            converged=fit_state.converged,
+            n_iter=fit_state.scale_iterations,
+            convergence_info=_discrete_convergence_info(fit_state, family),
+            method=method,
+            lambda_strategy=fit_state.smoothing_strategy,
+            execution_path=(
+                "jax_actions_performance_iteration_numpy_postestimation"
+                if fit_state.performance_iteration
+                else "jax_actions_numpy_solve"
+                if fit_state.smoothing_strategy == "fixed"
+                else "jax_actions_working_model_numpy_postestimation"
+            ),
+            execution_route="discrete",
+            execution_fallback_reason=None,
+            smoothing_strategy=fit_state.smoothing_strategy,
+            discretization_strategy="mgcv_range_grid",
+            prediction_policy=prediction_policy,
+            discretization=fit_state.discretization,
+            source_scans=fit_state.fitting_source_scans,
+            batches_scanned=fit_state.fitting_batches_scanned,
+            known_workspace_bytes=fit_state.memory_plan.fit_workspace_bytes,
+            working_model_proposal_evaluations=fit_state.proposal_evaluations,
+            fit_peak_bytes=fit_state.memory_plan.fit_peak_bytes,
+            fit_memory_budget_bytes=fit_state.memory_plan.budget_bytes,
+            n=fit_state.n_obs,
+            _batch_rows=control.batch_rows,
+        )
+
+    @classmethod
+    def _from_operator_fit(
+        cls,
+        *,
+        fitted: OperatorFitResult,
+        sp: np.ndarray,
+        formula: str,
+        method: str,
+        control: FitControl,
+    ) -> GAMPredictionResult:
+        """Retain compact prediction geometry and truthful available scalars."""
+        from jaxgam.inference.operator_geometry import OperatorPredictionGeometry
+
+        model = fitted.model
+        required = (
+            2 * model.metadata_bound_bytes + 32 * model.n_coef + 8192 + 16 * len(sp)
+        )
+        if required > control.memory_budget_bytes:
+            raise MemoryError("Operator result ownership exceeds its memory budget.")
+        geometry = OperatorPredictionGeometry(
+            model.modest.predict_spec,
+            model.modest_columns,
+            model.random_effects,
+            model.n_coef,
+            model.batch_rows,
+            model.modest_raw_width,
+            model.metadata_bound_bytes,
+        )
+        predictor = GAMPredictor(
+            coefficients=fitted.coefficients,
+            Vp=None,
+            family=fitted.family,
+            formula=formula,
+            offset_was_nonzero=fitted.offset_was_nonzero,
+            _predict_spec=geometry.modest,
+            _operator_geometry=geometry,
+            _output_budget_bytes=control.output_budget_bytes,
+            _memory_budget_bytes=control.memory_budget_bytes,
+        )
+        snapshot = fitted.family.execution_parameter_snapshot()
+        # Pinned nb() reports getTheta(TRUE), the C library's exp of its log.
+        theta = (
+            float(libm_exp(np.asarray(snapshot.log_theta[:1]))[0])
+            if snapshot.log_theta
+            else None
+        )
+        return cls(
+            _predictor=predictor,
+            deviance=fitted.deviance,
+            score=None,
+            scale=1.0 if fitted.family.scale_known else None,
+            theta=theta,
+            smoothing_params=_report_smoothing_params(sp, sp),
+            edf_total=None,
+            converged=fitted.converged,
+            n_iter=fitted.n_iter,
+            convergence_info=fitted.convergence_info,
+            method=method,
+            lambda_strategy="fixed",
+            execution_path="jax",
+            execution_route="operator",
+            operator_diagnostics=fitted.diagnostics,
+            # Fit work only, as on the streamed routes; preparation is in
+            # operator_diagnostics.preparation_*.
+            source_scans=fitted.diagnostics.source.started_scans,
+            batches_scanned=fitted.diagnostics.source.yielded_batches,
+            _operator_source_fingerprint=model.source_fingerprint,
+            _operator_source_replay_digest=model.source_replay_digest,
+            _operator_family_static_config=fitted.family.execution_static_config(),
+            _operator_family_parameter_snapshot=snapshot,
+            n=model.n_obs,
+            _batch_rows=control.batch_rows,
+        )
+
+    @classmethod
+    def _from_stream_fit(
+        cls,
+        *,
+        stream_state: StreamFitState,
+        prepared: PreparedModel,
+        metadata: PreparedFittingMetadata,
+        family: ExponentialFamily,
+        formula: str,
+        method: str,
+        control: FitControl,
+        execution_route: str = "stream",
+        selected_fit: ConsumedFitResult | None = None,
+        lambda_strategy: str = "fixed",
+        source_scans: int | None = None,
+        batches_scanned: int | None = None,
+        known_workspace_bytes: int | None = None,
+        exact_optimizer_diagnostics: StreamExactOptimizerDiagnostics | None = None,
+        supplied_smoothing_params: npt.ArrayLike | None = None,
+    ) -> GAMPredictionResult:
+        """Build compact prediction state directly from row-free stream state.
+
+        ``selected_fit`` supplies outer-optimizer scalar provenance while the
+        row-free ``stream_state`` continues to own coefficient/factor state.
+        Omitting it preserves the established fixed-sp result byte semantics.
+        ``supplied_smoothing_params`` is the caller's ``sp``; it is reported
+        verbatim (see :func:`_report_smoothing_params`).
+        """
+        from jaxgam.fitting.reml import (
+            reml_criterion,
+            reml_criterion_from_penalized_deviance,
+            reml_criterion_with_logdet_hessian,
+        )
+        from jaxgam.fitting.signed_qr import SignedQRCoefficientFactor
+        from jaxgam.fitting.state import PivotedQRCoefficientFactor
+
+        coefficients_fit = to_numpy(stream_state.coefficients)
+        coefficients = _prepared_transform_coefficients_cpu(prepared, coefficients_fit)
+        scale = float(to_numpy(stream_state.scale))
+        phi = 1.0 if family.scale_known else scale
+        if isinstance(
+            stream_state.coefficient_factor, SignedQRCoefficientFactor
+        ) and not bool(to_numpy(stream_state.coefficient_factor.score_admissible)):
+            raise FloatingPointError(
+                "Signed observed score determinant is inadmissible."
+            )
+        if isinstance(stream_state.coefficient_factor, SignedQRCoefficientFactor):
+            # gam.fit3 retains the final candidate's penalty in its score
+            # even when domain recovery returns the prior feasible beta.
+            score = reml_criterion_from_penalized_deviance(
+                stream_state.log_lambda,
+                stream_state.xtwx,
+                stream_state.penalized_deviance,
+                stream_state.saturated_loglik,
+                metadata.penalty_structure,
+                stream_state.score_scale,
+                metadata.total_penalty_null_dim,
+                metadata.singleton_sp_indices,
+                metadata.singleton_ranks,
+                metadata.singleton_eig_constants,
+                metadata.multi_block_sp_indices,
+                metadata.multi_block_ranks,
+                metadata.multi_block_proj_S,
+                metadata.rank_deficit,
+                log_det_hessian=stream_state.coefficient_factor.logdet_hessian(),
+            )
+        elif isinstance(stream_state.coefficient_factor, PivotedQRCoefficientFactor):
+            score = reml_criterion_with_logdet_hessian(
+                stream_state.log_lambda,
+                stream_state.coefficients,
+                stream_state.deviance,
+                stream_state.saturated_loglik,
+                metadata.penalty_structure,
+                stream_state.score_scale,
+                metadata.total_penalty_null_dim,
+                metadata.singleton_sp_indices,
+                metadata.singleton_ranks,
+                metadata.singleton_eig_constants,
+                metadata.multi_block_sp_indices,
+                metadata.multi_block_ranks,
+                metadata.multi_block_proj_S,
+                stream_state.coefficient_factor.logdet_hessian(),
+                metadata.rank_deficit,
+            )
+        else:
+            # Preserve the legacy Cholesky/default arithmetic exactly.
+            score = reml_criterion(
+                stream_state.log_lambda,
+                stream_state.xtwx,
+                stream_state.coefficients,
+                stream_state.deviance,
+                stream_state.saturated_loglik,
+                metadata.penalty_structure,
+                stream_state.score_scale,
+                metadata.total_penalty_null_dim,
+                metadata.singleton_sp_indices,
+                metadata.singleton_ranks,
+                metadata.singleton_eig_constants,
+                metadata.multi_block_sp_indices,
+                metadata.multi_block_ranks,
+                metadata.multi_block_proj_S,
+                metadata.rank_deficit,
+            )
+        theta = None
+        smoothing_params = np.exp(to_numpy(stream_state.log_lambda))
+        edf_total = float(to_numpy(stream_state.edf))
+        converged = stream_state.converged
+        n_iter = stream_state.n_iter
+        convergence_info = (
+            "fixed sp streamed PIRLS"
+            if stream_state.converged
+            else "fixed sp streamed PIRLS did not converge"
+        )
+        optimizer_diagnostics = None
+        if selected_fit is not None:
+            if selected_fit.pirls_result is not stream_state:
+                raise ValueError("selected streamed fit does not own the final state")
+            selected_scale = float(to_numpy(selected_fit.scale))
+            selected_score = float(to_numpy(selected_fit.score))
+            selected_smoothing = to_numpy(selected_fit.smoothing_params)
+            if (
+                not np.isfinite(selected_scale)
+                or selected_scale <= 0.0
+                or not np.isfinite(selected_score)
+                or selected_smoothing.shape != stream_state.log_lambda.shape
+                or not np.all(np.isfinite(selected_smoothing))
+                or np.any(selected_smoothing <= 0.0)
+            ):
+                raise FloatingPointError("selected streamed fit scalars are invalid")
+            scale = selected_scale
+            phi = 1.0 if family.scale_known else scale
+            score = selected_score
+            theta = selected_fit.theta
+            smoothing_params = selected_smoothing
+            edf_total = float(to_numpy(selected_fit.edf))
+            if not np.isfinite(edf_total) or edf_total < 0.0:
+                raise FloatingPointError("selected streamed fit EDF is invalid")
+            converged = selected_fit.converged
+            n_iter = selected_fit.n_iter
+            convergence_info = selected_fit.convergence_info
+            optimizer_diagnostics = getattr(selected_fit, "optimizer_diagnostics", None)
+        factor = None
+        qr_factor = None
+        transforms: tuple[tuple[int, int, str, np.ndarray], ...] = ()
+        covariance = None
+        if control.uncertainty != "none":
+            if isinstance(
+                stream_state.fisher_coefficient_factor, PivotedQRCoefficientFactor
+            ):
+                from jaxgam.inference.predictor import PivotedQRFisherFactor
+
+                tagged = stream_state.fisher_coefficient_factor
+                qr_factor = PivotedQRFisherFactor(
+                    to_numpy(tagged.R),
+                    to_numpy(tagged.pivots),
+                    to_numpy(tagged.keep),
+                    tagged.original_n_coef,
+                )
+            else:
+                factor = to_numpy(stream_state.fisher_factor)
+            transforms = _prepared_fisher_transforms(prepared)
+            if control.uncertainty == "covariance":
+                p = factor.shape[0] if factor is not None else qr_factor.n_coef
+                # Keep the established lower-Cholesky contract exact. QR's
+                # CPU action has several simultaneous p-by-p index/solve
+                # buffers, so its compact covariance materialization needs a
+                # deliberately conservative separate budget.
+                required_multiplier = 3 if factor is not None else 12
+                required = required_multiplier * p * p * np.dtype(float).itemsize
+                if required > control.memory_budget_bytes:
+                    raise MemoryError(
+                        f"Vp requires {required} bytes, exceeding "
+                        "FitControl.memory_budget_bytes="
+                        f"{control.memory_budget_bytes}."
+                    )
+                if factor is not None:
+                    Z = sla.solve_triangular(factor, np.eye(p), lower=True)
+                    covariance_fit = phi * (Z.T @ Z)
+                else:
+                    covariance_fit = phi * qr_factor.hessian_inverse(np.eye(p))
+                covariance = _prepared_transform_covariance_cpu(
+                    prepared, covariance_fit
+                )
+                factor = None
+                # Retain the matched QR root alongside requested Vp: forming
+                # X @ Vp @ X.T loses its conditioning advantage for SEs.
+                if qr_factor is None:
+                    transforms = ()
+        offset_reduction = prepared.fitting.response
+        predictor = GAMPredictor(
+            coefficients=coefficients,
+            Vp=covariance,
+            family=copy.deepcopy(family),
+            formula=formula,
+            offset_was_nonzero=not np.allclose(
+                (offset_reduction.offset_min, offset_reduction.offset_max), 0.0
+            ),
+            _predict_spec=prepared.predict_spec,
+            _fisher_factor=factor,
+            _fisher_qr_factor=qr_factor,
+            _fisher_transforms=transforms,
+            _fisher_scale=phi,
+            _output_budget_bytes=control.output_budget_bytes,
+            _memory_budget_bytes=control.memory_budget_bytes,
+        )
+        return cls(
+            _predictor=predictor,
+            deviance=float(to_numpy(stream_state.deviance)),
+            score=float(to_numpy(score)),
+            scale=scale,
+            theta=theta,
+            smoothing_params=_report_smoothing_params(
+                smoothing_params, supplied_smoothing_params
+            ),
+            edf_total=edf_total,
+            converged=converged,
+            n_iter=n_iter,
+            convergence_info=convergence_info,
+            method=method,
+            lambda_strategy=lambda_strategy,
+            execution_path="jax",
+            execution_route=execution_route,
+            execution_fallback_reason=None,
+            score_scale=float(to_numpy(stream_state.score_scale)),
+            source_scans=(
+                stream_state.source_scans if source_scans is None else source_scans
+            ),
+            batches_scanned=(
+                stream_state.batches_scanned
+                if batches_scanned is None
+                else batches_scanned
+            ),
+            known_workspace_bytes=known_workspace_bytes,
+            optimizer_diagnostics=optimizer_diagnostics,
+            exact_optimizer_diagnostics=exact_optimizer_diagnostics,
+            n=prepared.n_obs,
+            _batch_rows=control.batch_rows,
+        )
+
+
+@dataclass(frozen=True)
 class GAMResults(_FitDiagnostics):
     """Results from a fitted GAM.
 
@@ -183,7 +1139,7 @@ class GAMResults(_FitDiagnostics):
     @classmethod
     def _from_fit(
         cls,
-        fit_result: NewtonResult,
+        fit_result: ConsumedFitResult,
         setup: ModelSetup,
         spec: FormulaSpec,
         data: pd.DataFrame | dict,
@@ -192,8 +1148,12 @@ class GAMResults(_FitDiagnostics):
         lambda_strategy: str,
         formula: str,
         method: str,
-        result_mode: Literal["full", "inference"],
-    ) -> GAMResults | GAMInferenceResult:
+        result_mode: Literal["full", "inference", "prediction"],
+        control: FitControl | None = None,
+        execution_route: str = "dense",
+        execution_fallback_reason: str | None = None,
+        supplied_smoothing_params: npt.ArrayLike | None = None,
+    ) -> GAMResults | GAMInferenceResult | GAMPredictionResult:
         """Construct the requested result materialization from raw fit output.
 
         Computes derived quantities (covariance, EDF, null deviance),
@@ -204,8 +1164,8 @@ class GAMResults(_FitDiagnostics):
 
         Parameters
         ----------
-        fit_result : NewtonResult
-            Raw output from Newton optimization or fixed-sp PIRLS.
+        fit_result : ConsumedFitResult
+            Optimizer-neutral output from smoothing selection or fixed-sp PIRLS.
         setup : ModelSetup
             Phase 1 model setup.
         spec : FormulaSpec
@@ -225,8 +1185,16 @@ class GAMResults(_FitDiagnostics):
         result_mode : {"full", "inference"}
             Whether to retain full training-backed state or lean prediction
             state only.
+        supplied_smoothing_params : array-like, optional
+            The caller's ``sp``, reported verbatim (see
+            :func:`_report_smoothing_params`); ``None`` when estimated.
         """
         pr = fit_result.pirls_result
+        control = FitControl() if control is None else control
+        smoothing_params = _report_smoothing_params(
+            to_numpy(fit_result.smoothing_params), supplied_smoothing_params
+        )
+        optimizer_diagnostics = getattr(fit_result, "optimizer_diagnostics", None)
 
         # Snapshot after Newton has synchronized any fitted family parameters
         # (notably NB theta) into the fitting family instance.
@@ -235,34 +1203,99 @@ class GAMResults(_FitDiagnostics):
         # Phase 2→3: transfer to NumPy
         coefficients = to_numpy(pr.coefficients)
         scale = float(to_numpy(fit_result.scale))
-        edf_total = float(to_numpy(fit_result.edf))
+        stable_rotation = getattr(fit_result, "stable_rotation", ())
+
+        # This must precede every dense covariance/EDF and row-output transfer.
+        # The optimizer already computed total Fisher EDF for unknown-scale
+        # reporting; retain that scalar only, not diagnostic vectors.
+        if result_mode == "prediction":
+            coefficients = _transform_coefficients_cpu(fd, coefficients)
+            phi = 1.0 if family_snapshot.scale_known else scale
+            factor = None
+            transforms: tuple[tuple[int, int, str, np.ndarray], ...] = ()
+            covariance = None
+            if control.uncertainty != "none":
+                factor = to_numpy(pr.L_fisher)
+                transforms = _factor_transforms(fd, stable_rotation)
+                if control.uncertainty == "covariance":
+                    p = factor.shape[0]
+                    required = 3 * p * p * np.dtype(float).itemsize
+                    if required > control.memory_budget_bytes:
+                        raise MemoryError(
+                            f"Vp requires {required} bytes, exceeding "
+                            "FitControl.memory_budget_bytes="
+                            f"{control.memory_budget_bytes}."
+                        )
+                    Z = sla.solve_triangular(factor, np.eye(p), lower=True)
+                    covariance = phi * _rotate_covariance(Z.T @ Z, stable_rotation)
+                    covariance = _transform_covariance_cpu(fd, covariance)
+                    # Dense covariance is the provider in this explicit mode;
+                    # do not retain its factor or local transforms as well.
+                    factor = None
+                    transforms = ()
+            predictor = GAMPredictor(
+                coefficients=coefficients,
+                Vp=covariance,
+                family=family_snapshot,
+                formula=formula,
+                offset_was_nonzero=_offset_was_nonzero(setup),
+                _predict_spec=setup._lazy_predict_spec(),
+                _fisher_factor=factor,
+                _fisher_transforms=transforms,
+                _fisher_scale=phi,
+                _output_budget_bytes=control.output_budget_bytes,
+                _memory_budget_bytes=control.memory_budget_bytes,
+            )
+            return GAMPredictionResult(
+                _predictor=predictor,
+                deviance=float(to_numpy(pr.deviance)),
+                score=float(to_numpy(fit_result.score)),
+                scale=scale,
+                theta=fit_result.theta,
+                smoothing_params=smoothing_params,
+                edf_total=float(to_numpy(fit_result.edf)),
+                converged=fit_result.converged,
+                n_iter=fit_result.n_iter,
+                convergence_info=fit_result.convergence_info,
+                method=method,
+                lambda_strategy=lambda_strategy,
+                execution_path="jax",
+                execution_route=execution_route,
+                execution_fallback_reason=execution_fallback_reason,
+                optimizer_diagnostics=optimizer_diagnostics,
+                n=setup.n_obs,
+                _batch_rows=control.batch_rows,
+            )
 
         # Use Fisher-weighted quantities for EDF and Bayesian covariance.
         # For standard families Fisher = Newton; for extended families (NB)
         # these are recomputed post-convergence with expected weights
         # (R's gdi2, gdi.c:2262-2294, gam.fit4.r:564).
         L = to_numpy(pr.L_fisher)
+        edf_total = float(to_numpy(fit_result.edf))
         XtWX = to_numpy(pr.XtWX_fisher)
 
         # Compute H^{-1} via Cholesky solve (matches R's chol2inv).
         # O(p^3) but p is typically small (< 200 for GAMs).
         p = L.shape[0]
         Z = sla.solve_triangular(L, np.eye(p), lower=True)
-        H_inv = Z.T @ Z
+        # A fit in gam.reparam coordinates: R's rV <- T %*% rV (gam.fit3.r 813).
+        H_inv = _rotate_covariance(Z.T @ Z, stable_rotation)
 
         # Per-smooth EDF via hat matrix F = H^{-1} @ XtWX
-        # (invariant under repara -- cyclic trace with block-diagonal D)
-        F = H_inv @ XtWX
+        # (invariant under repara -- cyclic trace with block-diagonal D).
+        # A structurally full-rank dense fit carries F from the QR of its
+        # Fisher system (gdi's P K' route), formed without normal equations.
+        F = H_inv @ XtWX if pr.fisher_hat is None else to_numpy(pr.fisher_hat)
         per_smooth_edf = _compute_per_smooth_edf(F, setup.smooth_info)
         # edf1 = 2*edf - trace(F^2): alternative EDF for significance testing
         # (R's gam.fit3.post.proc, mgcv.r line 966)
         per_smooth_edf1 = _compute_per_smooth_edf1(F, setup.smooth_info)
 
-        # Back-transform from Sl.setup reparameterized space
-        if fd.repara_D is not None:
-            D = to_numpy(fd.repara_D)
-            coefficients = D @ coefficients
-            H_inv = D @ H_inv @ D.T
+        # Phase 3 stays on CPU. Block transforms retain covariance cross-blocks
+        # without moving a p-by-p matrix back to the accelerator.
+        coefficients = _transform_coefficients_cpu(fd, coefficients)
+        H_inv = _transform_covariance_cpu(fd, H_inv)
 
         # Bayesian covariance
         phi = 1.0 if family_snapshot.scale_known else scale
@@ -277,7 +1310,6 @@ class GAMResults(_FitDiagnostics):
         mu = to_numpy(pr.mu)
         eta = to_numpy(pr.eta)
         deviance = float(to_numpy(pr.deviance))
-        smoothing_params = to_numpy(fit_result.smoothing_params)
 
         diagnostics = {
             "edf": per_smooth_edf,
@@ -295,6 +1327,9 @@ class GAMResults(_FitDiagnostics):
             "method": method,
             "lambda_strategy": lambda_strategy,
             "execution_path": "jax",
+            "execution_route": execution_route,
+            "execution_fallback_reason": execution_fallback_reason,
+            "optimizer_diagnostics": optimizer_diagnostics,
             "n": setup.n_obs,
         }
 
@@ -748,3 +1783,38 @@ def _extract_training_data(
             training[name] = np.asarray(col, dtype=np.float64).ravel()
 
     return training
+
+
+def _discrete_convergence_info(
+    fit_state: DiscreteFit, family: ExponentialFamily
+) -> str:
+    """Name the discrete strategy that actually ran and its finite outcome."""
+    outcome = "converged" if fit_state.converged else "did not converge"
+    if fit_state.performance_iteration:
+        smoothing = (
+            "fixed sp"
+            if fit_state.smoothing_strategy == "fixed"
+            else "working-model REML"
+        )
+        if fit_state.log_theta is None:
+            weights = "Fisher"
+        else:
+            estimated = getattr(family, "n_theta", 0) > 0
+            weights = "dDeta Newton"
+            smoothing += ", estimated theta" if estimated else ", fixed theta"
+        return (
+            f"{family.family_name} discrete {weights} performance iteration "
+            f"({smoothing}) {outcome} after {fit_state.scale_iterations} "
+            f"iterations, {fit_state.proposal_evaluations} proposals and "
+            f"{fit_state.coefficient_halvings} coefficient step halvings"
+        )
+    if fit_state.smoothing_strategy == "fixed":
+        return (
+            "fixed sp discrete Gaussian direct solve with pinned "
+            f"scale iteration ({fit_state.scale_iterations} iterations)"
+        )
+    return (
+        f"Gaussian working-model REML {outcome} after "
+        f"{fit_state.scale_iterations} iterations and "
+        f"{fit_state.proposal_evaluations} proposals"
+    )

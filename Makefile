@@ -45,10 +45,200 @@ test-file: docker-build ## run Docker tests for one file: make test-file FILE=te
 	@test -n "$(FILE)" || (echo "Usage: make test-file FILE=tests/test_smooths/test_tprs.py" && exit 1)
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest $(FILE) -x --tb=short -v
 
+.PHONY: test-discrete
+test-discrete: docker-build ## run exact discrete representation/operator tests in Docker
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_data/test_discretize.py tests/test_formula/test_discrete_design.py \
+		tests/test_fitting/test_discrete_ops.py -x --tb=short -v
+
+.PHONY: test-continuous-discrete
+test-continuous-discrete: docker-build ## run continuous range-grid and exact-index tests in Docker
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_data/test_discretize.py \
+		tests/test_data/test_continuous_discretize.py \
+		tests/test_data/test_continuous_frame.py \
+		tests/test_formula/test_continuous_setup.py \
+		tests/test_formula/test_continuous_design.py \
+		tests/test_formula/test_continuous_bam_oracle.py \
+		tests/test_execution/test_discrete.py \
+		tests/test_execution/test_discrete_score.py \
+		tests/test_fitting/test_working_model.py -x --tb=short -v
+
+.PHONY: test-pivoted-cholesky
+test-pivoted-cholesky: docker-build ## run pinned-provider DPSTRF pivot/rank/factor gates in pinned Docker
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest tests/test_smooths/test_source_lapack.py -k pivoted_cholesky -x --tb=short -v
+
+.PHONY: test-efs-factor
+test-efs-factor: docker-build ## run exact factor-action EFS contractions and dense kernel compatibility
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_fitting/test_efs_factor.py tests/test_fitting/test_efs.py -x --tb=short -q
+
+.PHONY: test-efs-stream-execution
+test-efs-stream-execution: docker-build ## run complete streamed EFS loop ownership/count/JIT gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_execution/test_efs_stream.py tests/test_execution/test_efs_stream_start.py \
+		tests/test_validation_matrix.py::test_public_streamed_default_start_efs_matches_pinned_selected_fit --tb=short
+
+.PHONY: test-efs-stream-start
+test-efs-stream-start: docker-build ## run bounded streamed EFS default-start reductions and source gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest tests/test_execution/test_efs_stream_start.py tests/test_execution/test_efs_stream_provider.py tests/test_execution/test_null_coefficient.py --tb=short
+
+.PHONY: test-efs-stream-provider
+test-efs-stream-provider: docker-build ## run actual streamed EFS provider, source attribution and controller compatibility
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_execution/test_efs_stream_provider.py \
+		tests/test_execution/test_efs_provider.py \
+		tests/test_fitting/test_efs_factor.py \
+		tests/test_execution/test_nb_theta_stream.py -x --tb=short -q
+
+.PHONY: test-efs-provider
+test-efs-provider: docker-build ## run provider sequence and dense EFS compatibility gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_execution/test_efs_provider.py \
+		tests/test_execution/test_efs.py \
+		tests/test_execution/test_efs_public_api.py \
+		tests/test_execution/test_efs_regular_links.py \
+		tests/test_execution/test_efs_nb_links.py -x --tb=short -q
+
+.PHONY: test-nb-efs-theta
+test-nb-efs-theta: docker-build ## run streamed conditional theta/PIRLS source gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_fitting/test_nb_theta_stream.py \
+		tests/test_execution/test_nb_theta_stream.py \
+		tests/test_execution/test_nb_stream.py -x --tb=short -q
+
+.PHONY: test-nb-stream
+test-nb-stream: docker-build ## run internal fixed/trial-theta NB coefficient gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_execution/test_nb_stream.py \
+		tests/test_fitting/test_nb_stream_kernels.py -x --tb=short -q
+
+.PHONY: test-nb-stream-memory
+test-nb-stream-memory: docker-build ## record bounded fixed-B/p NB coefficient memory
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_execution/test_nb_stream.py \
+		-k warm_coefficient_memory --log-cli-level=INFO -x --tb=short -q
+
+.PHONY: test-operator-local
+test-operator-local: ## run indexed operator preparation/action tests locally
+	$(UV) run $(UV_RUN_FLAGS) pytest tests/test_formula/test_operator_prepare.py \
+		tests/test_formula/test_operator_modest.py tests/test_fitting/test_operators.py --tb=short -v
+
+.PHONY: test-operator
+test-operator: docker-build ## run pinned indexed operator preparation/action tests
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_formula/test_operator_prepare.py tests/test_formula/test_operator_modest.py tests/test_fitting/test_operators.py \
+		--tb=short -v
+
+.PHONY: test-iterative-local
+test-iterative-local: ## run frozen PCG/preconditioner kernel tests locally
+	$(UV) run $(UV_RUN_FLAGS) pytest tests/test_fitting/test_iterative.py \
+		tests/test_fitting/test_preconditioners.py tests/test_execution/test_operator.py \
+		--tb=short -v
+
+.PHONY: test-iterative
+test-iterative: docker-build ## run pinned frozen operator PCG/preconditioner tests
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_fitting/test_iterative.py tests/test_fitting/test_preconditioners.py \
+		tests/test_execution/test_operator.py tests/test_formula/test_operator_prepare.py \
+		tests/test_fitting/test_operators.py --tb=short -v
+
 .PHONY: test-cov
 test-cov: docker-build ## run tests with coverage in Docker
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
 		uv run pytest --cov --cov-report=term-missing --cov-fail-under=80
+
+.PHONY: test-cov-ci
+test-cov-ci: ## run CI coverage using an already-built Docker image
+	mkdir -p coverage
+	docker run --rm -v $(CURDIR)/coverage:/coverage $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest --tb=short --cov=jaxgam --cov-branch \
+		--cov-report=xml:/coverage/coverage.xml
+
+# CI runs the suite as TEST_SHARDS shards on parallel runners. A test's shard
+# is a fixed function of its node id (tests/sharding.py), so the shards run
+# every test exactly once. Each shard only records coverage data; the 80%
+# threshold applies to the shards combined (coverage-combine-ci).
+TEST_SHARD ?= 1
+TEST_SHARDS ?= 8
+
+.PHONY: test-cov-shard-ci
+test-cov-shard-ci: ## run one shard of the suite, recording coverage data, in a built image: make test-cov-shard-ci TEST_SHARD=3 TEST_SHARDS=8
+	mkdir -p coverage
+	docker run --rm -v $(CURDIR)/coverage:/coverage \
+		-e JAXGAM_TEST_SHARD=$(TEST_SHARD)/$(TEST_SHARDS) \
+		-e COVERAGE_FILE=/coverage/coverage-data.$(TEST_SHARD) \
+		$(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest --tb=short --durations=25 --cov=jaxgam --cov-branch \
+		--cov-report= --cov-fail-under=0
+
+.PHONY: coverage-combine-ci
+coverage-combine-ci: ## combine the shards' coverage data in a built image, write coverage/coverage.xml and enforce the threshold
+	docker run --rm -v $(CURDIR)/coverage:/coverage $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		sh -c 'uv run coverage combine /coverage/coverage-data.* \
+			&& uv run coverage xml -o /coverage/coverage.xml \
+			&& uv run coverage report --skip-covered --skip-empty'
+
+.PHONY: test-gaussian-ci
+test-gaussian-ci: ## run focused Gaussian CI diagnostics using a built image
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest tests/test_validation_matrix.py -k gp_2d-gaussian -s -x --tb=short
+
+.PHONY: test-platform-sensitive-ci
+test-platform-sensitive-ci: ## run CPU-sensitive tests in a built image, reporting CPU and OpenBLAS cores first
+	docker run --rm -e OPENBLAS_NUM_THREADS=1 -e OMP_NUM_THREADS=1 $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest -p no:cacheprovider -m platform_sensitive --tb=short -rfE
+
+.PHONY: test-efs-recovery-ci
+test-efs-recovery-ci: ## run focused EFS retained-start recovery using a built image
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest \
+		tests/test_fitting/test_efs_theta_pirls.py::test_efs_retained_start_recovery_matches_pinned_source_once \
+		tests/test_fitting/test_efs_theta_pirls.py::test_efs_theta_pirls_nonsaturated_inner_contract_matches_pinned_r[weighted_ridge] \
+		-s -x --tb=short
+
+.PHONY: test-nb-public-ci
+test-nb-public-ci: ## run public fixed-sp NB theta modes and pinned roundoff ownership in a built image
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest \
+		tests/test_validation_matrix.py::test_public_fixed_sp_nb_theta_modes_pinned_r \
+		tests/test_execution/test_nb_reml_optimizer.py::test_nb_optimizer_dynamic_pinned_rho_matches_tight_pinned_source_state \
+		tests/test_execution/test_nb_roundoff_completion.py \
+		-s -x --tb=short
+
+.PHONY: test-regular-public-ci
+test-regular-public-ci: ## run public fixed-sp regular links, smooth scale parity and Gamma arithmetic on a built image
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest \
+		tests/test_validation_matrix.py::test_public_fixed_sp_regular_noncanonical_pinned_r \
+		tests/test_validation_matrix.py::test_public_fixed_nonzero_sp_regular_smooth_pinned_r \
+		tests/test_validation_matrix.py::test_public_fixed_nonzero_sp_regular_smooth_interior_pinned_r \
+		tests/test_execution/test_regular_scale_curvature.py \
+		tests/test_families.py::TestDevianceResidsVsR::test_gamma_direct_deviance_near_mean_is_stable_and_jitted \
+		tests/test_families.py::TestDevianceResidsVsR::test_gamma_direct_deviance_keeps_extreme_source_ratio_and_clamp \
+		-s -x --tb=short
+
+.PHONY: test-pr82-nb-batch
+test-pr82-nb-batch: docker-build ## run dynamic-theta NB batch derivative gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest tests/test_fitting/test_nb_stream_reml.py -x --tb=short -v
+
+.PHONY: test-pr82-nb-host
+test-pr82-nb-host: docker-build ## run exact fixed-state NB host derivative gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest tests/test_fitting/test_nb_stream_reml.py \
+		tests/test_execution/test_nb_reml.py \
+		tests/test_execution/test_nb_stream.py \
+		tests/test_execution/test_nb_theta_stream.py::test_count_budget_is_checked_after_summary_before_theta_dispatch \
+		-x --tb=short -q
+
+.PHONY: test-pr82-nb-optimizer
+test-pr82-nb-optimizer: docker-build ## run joint exact NB streamed REML optimizer gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest tests/test_execution/test_nb_reml_optimizer.py \
+		tests/test_execution/test_nb_reml.py tests/test_execution/test_regular_reml.py \
+		-x --tb=short -q
 
 .PHONY: colima-start
 colima-start: ## start colima VM (no-op if already running)
@@ -65,3 +255,77 @@ pre-commit: ## run pre-commit on all files
 .PHONY: pre-commit-install
 pre-commit-install: ## install pre-commit hooks
 	$(UV) run pre-commit install
+
+.PHONY: benchmark-nb-lgamma
+benchmark-nb-lgamma: ## benchmark NB lgamma derivative prefix kernel
+	$(UV) run python scripts/benchmark_nb_lgamma_derivatives.py
+
+.PHONY: benchmark-operator
+benchmark-operator: ## benchmark fixed-sp high-cardinality operator fit (LEVELS=10000 OUTPUT=/tmp/jaxgam-operator-benchmark)
+	$(UV) run python scripts/benchmark_operator.py --levels $${LEVELS:-10000} --output-dir $${OUTPUT:-/tmp/jaxgam-operator-benchmark}
+
+.PHONY: benchmark-operator-preconditioner
+benchmark-operator-preconditioner: ## compare paired coarse/no-coarse PCG on correlated smooth and factor
+	$(UV) run python scripts/benchmark_operator_preconditioner.py --output-dir $${OUTPUT:-/tmp/jaxgam-operator-benchmark}
+
+.PHONY: benchmark-operator-efs-calibration
+benchmark-operator-efs-calibration: ## measure operator EFS score envelopes vs decimal references (ARGS="--regime indexed_poisson --levels 1024" OUTPUT=/tmp/jaxgam-operator-efs-calibration)
+	@test -n "$(ARGS)" || (echo 'Usage: make benchmark-operator-efs-calibration ARGS="--regime indexed_poisson --levels 1024"' && exit 1)
+	$(UV) run python scripts/benchmark_operator_efs_calibration.py --output-dir $${OUTPUT:-/tmp/jaxgam-operator-efs-calibration} $(ARGS)
+
+.PHONY: benchmark-efs
+benchmark-efs: ## benchmark dense Newton/EFS against pinned R EFS (OUTPUT=/tmp/jaxgam-efs-benchmark)
+	$(UV) run python scripts/benchmark_efs.py --output-dir $${OUTPUT:-/tmp/jaxgam-efs-benchmark}
+
+.PHONY: benchmark-efs-smoke
+benchmark-efs-smoke: ## run the small end-to-end dense EFS benchmark gate
+	$(UV) run python scripts/benchmark_efs.py --smoke --warm-repeats 1 --comparison-tolerance MODERATE --output-dir $${OUTPUT:-/tmp/jaxgam-efs-benchmark-smoke}
+
+.PHONY: benchmark-scaling
+benchmark-scaling: ## emit one isolated scaling evidence record (ARGS="--n 2000 --k 10 --execution stream-exact --result-mode prediction")
+	$(UV) run python scripts/benchmark_scaling.py $(ARGS)
+
+.PHONY: benchmark-bulk-variance
+benchmark-bulk-variance: ## operator bulk Fisher variance over seeds (ARGS="--model re --levels 10000 --seeds 1000 --output $$RUN/bulk.json")
+	$(UV) run python scripts/benchmark_bulk_variance.py $(ARGS)
+
+.PHONY: benchmark-manifest
+benchmark-manifest: ## write or finish one run's environment manifest (ARGS="--phase start --output $$RUN/manifest.json")
+	$(UV) run python scripts/benchmark_manifest.py $(ARGS)
+
+.PHONY: benchmark-discrete-approximation
+benchmark-discrete-approximation: ## PR11 discretization approximation study (OUTPUT=/path/outside/checkout.json ARGS=...)
+	@test -n "$(OUTPUT)" || (echo "Usage: make benchmark-discrete-approximation OUTPUT=/tmp/approximation.json [ARGS='--families gaussian --n 2000']" && exit 1)
+	$(UV) run python scripts/benchmark_discrete_approximation.py --output $(OUTPUT) $(ARGS)
+
+.PHONY: test-discrete-approximation-harness
+test-discrete-approximation-harness: ## test the PR11 approximation-study harness
+	$(UV) run pytest -q tests/test_benchmark_discrete_approximation.py $(ARGS)
+
+.PHONY: test-scaling-memory
+test-scaling-memory: ## test scaling harness isolation, scan/memory metadata, and bounded cases
+	$(UV) run pytest -q tests/test_benchmark_scaling.py $(ARGS)
+
+.PHONY: efs-fixture
+efs-fixture: ## generate a reproducible pinned EFS oracle fixture (OUTPUT=path.csv)
+	@test -n "$(OUTPUT)" || (echo "Usage: make efs-fixture OUTPUT=/tmp/efs.csv" && exit 1)
+	$(UV) run python -m tests.efs_oracle --output $(OUTPUT)
+
+.PHONY: test-operator-fit test-operator-fit-local
+test-operator-fit-local:
+	uv run pytest tests/test_fitting/test_operator_family.py tests/test_fitting/test_operators.py tests/test_execution/test_operator.py tests/test_execution/test_operator_fit.py tests/test_inference/test_operator_geometry.py -v
+
+test-operator-fit:
+	docker build --target test -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest tests/test_fitting/test_operator_family.py tests/test_fitting/test_operators.py tests/test_execution/test_operator.py tests/test_execution/test_operator_fit.py tests/test_inference/test_operator_geometry.py -v
+
+.PHONY: test-operator-bulk-local
+test-operator-bulk-local: ## run calibrated operator bulk uncertainty and R gates
+	$(UV) run pytest tests/test_execution/test_operator_bulk_variance.py -q
+
+.PHONY: test-operator-adapters test-operator-adapters-local
+test-operator-adapters-local: ## run capped smooth adapter and shared constraint gates
+	$(UV) run pytest tests/test_formula/test_operator_modest.py tests/test_constraints.py -v
+
+test-operator-adapters: docker-build ## run pinned capped smooth adapter gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest tests/test_formula/test_operator_modest.py tests/test_constraints.py -v

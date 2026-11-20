@@ -46,9 +46,35 @@ class PredictSpec:
     dropped_param_names: tuple[str, ...]
     total_coefs: int
 
+    @property
+    def required_covariates(self) -> tuple[str, ...]:
+        """Frozen model variables, including each smooth's by variable."""
+        return tuple(
+            dict.fromkeys(
+                [
+                    *(term.name for term in self.parametric_terms),
+                    *(name for term in self.smooth_info for name in term.variables),
+                    *(
+                        term.by_variable
+                        for term in self.smooth_info
+                        if term.by_variable is not None
+                    ),
+                ]
+            )
+        )
+
     def build_predict_matrix(self, newdata: Data) -> npt.NDArray[np.floating]:
         """Build the full constrained prediction matrix for ``newdata``."""
         return build_predict_matrix(self, newdata)
+
+    def build_training_matrix(self, data: Data) -> npt.NDArray[np.floating]:
+        """Build constrained training rows for a batch of the setup source.
+
+        Smooths evaluate :meth:`training_matrix`, mgcv's constructor model
+        matrix, rather than their prediction transform. Only setup-source
+        replay may use this; prediction always uses ``build_predict_matrix``.
+        """
+        return build_predict_matrix(self, data, training=True)
 
 
 def build_predict_spec(setup: ModelSetup) -> PredictSpec:
@@ -82,8 +108,14 @@ def build_predict_spec(setup: ModelSetup) -> PredictSpec:
 def build_predict_matrix(
     spec: PredictSpec,
     newdata: Data,
+    *,
+    training: bool = False,
 ) -> npt.NDArray[np.floating]:
-    """Build a constrained prediction matrix from a concrete ``PredictSpec``."""
+    """Build a constrained prediction matrix from a concrete ``PredictSpec``.
+
+    ``training=True`` evaluates each smooth's source training rows instead of
+    its prediction rows; see :meth:`PredictSpec.build_training_matrix`.
+    """
     data_dict = _to_dict(newdata)
 
     if not data_dict:
@@ -123,7 +155,11 @@ def build_predict_matrix(
     for term in coef_map.terms:
         if term.term_type == "parametric":
             continue
-        X_raw = term.smooth.predict_matrix(data_dict)
+        X_raw = (
+            term.smooth.training_matrix(data_dict)
+            if training
+            else term.smooth.predict_matrix(data_dict)
+        )
         # Pass the TermBlock, not term.label: label-colliding smooths must use
         # their own Z_centering/del_index rather than the first label match.
         blocks.append(coef_map.transform_X(X_raw, term))
@@ -286,12 +322,13 @@ def _build_parametric_matrix(
                 # treating them as the reference level.
                 known = set(levels)
                 col_obj = np.asarray(col, dtype=object)
-                # Mask NA before np.unique: mixed strings and NaN cannot be
-                # ordered, and NA is not a new factor level.
+                # Mask NA before membership validation.  Factor levels may be
+                # mixed Python scalar types, which are valid categorical
+                # values but cannot be sorted by ``np.unique``.
                 na_mask = pd.isna(col_obj)
-                observed = np.unique(col_obj[~na_mask]).tolist()
                 unseen = sorted(
-                    {value for value in observed if value not in known}, key=str
+                    {value for value in col_obj[~na_mask] if value not in known},
+                    key=str,
                 )
                 if unseen:
                     raise ValueError(

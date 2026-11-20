@@ -29,6 +29,7 @@ from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
+from jaxgam.fitting.penalty_ops import JaxPenaltyStructure
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import (
     REMLCriterion,
@@ -38,6 +39,8 @@ from jaxgam.fitting.reml import (
     fletcher_scale,
     pearson_rss,
     reml_criterion,
+    reml_criterion_from_penalized_deviance,
+    reml_criterion_with_logdet_hessian,
 )
 from jaxgam.jax_utils import to_jax, to_numpy
 from tests.helpers import SEED, _generate_family_data, r_available
@@ -99,7 +102,7 @@ def _reml_args(fd, pirls_result, log_lambda):
         "beta": pirls_result.coefficients,
         "deviance": deviance,
         "ls_sat": ls_sat,
-        "S_list": fd.S_list,
+        "penalty_structure": fd.penalty_structure,
         "phi": phi,
         "Mp": Mp,
         "singleton_sp_indices": fd.singleton_sp_indices,
@@ -109,6 +112,120 @@ def _reml_args(fd, pirls_result, log_lambda):
         "multi_block_ranks": fd.multi_block_ranks,
         "multi_block_proj_S": fd.multi_block_proj_S,
     }
+
+
+@pytest.mark.parametrize(
+    "formula",
+    [
+        "y ~ s(x1, k=7, bs='cr') + s(x2, k=7, bs='cr')",
+        "y ~ te(x1, x2, k=5)",
+    ],
+)
+def test_fixed_state_reml_with_supplied_hessian_logdet_matches_dense(
+    formula: str,
+) -> None:
+    """The QR score helper retains all existing non-determinant REML terms."""
+    from jaxgam.formula.design import ModelSetup
+    from jaxgam.formula.parser import parse_formula
+
+    rng = np.random.default_rng(1827)
+    n = 71
+    data = pd.DataFrame(
+        {
+            "x1": rng.uniform(-1.0, 1.0, n),
+            "x2": rng.uniform(-1.0, 1.0, n),
+        }
+    )
+    data["y"] = np.sin(2.0 * data.x1) + 0.4 * data.x2 + rng.normal(scale=0.15, size=n)
+    fd = FittingData.from_setup(
+        ModelSetup.build(parse_formula(formula), data), Gaussian()
+    )
+    rho = jnp.linspace(-0.4, 0.3, fd.penalty_structure.n_penalties)
+    result = pirls_loop(
+        fd.X, fd.y, fd.beta_init, fd.S_lambda(rho), fd.family, fd.wt, fd.offset
+    )
+    args = _reml_args(fd, result, rho)
+    H = args["XtWX"] + fd.S_lambda(rho)
+    logdet = jnp.linalg.slogdet(H)[1]
+    supplied = reml_criterion_with_logdet_hessian(
+        rho,
+        result.coefficients,
+        result.deviance,
+        args["ls_sat"],
+        fd.penalty_structure,
+        args["phi"],
+        args["Mp"],
+        fd.singleton_sp_indices,
+        fd.singleton_ranks,
+        fd.singleton_eig_constants,
+        fd.multi_block_sp_indices,
+        fd.multi_block_ranks,
+        fd.multi_block_proj_S,
+        logdet,
+    )
+    np.testing.assert_allclose(
+        np.asarray(supplied),
+        np.asarray(reml_criterion(**args)),
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    compiled = jax.jit(reml_criterion_with_logdet_hessian)(
+        rho,
+        result.coefficients,
+        result.deviance,
+        args["ls_sat"],
+        fd.penalty_structure,
+        args["phi"],
+        args["Mp"],
+        fd.singleton_sp_indices,
+        fd.singleton_ranks,
+        fd.singleton_eig_constants,
+        fd.multi_block_sp_indices,
+        fd.multi_block_ranks,
+        fd.multi_block_proj_S,
+        logdet,
+    )
+    np.testing.assert_allclose(
+        np.asarray(compiled), np.asarray(supplied), rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    # A recovered reporting beta need not carry the source's solve penalty.
+    # The explicit frozen Dp path retains that penalty and the observed
+    # factor determinant without refactorizing a normal matrix.
+    pdev = (
+        result.deviance + result.coefficients @ fd.S_lambda(rho) @ result.coefficients
+    )
+    delta = jnp.asarray(1.3)
+
+    def explicit_source_score(Dp):
+        return reml_criterion_from_penalized_deviance(
+            rho,
+            args["XtWX"],
+            Dp,
+            args["ls_sat"],
+            fd.penalty_structure,
+            args["phi"],
+            args["Mp"],
+            fd.singleton_sp_indices,
+            fd.singleton_ranks,
+            fd.singleton_eig_constants,
+            fd.multi_block_sp_indices,
+            fd.multi_block_ranks,
+            fd.multi_block_proj_S,
+            log_det_hessian=logdet,
+        )
+
+    np.testing.assert_allclose(
+        jax.jit(explicit_source_score)(pdev + delta),
+        supplied + delta / (2.0 * args["phi"]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        jax.jit(jax.grad(explicit_source_score))(pdev),
+        1.0 / (2.0 * args["phi"]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
 
 
 # ---- REML score vs R ----
@@ -387,7 +504,7 @@ class TestPurelyParametric:
             result.coefficients,
             deviance,
             ls_sat,
-            (),
+            JaxPenaltyStructure(p, ()),
             result.scale,
             Mp,
             singleton_sp_indices=(),

@@ -45,14 +45,18 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Protocol
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax.scipy.linalg import cho_solve
+from jax.scipy.linalg import cho_solve, solve_triangular
 
 from jaxgam.families.base import ExponentialFamily
-from jaxgam.fitting.data import FittingData
+from jaxgam.families.negative_binomial import NegativeBinomial
+from jaxgam.families.standard import Gaussian
+from jaxgam.fitting import penalty_ops
+from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import PIRLSResult, pirls_loop
 from jaxgam.fitting.reml import (
@@ -62,9 +66,17 @@ from jaxgam.fitting.reml import (
     _CriterionBase,
     _JointCriterionBase,
     estimate_edf,
+    fisher_edf,
     fletcher_scale,
+    uses_qr_log_det,
 )
-from jaxgam.jax_utils import build_S_lambda, cho_factor
+from jaxgam.fitting.source_pirls import source_pirls, status_message
+from jaxgam.fitting.stable_log_det import (
+    StableSystem,
+    stable_block_roots,
+    stable_system,
+)
+from jaxgam.jax_utils import StableLogDetTerms, cho_factor
 
 # R's default Newton convergence tolerance (gam.control()$newton$conv.tol).
 # This is ~67x looser than sqrt(eps) ≈ 1.5e-8, matching R's deliberate
@@ -105,6 +117,159 @@ _GRAD_FILTER_THRESH = 0.001
 # significantly increasing compile and run time.
 
 
+def _inner_fit(
+    X: jax.Array,
+    y: jax.Array,
+    beta_start: jax.Array,
+    S_lambda: jax.Array,
+    family: ExponentialFamily,
+    wt: jax.Array,
+    offset: jax.Array | None,
+    *,
+    tol: float,
+    log_theta: jax.Array | None = None,
+    penalty_root: jax.Array | None = None,
+    null_beta: jax.Array | None = None,
+    scale: jax.Array | float = 1.0,
+    count_indices: jax.Array | None = None,
+    max_y: int = 0,
+    integer_counts: bool = True,
+) -> PIRLSResult:
+    """Coefficient fit at fixed smoothing: pinned source loop or ordinary.
+
+    ``null_beta`` (R's ``null.coef``) selects the pinned ``gam.fit3`` /
+    ``gam.fit4`` loop (``source_pirls``, at its explicit ``epsilon``,
+    ``SOURCE_EPSILON``); without it (structurally rank-deficient models,
+    manual fixtures) the ordinary loop runs at ``tol``.
+    """
+    if null_beta is None:
+        return pirls_loop(
+            X,
+            y,
+            beta_start,
+            S_lambda,
+            family,
+            wt,
+            offset,
+            tol=tol,
+            log_theta=log_theta,
+            penalty_root=penalty_root,
+        )
+    return source_pirls(
+        X,
+        y,
+        beta_start,
+        S_lambda,
+        family,
+        wt,
+        offset,
+        null_beta,
+        scale=scale,
+        log_theta=log_theta,
+        count_indices=count_indices,
+        max_y=max_y,
+        integer_counts=integer_counts,
+        penalty_root=penalty_root,
+    ).pirls_result
+
+
+def factorization_fallbacks(
+    fd: FittingData,
+    pirls_result: PIRLSResult,
+    log_lambda: jax.Array,
+    *,
+    include_ift: bool,
+    stable: StableSystem | None = None,
+) -> dict[str, float]:
+    """Fallback jitter level of every factorization in the reported fit.
+
+    ``cho_factor`` regularizes only when the plain factor fails; the PIRLS
+    factors record their level, while the criterion determinant (unit-diagonal
+    Cholesky, unless the QR determinant is used) and the IFT factor of
+    ``X'WX + S`` are re-evaluated here at the reported state.
+    """
+    levels = {"PIRLS": float(np.max(np.asarray(pirls_result.factor_regularization)))}
+    if fd.n_penalties == 0:
+        return levels
+    if stable is None:
+        H = pirls_result.XtWX + fd.S_lambda(jnp.asarray(log_lambda))
+    else:
+        # The criterion and the IFT factor H in gam.fit3's coordinates.
+        H = stable.rotation.to_stable_matrix(
+            pirls_result.XtWX
+        ) + penalty_ops.materialize(stable.penalty_structure, jnp.asarray(log_lambda))
+    if fd.rank_deficit == 0 and not uses_qr_log_det(fd):
+        d = jnp.sqrt(jnp.maximum(jnp.diag(H), jnp.finfo(H.dtype).tiny))
+        _, level = cho_factor(H / (d[:, None] * d[None, :]))
+        levels["criterion log|H|"] = float(level)
+    if include_ift:
+        _, level = cho_factor(H)
+        levels["IFT"] = float(level)
+    return levels
+
+
+def fallback_note(levels: dict[str, float]) -> str:
+    """``"; fallback jitter <level> in <factors>"``, or empty when none fired."""
+    fired = {name: level for name, level in levels.items() if level > 0.0}
+    if not fired:
+        return ""
+    return f"; fallback jitter {max(fired.values()):g} in " + ", ".join(fired)
+
+
+def pirls_from_stable(
+    result: PIRLSResult, rotation: penalty_ops.JaxCoefficientRotation
+) -> PIRLSResult:
+    """Map a fit made in gam.reparam coordinates back (gam.fit3.r 812-813).
+
+    Coefficients, ``X'WX`` (Newton and Fisher) and the influence matrix
+    return to fitting coordinates; the EDF is the rotation-invariant trace
+    from the stable factor. ``L`` and ``L_fisher`` stay the triangular
+    factors of the stable-coordinate Hessian: the covariance is formed from
+    them and the rotation at post-estimation, as R forms ``Vp`` from
+    ``rV <- T %*% rV`` (``NewtonResult.stable_rotation``).
+    """
+    edf = (
+        result.fisher_edf
+        if result.fisher_edf is not None
+        else estimate_edf(result.XtWX_fisher, result.L_fisher)
+    )
+    return dataclasses.replace(
+        result,
+        coefficients=rotation.from_stable(result.coefficients),
+        XtWX=rotation.from_stable_matrix(result.XtWX),
+        XtWX_fisher=rotation.from_stable_matrix(result.XtWX_fisher),
+        fisher_hat=(
+            None
+            if result.fisher_hat is None
+            else rotation.from_stable_matrix(result.fisher_hat)
+        ),
+        fisher_edf=edf,
+    )
+
+
+def _hessian_qr(
+    family: ExponentialFamily,
+    penalty_roots: penalty_ops.JaxPenaltyRoots | None,
+    rank_deficit: int,
+    X: jax.Array,
+    weights: jax.Array,
+) -> tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None:
+    """QR log|H| inputs for a nonnegative-weight full-rank system, else None.
+
+    Mirrors ``reml.uses_qr_log_det`` with the traced arguments of the fused
+    and differentiable scores (``family``, the roots' presence and
+    ``rank_deficit`` are static there).
+    """
+    if (
+        penalty_roots is None
+        or rank_deficit != 0
+        or not family.is_canonical
+        or family.n_theta != 0
+    ):
+        return None
+    return jnp.sqrt(jnp.maximum(weights, 0.0))[:, None] * X, penalty_roots
+
+
 def _diff_score(
     # Dynamic args (JAX arrays, differentiated through)
     params: jax.Array,
@@ -113,9 +278,10 @@ def _diff_score(
     y: jax.Array,
     wt: jax.Array,
     offset: jax.Array,
-    S_list: tuple[jax.Array, ...],
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
     singleton_eig_constants: jax.Array,
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    count_indices: jax.Array,
     # Static args (JIT cache keys, not traced)
     family: ExponentialFamily,
     pirls_tol: float,
@@ -129,7 +295,11 @@ def _diff_score(
     multi_block_ranks: tuple[int, ...],
     p: int,
     max_y: int = 0,
+    integer_counts: bool = True,
     rank_deficit: int = 0,
+    penalty_roots: penalty_ops.JaxPenaltyRoots | None = None,
+    null_beta: jax.Array | None = None,
+    rotation: penalty_ops.JaxCoefficientRotation | None = None,
 ) -> jax.Array:
     """End-to-end differentiable score: PIRLS + criterion.
 
@@ -155,8 +325,8 @@ def _diff_score(
         Warm-start coefficients from previous PIRLS.
     X, y, wt, offset : jax.Array
         Model data on device.
-    S_list : tuple[jax.Array, ...]
-        Per-penalty matrices.
+    penalty_structure : JaxPenaltyStructure
+        Local per-block penalty descriptors.
     singleton_eig_constants, multi_block_proj_S
         Block-structured log|S+| data (dynamic JAX arrays).
     family : ExponentialFamily
@@ -183,6 +353,15 @@ def _diff_score(
         REML criterion score.
     """
 
+    _ = p  # Retained static cache-key compatibility for compiled callers.
+    if rotation is not None:
+        # gam.fit3.r 161-179: fit in gam.reparam's coordinates. The penalty
+        # structure, roots and log|S|+ terms arrive already in them; T is
+        # held fixed, so derivatives of these invariant scalars are exact.
+        X = rotation.design(X)
+        beta_warm = rotation.to_stable(beta_warm)
+        if null_beta is not None:
+            null_beta = rotation.to_stable(null_beta)
     # ---- Parse params: [log_lambda, <log_theta>, <log_phi>] ----
     idx = n_lambda
     log_lambda = params[:idx]
@@ -196,11 +375,29 @@ def _diff_score(
 
     # ---- Saturated log-likelihood ----
     if joint_theta:
-        ls_sat = family.saturated_loglik_theta(y, wt, phi, log_theta, max_y=max_y)
+        ls_sat = family.saturated_loglik_theta(
+            y,
+            wt,
+            phi,
+            log_theta,
+            max_y=max_y,
+            count_indices=count_indices,
+            integer_counts=integer_counts,
+        )
     else:
-        ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
+        if family.family_name == "nb":
+            ls_sat = family.saturated_loglik(
+                y,
+                wt,
+                phi,
+                max_y=max_y,
+                count_indices=count_indices,
+                integer_counts=integer_counts,
+            )
+        else:
+            ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
 
-    S_lambda = build_S_lambda(log_lambda, S_list, p)
+    S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
 
     # ---- custom_jvp on PIRLS ----
     if family.n_theta > 0 and joint_theta:
@@ -225,7 +422,7 @@ def _diff_score(
 
         @jax.custom_jvp
         def _pirls_out_ext(S_lam, lt, bw):
-            result = pirls_loop(
+            result = _inner_fit(
                 X,
                 y,
                 bw,
@@ -235,6 +432,10 @@ def _diff_score(
                 offset,
                 tol=pirls_tol,
                 log_theta=lt,
+                null_beta=null_beta,
+                count_indices=count_indices,
+                max_y=max_y,
+                integer_counts=integer_counts,
             )
             return result.coefficients, result.XtWX, result.deviance
 
@@ -274,12 +475,28 @@ def _diff_score(
             return (beta, XtWX, dev), (dbeta, dXtWX, ddev)
 
         beta, XtWX, dev = _pirls_out_ext(S_lambda, log_theta, beta_warm)
+        hessian_qr = None  # estimated-theta NB: signed observed system
 
     else:
-        # --- Standard family path: 2 primals (unchanged) ---
+        # --- Fixed-parameter family path: 2 primals ---
+        fixed_nb = isinstance(family, NegativeBinomial)
+        fixed_log_theta = (
+            jnp.asarray(family.get_theta(transformed=False)) if fixed_nb else None
+        )
+        direct_nb_dev = family.deviance_fn(y, wt) if fixed_nb else None
+
+        # The QR inner solve takes E(rho) with E'E = S_lambda as an extra
+        # primal. The solution depends on S_lambda only, so the IFT below uses
+        # dS and the redundant tangent of E is ignored.
+        penalty_root = (
+            None
+            if penalty_roots is None
+            else penalty_ops.augmented_root(penalty_roots, log_lambda)
+        )
+
         @jax.custom_jvp
-        def _pirls_out(S_lambda_inner, beta_warm_inner):
-            result = pirls_loop(
+        def _pirls_out(S_lambda_inner, root_inner, scale_inner, beta_warm_inner):
+            result = _inner_fit(
                 X,
                 y,
                 beta_warm_inner,
@@ -288,15 +505,30 @@ def _diff_score(
                 wt,
                 offset,
                 tol=pirls_tol,
+                penalty_root=root_inner,
+                null_beta=null_beta,
+                scale=scale_inner,
+                count_indices=count_indices,
+                max_y=max_y,
+                integer_counts=integer_counts,
             )
-            return result.coefficients, result.XtWX, result.deviance
+            return (
+                result.coefficients,
+                result.XtWX,
+                result.deviance,
+                result.working_weights,
+            )
 
         @_pirls_out.defjvp
         def _pirls_jvp(primals, tangents):
-            S_lambda_inner, beta_warm_inner = primals
-            dS, _ = tangents
+            # The scale only sets gam.fit3's convergence threshold; like E, its
+            # tangent carries no information about the stationary point.
+            S_lambda_inner, root_inner, scale_inner, beta_warm_inner = primals
+            dS = tangents[0]
 
-            beta, XtWX, dev = _pirls_out(S_lambda_inner, beta_warm_inner)
+            beta, XtWX, dev, weights = _pirls_out(
+                S_lambda_inner, root_inner, scale_inner, beta_warm_inner
+            )
 
             # IFT: dβ = -H⁻¹(dS @ β)
             H = XtWX + S_lambda_inner
@@ -307,7 +539,13 @@ def _diff_score(
             eta = X @ beta + offset
             deta = X @ dbeta
 
-            if family.is_canonical:
+            if fixed_nb:
+
+                def _eta_to_W(e):
+                    grad_dev = jax.grad(lambda ee: direct_nb_dev(ee, fixed_log_theta))
+                    _, curvature = jax.jvp(grad_dev, (e,), (jnp.ones_like(e),))
+                    return 0.5 * curvature
+            elif family.is_canonical:
                 # Canonical link: Fisher == observed; XtWX is the Fisher Hessian.
                 def _eta_to_W(e):
                     return family.working_weights(family.link.inverse(e), wt)
@@ -318,7 +556,11 @@ def _diff_score(
                 # mgcv's Newton-weighted log|H|).
                 def _eta_to_W(e):
                     def _dev_sum(ee):
-                        return family.dev_resids(y, family.link.inverse(ee), wt)
+                        return jnp.sum(
+                            family.deviance_derivative_contributions(
+                                y, family.link.inverse(ee), wt
+                            )
+                        )
 
                     _, d2 = jax.jvp(jax.grad(_dev_sum), (e,), (jnp.ones_like(e),))
                     return 0.5 * d2
@@ -328,13 +570,20 @@ def _diff_score(
 
             # Chain: dη → dμ → ddeviance
             def _eta_to_dev(e):
-                return jnp.sum(family.dev_resids(y, family.link.inverse(e), wt))
+                if fixed_nb:
+                    return direct_nb_dev(e, fixed_log_theta)
+                return jnp.sum(
+                    family.deviance_derivative_contributions(
+                        y, family.link.inverse(e), wt
+                    )
+                )
 
             _, ddev = jax.jvp(_eta_to_dev, (eta,), (deta,))
 
-            return (beta, XtWX, dev), (dbeta, dXtWX, ddev)
+            return (beta, XtWX, dev, weights), (dbeta, dXtWX, ddev, dW)
 
-        beta, XtWX, dev = _pirls_out(S_lambda, beta_warm)
+        beta, XtWX, dev, weights = _pirls_out(S_lambda, penalty_root, phi, beta_warm)
+        hessian_qr = _hessian_qr(family, penalty_roots, rank_deficit, X, weights)
 
     # ---- Criterion score ----
     core = _criterion_core(
@@ -343,7 +592,7 @@ def _diff_score(
         beta,
         dev,
         ls_sat,
-        S_list,
+        penalty_structure,
         phi,
         singleton_sp_indices,
         singleton_ranks,
@@ -352,6 +601,7 @@ def _diff_score(
         multi_block_ranks,
         multi_block_proj_S,
         rank_deficit,
+        hessian_qr,
     )
 
     # REML criterion (ML is not supported in v1.0; see _check_scope_guards).
@@ -374,6 +624,7 @@ _DIFF_STATIC = (
     "multi_block_ranks",
     "p",
     "max_y",
+    "integer_counts",
 )
 
 # Module-level JIT'd gradient and Hessian — compiled ONCE per
@@ -427,9 +678,10 @@ def _fit_and_score_impl(
     y: jax.Array,
     wt: jax.Array,
     offset: jax.Array,
-    S_list: tuple[jax.Array, ...],
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
     singleton_eig_constants: jax.Array,
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    count_indices: jax.Array,
     # Static args (JIT cache keys)
     family: ExponentialFamily,
     pirls_tol: float,
@@ -443,7 +695,11 @@ def _fit_and_score_impl(
     multi_block_ranks: tuple[int, ...],
     p: int,
     max_y: int = 0,
+    integer_counts: bool = True,
     rank_deficit: int = 0,
+    penalty_roots: penalty_ops.JaxPenaltyRoots | None = None,
+    null_beta: jax.Array | None = None,
+    rotation: penalty_ops.JaxCoefficientRotation | None = None,
 ) -> tuple[jax.Array, PIRLSResult]:
     """Fused PIRLS + criterion score in one XLA program.
 
@@ -462,6 +718,13 @@ def _fit_and_score_impl(
     pirls_result : PIRLSResult
         Converged PIRLS output.
     """
+    _ = p  # Retained static cache-key compatibility for compiled callers.
+    if rotation is not None:
+        # gam.fit3.r 161-179 (see _diff_score); mapped back at the end.
+        X = rotation.design(X)
+        beta_init = rotation.to_stable(beta_init)
+        if null_beta is not None:
+            null_beta = rotation.to_stable(null_beta)
     # Parse params: [log_lambda, <log_theta>, <log_phi>]
     idx = n_lambda
     log_lambda = params[:idx]
@@ -477,12 +740,30 @@ def _fit_and_score_impl(
 
     # Saturated log-likelihood
     if joint_theta:
-        ls_sat = family.saturated_loglik_theta(y, wt, phi, log_theta, max_y=max_y)
+        ls_sat = family.saturated_loglik_theta(
+            y,
+            wt,
+            phi,
+            log_theta,
+            max_y=max_y,
+            count_indices=count_indices,
+            integer_counts=integer_counts,
+        )
     else:
-        ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
+        if family.family_name == "nb":
+            ls_sat = family.saturated_loglik(
+                y,
+                wt,
+                phi,
+                max_y=max_y,
+                count_indices=count_indices,
+                integer_counts=integer_counts,
+            )
+        else:
+            ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
 
-    S_lambda = build_S_lambda(log_lambda, S_list, p)
-    pirls_result = pirls_loop(
+    S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
+    pirls_result = _inner_fit(
         X,
         y,
         beta_init,
@@ -492,6 +773,16 @@ def _fit_and_score_impl(
         offset,
         tol=pirls_tol,
         log_theta=log_theta,
+        penalty_root=(
+            None
+            if penalty_roots is None
+            else penalty_ops.augmented_root(penalty_roots, log_lambda)
+        ),
+        null_beta=null_beta,
+        scale=phi,
+        count_indices=count_indices,
+        max_y=max_y,
+        integer_counts=integer_counts,
     )
 
     core = _criterion_core(
@@ -500,7 +791,7 @@ def _fit_and_score_impl(
         pirls_result.coefficients,
         pirls_result.deviance,
         ls_sat,
-        S_list,
+        penalty_structure,
         phi,
         singleton_sp_indices,
         singleton_ranks,
@@ -509,17 +800,143 @@ def _fit_and_score_impl(
         multi_block_ranks,
         multi_block_proj_S,
         rank_deficit,
+        _hessian_qr(
+            family, penalty_roots, rank_deficit, X, pirls_result.working_weights
+        ),
     )
 
     # REML criterion (ML is not supported in v1.0; see _check_scope_guards).
     score = core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
+    if rotation is not None:
+        pirls_result = pirls_from_stable(pirls_result, rotation)
     return score, pirls_result
 
 
 _jit_fit_and_score = jax.jit(
     _fit_and_score_impl,
     static_argnames=_DIFF_STATIC,
+)
+
+
+def _logdet_change(
+    base: jax.Array, change: jax.Array, *, relative_diagonal_jitter: float = 0.0
+) -> jax.Array:
+    """log|base + change| - log|base| without subtracting large logdets.
+
+    Both matrices must be positive definite on the same retained space.
+    Optional jitter matches the criterion's existing diagonal-relative
+    regularization; no larger-jitter fallback or rank repair is introduced.
+    A nonfinite result makes the host retain its original score comparison.
+    """
+    base = base + relative_diagonal_jitter * jnp.diag(jnp.diag(base))
+    change = change + relative_diagonal_jitter * jnp.diag(jnp.diag(change))
+    diagonal = jnp.sqrt(jnp.diag(base))
+    scaling = 1.0 / (diagonal[:, None] * diagonal[None, :])
+    factor = jnp.linalg.cholesky(base * scaling)
+    left = solve_triangular(factor, change * scaling, lower=True)
+    whitened = solve_triangular(factor, left.T, lower=True).T
+    eigenvalues = jnp.linalg.eigvalsh((whitened + whitened.T) * 0.5)
+    trial_factor = jnp.linalg.cholesky((base + change) * scaling)
+    return jnp.where(
+        jnp.all(jnp.isfinite(trial_factor)), jnp.sum(jnp.log1p(eigenvalues)), jnp.nan
+    )
+
+
+def _gaussian_score_change(
+    params_base: jax.Array,
+    params_trial: jax.Array,
+    beta_base: jax.Array,
+    beta_trial: jax.Array,
+    X: jax.Array,
+    y: jax.Array,
+    wt: jax.Array,
+    offset: jax.Array,
+    XtWX: jax.Array,
+    structure: penalty_ops.JaxPenaltyStructure,
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    *,
+    n_lambda: int,
+    Mp: int,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+) -> jax.Array:
+    """Stable change in full-rank identity-Gaussian joint REML.
+
+    This is the difference of mgcv's ``Sl.fit`` criterion (fast-REML.r
+    1714), not a quadratic approximation or a relaxed acceptance test.
+    It retains the exact residual-gradient term even when beta_base is
+    not stationary. Exp/log differences cancel shared large terms before
+    rounding, allowing strict descent comparisons near a flat optimum.
+    """
+    rho_base, rho_trial = params_base[:n_lambda], params_trial[:n_lambda]
+    delta_rho = rho_trial - rho_base
+    S_base = penalty_ops.materialize(structure, rho_base)
+    delta_S = penalty_ops.materialize_difference(structure, rho_base, rho_trial)
+    delta_beta = beta_trial - beta_base
+    residual = y - (X @ beta_base + offset)
+    delta_prediction = X @ delta_beta
+    residual_gradient = S_base @ beta_base - X.T @ (wt * residual)
+    base_quadratic = jnp.sum(wt * residual**2) + beta_base @ S_base @ beta_base
+    delta_quadratic = (
+        2.0 * delta_beta @ residual_gradient
+        + jnp.sum(wt * delta_prediction**2)
+        + delta_beta @ S_base @ delta_beta
+        + beta_trial @ delta_S @ beta_trial
+    )
+
+    # _criterion_core takes the plain Cholesky of the unit-diagonal H, so the
+    # same unregularized determinant is differenced here. A state that needs
+    # cho_factor's fallback makes this change nonfinite (the plain factor
+    # fails), and the host then retains its ordinary score comparison.
+    delta_log_H = _logdet_change(XtWX + S_base, delta_S)
+    delta_log_S = jnp.array(0.0)
+    for index, rank in zip(singleton_sp_indices, singleton_ranks, strict=True):
+        delta_log_S = delta_log_S + rank * delta_rho[index]
+    for indices, projections in zip(
+        multi_block_sp_indices, multi_block_proj_S, strict=True
+    ):
+        if isinstance(projections, StableLogDetTerms):
+            # Host get_stableS: det(rho_trial) - det(rho_base), each accurate.
+            delta_log_S = delta_log_S + projections.det_change
+            continue
+        if projections[0].shape[0] == 0:
+            continue
+        local_rho = jnp.stack([rho_base[index] for index in indices])
+        multipliers = jnp.exp(local_rho - jnp.max(local_rho))
+        base = jnp.zeros_like(projections[0])
+        change = jnp.zeros_like(base)
+        for multiplier, index, projection in zip(
+            multipliers, indices, projections, strict=True
+        ):
+            base = base + multiplier * projection
+            change = change + multiplier * jnp.expm1(delta_rho[index]) * projection
+        delta_log_S = delta_log_S + _logdet_change(base, change)
+
+    delta_log_phi = params_trial[n_lambda] - params_base[n_lambda]
+    inverse_phi = jnp.exp(-params_base[n_lambda])
+    scaled_quadratic = base_quadratic * inverse_phi
+    residual_df = jnp.sum(wt > 0) - Mp
+    # Separate first-order cancellation in phi from its second-order term.
+    # expm1(-d) + d remains accurate on the small steps used by this path.
+    delta_scaled_quadratic = (
+        jnp.exp(-delta_log_phi) * delta_quadratic * inverse_phi
+        + scaled_quadratic * (jnp.expm1(-delta_log_phi) + delta_log_phi)
+        + (residual_df - scaled_quadratic) * delta_log_phi
+    )
+    return 0.5 * (delta_scaled_quadratic + delta_log_H - delta_log_S)
+
+
+_jit_gaussian_score_change = jax.jit(
+    _gaussian_score_change,
+    static_argnames=(
+        "n_lambda",
+        "Mp",
+        "singleton_sp_indices",
+        "singleton_ranks",
+        "multi_block_sp_indices",
+    ),
 )
 
 
@@ -556,10 +973,23 @@ class NewtonResult:
     pirls_result : PIRLSResult
         Final PIRLS output (coefficients, mu, etc.).
     convergence_info : str
-        ``"full convergence"`` | ``"step failed"`` | ``"iteration limit"``
+        ``"full convergence"`` | ``"step failed"`` | ``"iteration limit"`` |
+        ``"non-finite REML score or gradient"`` (never converged)
     theta : float or None
         Estimated theta for extended families (natural scale).
         ``None`` for standard families or fixed-theta extended families.
+    factor_regularization : float
+        Largest fallback jitter (``cho_factor``'s relative level) of every
+        factorization that enters the reported fit: the PIRLS factors, the
+        criterion log|H| and, for an optimized fit, the IFT factor.  ``0``
+        means no factor was regularized; a positive level is also named in
+        ``convergence_info``.
+    stable_rotation : tuple of (start, stop, T)
+        gam.reparam's block maps ``b = T b_s`` at the final evaluation (empty
+        without multi-penalty blocks). ``pirls_result``'s coefficients and
+        ``X'WX`` are in fitting coordinates; its ``L``/``L_fisher`` factor the
+        Hessian in the stable coordinates, so ``Vp = T (L L')^-1 T'`` (R's
+        ``rV <- T %*% rV``, gam.fit3.r 813).
     """
 
     log_lambda: jax.Array
@@ -573,6 +1003,42 @@ class NewtonResult:
     pirls_result: PIRLSResult
     convergence_info: str
     theta: float | None = None
+    factor_regularization: float = 0.0
+    stable_rotation: tuple[tuple[int, int, np.ndarray], ...] = ()
+
+
+class _OuterScoreState(Protocol):
+    """Minimum trial state shared by row-backed and compressed optimizers."""
+
+    coefficients: jax.Array
+    edf: jax.Array
+    scale: jax.Array
+
+
+class OuterScoreProvider(Protocol):
+    """Host-owned score seam; JIT kernels continue to receive plain arrays."""
+
+    def initial_parameters(self, log_lambda: jax.Array) -> jax.Array: ...
+
+    def evaluate(self, params: jax.Array) -> tuple[_OuterScoreState, jax.Array]: ...
+
+    def differentiate(
+        self,
+        params: jax.Array,
+        state: _OuterScoreState,
+        *,
+        second_order: bool = True,
+    ) -> tuple[jax.Array, jax.Array | None]: ...
+
+    def finalize(self, params: jax.Array, state: _OuterScoreState) -> PIRLSResult: ...
+
+
+@dataclass(frozen=True)
+class _ProviderCriterion:
+    """Scalar metadata used by the unchanged Newton convergence policy."""
+
+    edf: jax.Array
+    scale: jax.Array
 
 
 # ---------------------------------------------------------------------------
@@ -684,18 +1150,25 @@ class NewtonOptimizer:
         line 1323 disabled), our AD gradient has slightly more noise
         than R's analytical IFT gradient, which can cause drift on flat
         REML surfaces. The cap acts as a safety net without affecting
-        well-determined directions. ``None`` disables clamping.
+        well-determined directions. ``None`` disables clamping. The cap
+        bounds only free coordinates; pinned smoothing parameters are
+        supplied values and are never clamped.
+    pin_lambda : bool
+        Hold the log smoothing parameters bitwise at ``fd.log_lambda_init``
+        and optimize only the remaining params (extended-family theta /
+        log scale).
     """
 
     def __init__(
         self,
-        fd: FittingData,
+        fd: FittingData | PreparedFittingMetadata,
         method: str = "REML",
         max_iter: int = 200,
         tol: float | None = None,
         max_step: float = 5.0,
         lsp_max: float = 40.0,
         pin_lambda: bool = False,
+        score_provider: OuterScoreProvider | None = None,
     ) -> None:
         if method != "REML":
             raise ValueError(
@@ -713,6 +1186,7 @@ class NewtonOptimizer:
         # fixed-`sp` path for families with estimated theta (e.g. NB), where
         # mgcv still estimates theta with the smoothing params held fixed.
         self._pin_lambda = pin_lambda
+        self._score_provider = score_provider
         self._is_gaussian = fd.family.family_name == "gaussian"
 
         # Eigenvalue floor power: R's fast.REML.fit (Gaussian) uses
@@ -749,35 +1223,65 @@ class NewtonOptimizer:
         # Joint optimization: append log_phi to params when scale is unknown
         # (matches R's mgcv.r line 2033: lsp <- c(lsp, log.scale))
         self._joint_scale = not fd.family.scale_known and fd.n_penalties > 0
+        if score_provider is not None and (not self._is_gaussian or self._joint_theta):
+            raise ValueError(
+                "A compressed outer-score provider requires Gaussian fitting "
+                "without family parameters."
+            )
 
         # Pre-bind all arguments except (params, beta_init) which vary
         # per Newton iteration. Shared by _jit_fit_and_score (forward pass)
         # and _jit_diff_grad_hess (gradient/Hessian for non-Gaussian).
         # Dynamic args are JAX arrays; static args are Python values that
         # key the JIT cache.
-        offset = fd.offset if fd.offset is not None else jnp.zeros(fd.n_obs)
-        self._jit_kwargs = {
-            "X": fd.X,
-            "y": fd.y,
-            "wt": fd.wt,
-            "offset": offset,
-            "S_list": fd.S_list,
-            "singleton_eig_constants": fd.singleton_eig_constants,
-            "multi_block_proj_S": fd.multi_block_proj_S,
-            "family": fd.family,
-            "pirls_tol": self._pirls_tol,
-            "joint_theta": self._joint_theta,
-            "joint_scale": self._joint_scale,
-            "n_lambda": fd.n_penalties,
-            "Mp": fd.total_penalty_null_dim,
-            "rank_deficit": fd.rank_deficit,
-            "singleton_sp_indices": fd.singleton_sp_indices,
-            "singleton_ranks": fd.singleton_ranks,
-            "multi_block_sp_indices": fd.multi_block_sp_indices,
-            "multi_block_ranks": fd.multi_block_ranks,
-            "p": fd.n_coef,
-            "max_y": fd.max_y,
-        }
+        # Host get_stableS roots of the multi-penalty blocks (gam.reparam is
+        # called at every evaluation, gam.fit3.r:144), built once here.
+        self._stable_blocks = ()
+        if score_provider is not None:
+            self._jit_kwargs = {}
+        else:
+            assert isinstance(fd, FittingData)
+            offset = fd.offset if fd.offset is not None else jnp.zeros(fd.n_obs)
+            self._jit_kwargs = {
+                "X": fd.X,
+                "y": fd.y,
+                "wt": fd.wt,
+                "offset": offset,
+                "penalty_structure": fd.penalty_structure,
+                "singleton_eig_constants": fd.singleton_eig_constants,
+                "multi_block_proj_S": fd.multi_block_proj_S,
+                "penalty_roots": fd.penalty_roots,
+                "null_beta": fd.null_beta if fd.uses_source_loop else None,
+                "count_indices": (
+                    fd.count_prefix_plan.indices
+                    if fd.count_prefix_plan is not None
+                    else jnp.zeros(0, dtype=jnp.int64)
+                ),
+                "family": fd.family,
+                "pirls_tol": self._pirls_tol,
+                "joint_theta": self._joint_theta,
+                "joint_scale": self._joint_scale,
+                "n_lambda": fd.n_penalties,
+                "Mp": fd.total_penalty_null_dim,
+                "rank_deficit": fd.rank_deficit,
+                "singleton_sp_indices": fd.singleton_sp_indices,
+                "singleton_ranks": fd.singleton_ranks,
+                "multi_block_sp_indices": fd.multi_block_sp_indices,
+                "multi_block_ranks": fd.multi_block_ranks,
+                "p": fd.n_coef,
+                "max_y": fd.max_y,
+                "integer_counts": (
+                    fd.count_prefix_plan.integer_counts
+                    if fd.count_prefix_plan is not None
+                    else True
+                ),
+            }
+            if fd.multi_block_sp_indices:
+                self._stable_blocks = stable_block_roots(
+                    fd.multi_block_sp_indices,
+                    fd.multi_block_proj_S,
+                    fd.penalty_structure,
+                )
 
         # Build custom_jvp-based differentiable score for all families.
         # For non-Gaussian: captures d(beta*)/d(rho), d(XtWX)/d(rho),
@@ -788,25 +1292,138 @@ class NewtonOptimizer:
         #   because it treats beta* as constant. For single-smooth (m=1)
         #   this has little effect, but for multi-smooth (m>1) the missing
         #   terms cause 2-14x more iterations than R.
-        if fd.n_penalties > 0:
+        if score_provider is not None:
+
+            def _provider_grad_hess(params, state):
+                gradient, hessian = score_provider.differentiate(params, state)
+                if hessian is None:
+                    raise RuntimeError(
+                        "Newton requires a second-order outer-score provider."
+                    )
+                return gradient, hessian
+
+            self._diff_grad_hess = _provider_grad_hess
+        elif fd.n_penalties > 0:
             kw = self._jit_kwargs
 
             def _grad_hess_fn(params, beta_warm):
-                return _jit_diff_grad_hess(params, beta_warm, **kw)
+                return _jit_diff_grad_hess(
+                    params, beta_warm, **self._with_stable_system(kw, params, deriv=2)
+                )
 
             self._diff_grad_hess = _grad_hess_fn
         else:
             self._diff_grad_hess = None
 
+    def _stable_system(
+        self, params: jax.Array, *, deriv: int, base_params: jax.Array | None = None
+    ) -> StableSystem | None:
+        """gam.reparam's coordinates at exactly ``params``' smoothing parameters.
+
+        None without multi-penalty blocks. ``gam.fit3`` recomputes them at
+        every evaluation (gam.fit3.r 144); so does every caller here.
+        """
+        if not self._stable_blocks:
+            return None
+        fd = self._fd
+        n_lambda = fd.n_penalties
+        base = None if base_params is None else np.asarray(base_params)[:n_lambda]
+        return stable_system(
+            self._stable_blocks,
+            fd.penalty_structure,
+            fd.penalty_roots,
+            np.asarray(params)[:n_lambda],
+            deriv=deriv,
+            base_log_lambda=base,
+        )
+
+    def _with_stable_system(self, kwargs: dict, params: jax.Array, *, deriv: int):
+        """``kwargs`` in gam.reparam's coordinates at ``params``."""
+        system = self._stable_system(params, deriv=deriv)
+        if system is None:
+            return kwargs
+        return {
+            **kwargs,
+            "multi_block_proj_S": system.log_det_terms,
+            "penalty_structure": system.penalty_structure,
+            "penalty_roots": system.penalty_roots,
+            "rotation": system.rotation,
+        }
+
+    def _source_kwargs(self) -> dict:
+        """Source inner-loop arguments shared by eager PIRLS calls."""
+        kw = self._jit_kwargs
+        return {
+            "null_beta": kw.get("null_beta"),
+            "count_indices": kw.get("count_indices"),
+            "max_y": kw.get("max_y", 0),
+            "integer_counts": kw.get("integer_counts", True),
+        }
+
+    def _eager_inner_fit(
+        self,
+        log_lambda: jax.Array,
+        S_lambda: jax.Array,
+        log_theta: jax.Array | None,
+    ) -> PIRLSResult:
+        """One inner fit from the initial coefficients, as gam.fit3 runs it."""
+        fd = self._fd
+        source = self._source_kwargs()
+        system = self._stable_system(log_lambda, deriv=0)
+        if system is None:
+            return _inner_fit(
+                fd.X,
+                fd.y,
+                self._initial_beta(),
+                S_lambda,
+                fd.family,
+                fd.wt,
+                fd.offset,
+                tol=self._pirls_tol,
+                log_theta=log_theta,
+                penalty_root=fd.penalty_root(log_lambda),
+                **source,
+            )
+        rotation = system.rotation
+        null_beta = source.pop("null_beta")
+        result = _inner_fit(
+            rotation.design(fd.X),
+            fd.y,
+            rotation.to_stable(self._initial_beta()),
+            penalty_ops.materialize(system.penalty_structure, log_lambda),
+            fd.family,
+            fd.wt,
+            fd.offset,
+            tol=self._pirls_tol,
+            log_theta=log_theta,
+            penalty_root=(
+                None
+                if system.penalty_roots is None
+                else penalty_ops.augmented_root(system.penalty_roots, log_lambda)
+            ),
+            null_beta=None if null_beta is None else rotation.to_stable(null_beta),
+            **source,
+        )
+        return pirls_from_stable(result, rotation)
+
     def _clamp_params(self, params: jax.Array) -> jax.Array:
-        """Optionally clamp log smoothing parameters.
+        """Optionally clamp the free log smoothing parameters.
 
         When ``lsp_max`` is None, no clamping is applied. When set
-        (default ``40.0``), clamps to ``[-lsp_max, lsp_max]``.
+        (default ``40.0``), free log smoothing parameters are clamped to
+        ``[-lsp_max, lsp_max]``.
 
         For joint optimization, only the log_lambda portion is clamped;
-        log_theta and log_phi are left unclamped.
+        log_theta and log_phi are left unclamped. Pinned log smoothing
+        parameters are supplied values, not optimization coordinates: they
+        are restored bitwise from ``log_lambda_init`` and never clamped.
+        Pinned mgcv holds a supplied sp verbatim in ``lsp0`` (mgcv.r
+        ``gam.setup``) and its ``newton()`` has no log-sp bound (gam.fit3.r,
+        the ``lsp.max`` branch is disabled).
         """
+        if self._pin_lambda:
+            n_lambda = self._fd.n_penalties
+            return jnp.concatenate([self._fd.log_lambda_init, params[n_lambda:]])
         if self._lsp_max is None:
             return params
         lsp_max = self._lsp_max
@@ -819,8 +1436,10 @@ class NewtonOptimizer:
         return jnp.clip(params, -lsp_max, lsp_max)
 
     def _initial_beta(self) -> jax.Array:
-        """Compute initial beta via Phase 1 initialization (NumPy -> JAX)."""
+        """Return the boundary-cached start, with a legacy fixture fallback."""
         fd = self._fd
+        if fd.beta_init is not None:
+            return fd.beta_init
         offset_np = np.asarray(fd.offset) if fd.offset is not None else None
         return initialize_beta(
             np.asarray(fd.X),
@@ -831,22 +1450,27 @@ class NewtonOptimizer:
         )
 
     def _make_criterion(
-        self, pirls_result: PIRLSResult
-    ) -> _CriterionBase | _JointCriterionBase:
+        self,
+        pirls_result: PIRLSResult | _OuterScoreState,
+        params: jax.Array | None = None,
+    ) -> _CriterionBase | _JointCriterionBase | _ProviderCriterion:
         """Create the REML criterion object from converged PIRLS.
 
         ML is not supported in v1.0 (see ``_check_scope_guards``), so only the
         REML criterion classes are constructed.
         """
+        if self._score_provider is not None:
+            return _ProviderCriterion(pirls_result.edf, pirls_result.scale)
+        stable = None if params is None else self._stable_system(params, deriv=2)
         if self._joint_scale:
-            return JointREMLCriterion(self._fd, pirls_result)
-        return REMLCriterion(self._fd, pirls_result)
+            return JointREMLCriterion(self._fd, pirls_result, stable=stable)
+        return REMLCriterion(self._fd, pirls_result, stable=stable)
 
     def _fit_and_score(
         self,
         params: jax.Array,
         beta_init: jax.Array,
-    ) -> tuple[PIRLSResult, jax.Array]:
+    ) -> tuple[PIRLSResult | _OuterScoreState, jax.Array]:
         """Run PIRLS and compute criterion score in a single JIT dispatch.
 
         Uses ``_jit_fit_and_score`` which fuses S_lambda construction,
@@ -861,12 +1485,107 @@ class NewtonOptimizer:
         Uses tightened PIRLS tolerance (``conv_tol / 100``) matching
         R's gam.fit3.r line 1308.
         """
+        if self._score_provider is not None:
+            return self._score_provider.evaluate(params)
         score, pirls_result = _jit_fit_and_score(
             params,
             beta_init,
-            **self._jit_kwargs,
+            **self._with_stable_system(self._jit_kwargs, params, deriv=0),
         )
         return pirls_result, score
+
+    def _gaussian_trial_score_change(
+        self,
+        params: jax.Array,
+        params_trial: jax.Array,
+        beta_base: jax.Array,
+        trial: PIRLSResult | _OuterScoreState,
+        score: float,
+        score_trial: float,
+        score_scale: float,
+    ) -> float:
+        """Refine only small, finite full-rank identity-Gaussian comparisons."""
+        change = score_trial - score
+        if self._score_provider is not None:
+            base_score = beta_base.score_state
+            trial_score = trial.score_state
+            n_lambda = self._fd.n_penalties
+            if self._joint_scale:
+                log_phi_base = params[n_lambda]
+                delta_log_phi = params_trial[n_lambda] - log_phi_base
+                delta_quadratic = (
+                    trial_score.penalized_residual_sum_squares
+                    - base_score.penalized_residual_sum_squares
+                )
+                scaled_quadratic_change = jnp.exp(-log_phi_base) * (
+                    jnp.exp(-delta_log_phi) * delta_quadratic
+                    + base_score.penalized_residual_sum_squares
+                    * jnp.expm1(-delta_log_phi)
+                )
+                scale_change = (
+                    base_score.n_positive_weights - self._fd.total_penalty_null_dim
+                ) * delta_log_phi
+            else:
+                scaled_quadratic_change = (
+                    trial_score.penalized_residual_sum_squares
+                    - base_score.penalized_residual_sum_squares
+                ) / base_score.scale
+                scale_change = jnp.array(0.0)
+            stable_change = 0.5 * (
+                scaled_quadratic_change
+                + trial_score.log_det_hessian
+                - base_score.log_det_hessian
+                - trial_score.log_det_penalty
+                + base_score.log_det_penalty
+                + scale_change
+            )
+            return float(stable_change) if np.isfinite(stable_change) else change
+        fd = self._fd
+        if (
+            not np.isfinite(change)
+            or abs(change) >= self._tol * score_scale
+            or type(fd.family) is not Gaussian
+            or not fd.family.is_canonical
+            or not self._joint_scale
+            or fd.rank_deficit != 0
+        ):
+            return change
+        X, structure, XtWX = fd.X, fd.penalty_structure, trial.XtWX
+        beta_trial, terms = trial.coefficients, fd.multi_block_proj_S
+        base_system = self._stable_system(params, deriv=0)
+        if base_system is not None:
+            # Both states in the base point's gam.reparam coordinates: there
+            # S_base and S_trial - S_base keep the penalties' scales apart.
+            rotation = base_system.rotation
+            X = rotation.design(X)
+            structure = base_system.penalty_structure
+            XtWX = rotation.to_stable_matrix(XtWX)
+            beta_base = rotation.to_stable(beta_base)
+            beta_trial = rotation.to_stable(beta_trial)
+            terms = self._stable_system(
+                params_trial, deriv=0, base_params=params
+            ).log_det_terms
+        stable_change = float(
+            _jit_gaussian_score_change(
+                params,
+                params_trial,
+                beta_base,
+                beta_trial,
+                X,
+                fd.y,
+                fd.wt,
+                self._jit_kwargs["offset"],
+                XtWX,
+                structure,
+                terms,
+                n_lambda=fd.n_penalties,
+                Mp=fd.total_penalty_null_dim,
+                singleton_sp_indices=fd.singleton_sp_indices,
+                singleton_ranks=fd.singleton_ranks,
+                multi_block_sp_indices=fd.multi_block_sp_indices,
+            )
+        )
+        return stable_change if np.isfinite(stable_change) else change
 
     def _step_halve_gaussian(
         self,
@@ -875,13 +1594,14 @@ class NewtonOptimizer:
         score: float,
         beta_warm: jax.Array,
         score_scale: float,
-    ) -> tuple[jax.Array, PIRLSResult, jax.Array, _StepOutcome]:
+    ) -> tuple[jax.Array, PIRLSResult | _OuterScoreState, jax.Array, _StepOutcome]:
         """Step-halving for Gaussian (R's ``fast.REML.fit``, fast-REML.r
         lines 1822-1844).
 
         Simpler than ``newton()``'s step acceptance: no quadratic-error
         check, no steepest-descent fallback, and step failure immediately
-        ends the optimization. Just halves until score decreases.
+        ends the optimization. Just halves while a finite trial is strictly
+        worse; a finite equal-score trial is accepted as in ``fast.REML.fit``.
 
         Returns
         -------
@@ -891,17 +1611,28 @@ class NewtonOptimizer:
 
         log_lambda_new = self._clamp_params(log_lambda + step)
         pirls_new, score_new = self._fit_and_score(log_lambda_new, beta_warm)
+        score_change = self._gaussian_trial_score_change(
+            log_lambda,
+            log_lambda_new,
+            beta_warm,
+            pirls_new,
+            score,
+            float(score_new),
+            score_scale,
+        )
 
-        # Accept immediately if score decreased (R line 1827)
-        if jnp.isfinite(score_new) and float(score_new) < score:
+        # ``fast.REML.fit`` only halves a strictly worse trial.  A finite
+        # equal-score trial is therefore accepted; treating equality as a
+        # failure changes the selected representable rho at flat optima.
+        if bool(jnp.isfinite(score_new)) and score_change <= 0.0:
             return log_lambda_new, pirls_new, score_new, _StepOutcome.ACCEPTED
 
         # Step-halving (R lines 1827-1839)
         k = 0
         not_moved = 0
-        while float(score_new) >= score:
+        while not bool(jnp.isfinite(score_new)) or score_change > 0.0:
             # Count steps with no numerically significant change (R line 1831)
-            if float(score_new) - score < tol * score_scale:
+            if bool(jnp.isfinite(score_new)) and score_change < tol * score_scale:
                 not_moved += 1
             else:
                 not_moved = 0
@@ -909,13 +1640,24 @@ class NewtonOptimizer:
             # Break conditions (R line 1832)
             if k == _MAX_HALVINGS_GAUSSIAN or not_moved > 3:
                 return log_lambda_new, pirls_new, score_new, _StepOutcome.FAILED
-            if bool(jnp.allclose(log_lambda, log_lambda + step)):
+            # R checks exact floating-point representability, not a relative
+            # closeness heuristic: `sum(rho != rho + step) == 0`.
+            if bool(jnp.all(log_lambda == log_lambda + step)):
                 return log_lambda_new, pirls_new, score_new, _StepOutcome.FAILED
 
             step = step / 2
             k += 1
             log_lambda_new = self._clamp_params(log_lambda + step)
             pirls_new, score_new = self._fit_and_score(log_lambda_new, beta_warm)
+            score_change = self._gaussian_trial_score_change(
+                log_lambda,
+                log_lambda_new,
+                beta_warm,
+                pirls_new,
+                score,
+                float(score_new),
+                score_scale,
+            )
 
         return log_lambda_new, pirls_new, score_new, _StepOutcome.ACCEPTED
 
@@ -930,7 +1672,7 @@ class NewtonOptimizer:
         hess: jax.Array,
         outer_iter: int,
         is_pdef: bool,
-    ) -> tuple[jax.Array, PIRLSResult, jax.Array, _StepOutcome]:
+    ) -> tuple[jax.Array, PIRLSResult | _OuterScoreState, jax.Array, _StepOutcome]:
         """Trial step with quadratic-error check and steepest-descent fallback.
 
         Follows R's ``newton()`` (gam.fit3.r lines 1491-1571) for
@@ -1111,7 +1853,7 @@ class NewtonOptimizer:
         score: float,
         score_old: float,
         is_pdef: bool,
-        pirls_result: PIRLSResult,
+        pirls_result: PIRLSResult | _OuterScoreState,
     ) -> tuple[jax.Array, jax.Array, float, bool]:
         """Compute gradient/Hessian and check convergence at accepted point.
 
@@ -1145,8 +1887,12 @@ class NewtonOptimizer:
             # the Hessian cross-penalty terms, critical for multi-smooth.
             # For non-Gaussian, also captures d(XtWX)/d(rho).
             # Matches R's analytical Hessian from gdi.c / fast.REML.fit.
-            beta_warm = pirls_result.coefficients
-            grad, hess = self._diff_grad_hess(params, beta_warm)
+            derivative_state = (
+                pirls_result
+                if self._score_provider is not None
+                else pirls_result.coefficients
+            )
+            grad, hess = self._diff_grad_hess(params, derivative_state)
             hess = (hess + hess.T) / 2
         else:
             # Purely parametric (no smoothing parameters): use criterion AD.
@@ -1212,23 +1958,63 @@ class NewtonOptimizer:
         params: jax.Array,
         score: jax.Array,
         gradient: jax.Array,
-        criterion: _CriterionBase | _JointCriterionBase,
-        pirls_result: PIRLSResult,
+        criterion: _CriterionBase | _JointCriterionBase | _ProviderCriterion,
+        pirls_result: PIRLSResult | _OuterScoreState,
         converged: bool,
         step_failed: bool,
         n_iter: int,
     ) -> NewtonResult:
-        """Assemble the final NewtonResult."""
-        if converged:
+        """Assemble the final NewtonResult.
+
+        A non-finite score or gradient is never reported as converged: every
+        comparison with NaN is false, so a NaN slips through the "exceeds
+        tolerance" tests (and the stuck-step exit). Finiteness is therefore
+        checked here, where every optimizer exit is assembled.
+        """
+        finite = bool(jnp.isfinite(score)) and bool(jnp.all(jnp.isfinite(gradient)))
+        if not finite:
+            converged = False
+            info = "non-finite REML score or gradient"
+        elif converged:
             info = "full convergence"
         elif step_failed:
             info = "step failed"
         else:
             info = "iteration limit"
+        # The compressed Gaussian QR score provider (PR9) has no inner loop.
+        source_loop = self._jit_kwargs.get("null_beta") is not None
+        if finite and source_loop and not bool(pirls_result.converged):
+            # The final coefficients are those of a failed pinned inner fit (R
+            # stops there with "inner loop k; can't correct step size"): never
+            # a converged result.  The ordinary loop (structurally
+            # rank-deficient models) keeps its existing outer-only report.
+            converged = False
+            info = f"{info}; inner fit did not converge: " + status_message(
+                self._fd.family, int(np.asarray(pirls_result.inner_status))
+            )
 
         n_lambda = self._fd.n_penalties
         log_lambda = params[:n_lambda]
         grad_lambda = gradient[:n_lambda]
+        final_system = (
+            None
+            if self._score_provider is not None
+            else self._stable_system(params, deriv=0)
+        )
+        # The compressed Gaussian QR score provider (PR9) factors by QR and
+        # never calls cho_factor; its state is not a PIRLSResult.
+        levels = (
+            {}
+            if self._score_provider is not None
+            else factorization_fallbacks(
+                self._fd,
+                pirls_result,
+                log_lambda,
+                include_ift=self._diff_grad_hess is not None,
+                stable=final_system,
+            )
+        )
+        info = info + fallback_note(levels)
 
         # Extract theta for extended families and sync family state
         # for Phase 3 post-estimation (predict, summary, plot).
@@ -1239,6 +2025,11 @@ class NewtonOptimizer:
             theta = float(jnp.exp(log_theta[0]))
             self._fd.family.put_theta(np.asarray(log_theta))
 
+        finalized = (
+            self._score_provider.finalize(params, pirls_result)
+            if self._score_provider is not None
+            else pirls_result
+        )
         return NewtonResult(
             log_lambda=log_lambda,
             smoothing_params=jnp.exp(log_lambda),
@@ -1248,9 +2039,11 @@ class NewtonOptimizer:
             gradient=grad_lambda,
             edf=criterion.edf,
             scale=criterion.scale,
-            pirls_result=pirls_result,
+            pirls_result=finalized,
             convergence_info=info,
             theta=theta,
+            factor_regularization=max(levels.values(), default=0.0),
+            stable_rotation=() if final_system is None else final_system.host_rotation,
         )
 
     def run(self) -> NewtonResult:
@@ -1274,7 +2067,7 @@ class NewtonOptimizer:
             log_theta = None
             if fd.family.n_theta > 0:
                 log_theta = jnp.asarray(fd.family.get_theta(transformed=False))
-            pirls_result = pirls_loop(
+            pirls_result = _inner_fit(
                 fd.X,
                 fd.y,
                 self._initial_beta(),
@@ -1284,6 +2077,8 @@ class NewtonOptimizer:
                 fd.offset,
                 tol=self._pirls_tol,
                 log_theta=log_theta,
+                penalty_root=fd.penalty_root(log_lambda),
+                **self._source_kwargs(),
             )
             criterion = self._make_criterion(pirls_result)
             score = criterion.score(log_lambda)
@@ -1302,12 +2097,14 @@ class NewtonOptimizer:
         log_lambda = fd.log_lambda_init.copy()
         parts = [log_lambda]
 
-        if self._joint_theta:
+        if self._score_provider is not None:
+            params = self._score_provider.initial_parameters(log_lambda)
+        elif self._joint_theta:
             # Append initial log_theta from family state
             log_theta_init = jnp.asarray(fd.family.get_theta(transformed=False))
             parts.append(log_theta_init)
 
-        if self._joint_scale:
+        if self._score_provider is None and self._joint_scale:
             # Run initial PIRLS to get Fletcher scale for log_phi init
             S_init = fd.S_lambda(log_lambda)
             log_theta_init_for_pirls = None
@@ -1315,28 +2112,26 @@ class NewtonOptimizer:
                 log_theta_init_for_pirls = jnp.asarray(
                     fd.family.get_theta(transformed=False)
                 )
-            pirls_init = pirls_loop(
-                fd.X,
-                fd.y,
-                self._initial_beta(),
-                S_init,
-                fd.family,
-                fd.wt,
-                fd.offset,
-                tol=self._pirls_tol,
-                log_theta=log_theta_init_for_pirls,
+            pirls_init = self._eager_inner_fit(
+                log_lambda, S_init, log_theta_init_for_pirls
             )
             # Fisher-weighted EDF (XtWX may be observed info for non-canonical).
-            edf_init = estimate_edf(pirls_init.XtWX_fisher, pirls_init.L_fisher)
+            edf_init = fisher_edf(pirls_init)
             phi_init = fletcher_scale(fd.y, pirls_init.mu, fd.wt, fd.family, edf_init)
             log_phi_init = jnp.log(phi_init)
             parts.append(log_phi_init[None])
 
-        params = jnp.concatenate(parts) if len(parts) > 1 else log_lambda
+        if self._score_provider is None:
+            params = jnp.concatenate(parts) if len(parts) > 1 else log_lambda
 
         # -- Initial fit and score --
-        pirls_result, score = self._fit_and_score(params, self._initial_beta())
-        criterion = self._make_criterion(pirls_result)
+        beta_start = (
+            jnp.zeros(fd.n_coef, dtype=jnp.float64)
+            if self._score_provider is not None
+            else self._initial_beta()
+        )
+        pirls_result, score = self._fit_and_score(params, beta_start)
+        criterion = self._make_criterion(pirls_result, params)
         grad, hess, score_scale, _ = self._check_convergence(
             criterion,
             params,
@@ -1345,6 +2140,22 @@ class NewtonOptimizer:
             is_pdef=True,
             pirls_result=pirls_result,
         )
+
+        if self._pin_lambda and not np.isfinite(float(score)):
+            # The supplied smoothing parameters cannot move, and no trial can
+            # be compared with a non-finite starting score (every comparison
+            # with NaN is false), so stop and report the failed evaluation
+            # instead of halving toward it.
+            return self._build_result(
+                params,
+                score,
+                grad,
+                criterion,
+                pirls_result,
+                converged=False,
+                step_failed=False,
+                n_iter=0,
+            )
 
         converged = False
         step_failed = False
@@ -1379,11 +2190,16 @@ class NewtonOptimizer:
             if self._is_gaussian:
                 # fast.REML.fit: simpler step acceptance, step.failed
                 # breaks immediately (R fast-REML.r lines 1822-1844)
+                gaussian_warm_state = (
+                    pirls_result
+                    if self._score_provider is not None
+                    else pirls_result.coefficients
+                )
                 params_new, pirls_new, score_new, outcome = self._step_halve_gaussian(
                     params,
                     step,
                     float(score),
-                    pirls_result.coefficients,
+                    gaussian_warm_state,
                     score_scale,
                 )
             else:
@@ -1427,7 +2243,7 @@ class NewtonOptimizer:
             pirls_result = pirls_new
             score = score_new
 
-            criterion = self._make_criterion(pirls_result)
+            criterion = self._make_criterion(pirls_result, params)
 
             grad, hess, score_scale, converged = self._check_convergence(
                 criterion,
@@ -1458,7 +2274,7 @@ class NewtonOptimizer:
 
 
 def newton_optimize(
-    fd: FittingData,
+    fd: FittingData | PreparedFittingMetadata,
     method: str = "REML",
     log_lambda_init: jax.Array | None = None,
     max_iter: int = 200,
@@ -1466,6 +2282,7 @@ def newton_optimize(
     max_step: float = 5.0,
     lsp_max: float = 40.0,
     pin_lambda: bool = False,
+    score_provider: OuterScoreProvider | None = None,
 ) -> NewtonResult:
     """Minimize REML criterion over log smoothing parameters.
 
@@ -1493,13 +2310,13 @@ def newton_optimize(
     max_step : float
         Maximum step component in log-lambda space.
     lsp_max : float or None
-        Maximum absolute value for log smoothing parameters. Defaults
+        Maximum absolute value for free log smoothing parameters. Defaults
         to ``40.0``. ``None`` disables clamping.
     pin_lambda : bool
-        If ``True``, hold the log smoothing parameters fixed at
-        ``log_lambda_init`` and optimize only the remaining parameters
-        (extended-family theta / scale). Used by the fixed-``sp`` path for
-        families with estimated theta.
+        If ``True``, hold the log smoothing parameters bitwise at
+        ``log_lambda_init`` (never clamped by ``lsp_max``) and optimize only
+        the remaining parameters (extended-family theta / scale). Used by the
+        fixed-``sp`` path for families with estimated theta or scale.
 
     Returns
     -------
@@ -1520,5 +2337,6 @@ def newton_optimize(
         max_step=max_step,
         lsp_max=lsp_max,
         pin_lambda=pin_lambda,
+        score_provider=score_provider,
     )
     return optimizer.run()

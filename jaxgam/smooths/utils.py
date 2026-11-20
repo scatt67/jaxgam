@@ -15,6 +15,44 @@ import numba
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+from scipy.spatial.distance import cdist
+
+# Bound temporary kernel/distance blocks while retaining the final dense model
+# matrix required by the current execution path.
+DISTANCE_BATCH_ROWS = 8192
+
+
+class _SourceMeanAccumulator:
+    """Reproduce R's two-pass column mean with O(number of columns) state."""
+
+    def __init__(self, columns: int) -> None:
+        self._sum = np.zeros(columns, dtype=np.longdouble)
+        self._mean: npt.NDArray[np.longdouble] | None = None
+        self._correction: npt.NDArray[np.longdouble] | None = None
+        self.count = 0
+
+    def add_first(self, row: npt.ArrayLike) -> None:
+        self._sum += np.asarray(row, dtype=np.longdouble)
+        self.count += 1
+
+    def begin_correction(self) -> None:
+        if self.count == 0:
+            raise ValueError("Cannot calculate a source mean without rows.")
+        self._mean = self._sum / np.longdouble(self.count)
+        self._correction = np.zeros_like(self._sum)
+
+    def add_correction(self, row: npt.ArrayLike) -> None:
+        if self._mean is None or self._correction is None:
+            raise RuntimeError("Begin the source mean correction before adding rows.")
+        self._correction += np.asarray(row, dtype=np.longdouble) - self._mean
+
+    def result(self) -> npt.NDArray[np.float64]:
+        if self.count == 0:
+            raise ValueError("Cannot calculate a source mean without rows.")
+        mean = self._sum / np.longdouble(self.count)
+        if self._correction is not None:
+            mean += self._correction / np.longdouble(self.count)
+        return np.asarray(mean, dtype=np.float64)
 
 
 def is_factor(col: pd.Series | npt.NDArray) -> bool:
@@ -332,9 +370,65 @@ def _compute_distance_matrix(
     np.ndarray
         Distance matrix, shape ``(n1, n2)``.
     """
-    # Use broadcasting for efficiency
-    diff = X1[:, np.newaxis, :] - X2[np.newaxis, :, :]
-    return np.sqrt(np.sum(diff**2, axis=2))
+    # scipy's cdist computes directly into the n1-by-n2 result without an
+    # n1-by-n2-by-d broadcast temporary.
+    return cdist(X1, X2, metric="euclidean")
+
+
+def source_column_means(
+    X: npt.NDArray[np.floating], *, chunk_rows: int = 65536
+) -> npt.NDArray[np.float64]:
+    """Return R's ``colMeans(X)``: long-double column sums in source row order.
+
+    ``do_colsum`` accumulates each column in C ``long double`` (``LDOUBLE``)
+    from the first row to the last, divides by the row count there and rounds
+    once.  NumPy's ``longdouble`` is the same C type, so the accumulator's
+    precision follows the platform as R's does; ``cumsum`` fixes the
+    left-to-right order.  Rows are consumed in bounded chunks.
+    """
+    X = np.asarray(X, dtype=np.float64)
+    if X.ndim != 2 or X.shape[0] == 0:
+        raise ValueError("Column means need a nonempty two-dimensional array.")
+    total = np.zeros(X.shape[1], dtype=np.longdouble)
+    for start in range(0, X.shape[0], chunk_rows):
+        rows = np.asarray(X[start : start + chunk_rows], dtype=np.longdouble)
+        total = np.cumsum(np.vstack((total[np.newaxis], rows)), axis=0)[-1].copy()
+    return np.asarray(total / np.longdouble(X.shape[0]), dtype=np.float64)
+
+
+def radial_knot_options(spec: Any) -> tuple[Any, Any]:
+    """Return a tp/ts/gp smooth's knot cap and sampling seed.
+
+    smooth.construct.tp and smooth.construct.gp read ``xt$max.knots``
+    (default 2000) and ``xt$seed`` (default 1). ``xt`` may spell the cap
+    ``max_knots`` or ``max.knots``. Thin-plate terms also accept the same
+    two values as direct ``max_knots``/``seed`` arguments, JaxGAM's
+    established spelling; a value given both ways must agree.
+    """
+    xt = spec.extra_args.get("xt", {})
+    if xt is None:
+        xt = {}
+    if not isinstance(xt, dict):
+        raise TypeError("xt must be a dict.")
+    if "max_knots" in xt and "max.knots" in xt and xt["max_knots"] != xt["max.knots"]:
+        raise ValueError("xt gives max_knots and max.knots different values.")
+    values = {
+        "max_knots": xt.get("max_knots", xt.get("max.knots")),
+        "seed": xt.get("seed"),
+    }
+    if spec.bs in {"tp", "ts"}:
+        for name in values:
+            direct = spec.extra_args.get(name)
+            if direct is None:
+                continue
+            if values[name] is not None and values[name] != direct:
+                raise ValueError(
+                    f"{name} is given directly and in xt with different values."
+                )
+            values[name] = direct
+    max_knots = 2000 if values["max_knots"] is None else values["max_knots"]
+    seed = 1 if values["seed"] is None else values["seed"]
+    return max_knots, seed
 
 
 def _get_unique_rows(
@@ -358,30 +452,6 @@ def _get_unique_rows(
     # Use np.unique with axis=0 which sorts lexicographically
     Xu, inverse = np.unique(X, axis=0, return_inverse=True)
     return Xu, inverse
-
-
-def _subsample_knots(
-    Xu: npt.NDArray[np.floating], max_knots: int, seed: int = 1
-) -> npt.NDArray[np.floating]:
-    """Reproducible knot subsampling (activates only when unique points > max).
-
-    Subsampling triggers only when the number of UNIQUE covariate locations
-    exceeds ``max_knots`` (default 2000). The subset is chosen with numpy's
-    legacy ``np.random.RandomState(seed)`` for determinism.
-
-    This does NOT bit-match R mgcv's ``sample(1:nu, nk, replace=FALSE)``
-    (R/smooth.r:1300): R uses Mersenne-Twister with R-specific seed scrambling
-    and a different without-replacement algorithm, so the selected knot subset
-    differs across languages. The resulting final-fit difference is within
-    LOOSE tolerance. Exact parity is not achievable without reimplementing R's
-    RNG and is intentionally out of scope (see docs/design.md Section 4.5).
-    """
-    if Xu.shape[0] <= max_knots:
-        return Xu
-    rng = np.random.RandomState(seed)
-    idx = rng.choice(Xu.shape[0], max_knots, replace=False)
-    idx.sort()
-    return Xu[idx]
 
 
 def get_col(

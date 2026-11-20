@@ -153,10 +153,16 @@ tests/
 
 ## What Is NOT in v1.0
 
+Fellner–Schall (EFS) implementation is authorized follow-on work under
+`docs/scale_jaxgam/fellner_schall_implementation_plan.md`, including the internal
+estimated-NB/theta controller integration. The earlier EFS implementation
+deferral no longer applies. Numerical parity, phase boundaries, testing, and
+main-agent review requirements remain unchanged.
+
 Do not implement any of the following. They are designed for but deferred:
 
 - Sparse-CPU execution path (CHOLMOD, scikit-sparse)
-- `bam()`, chunked processing, fREML, Fellner-Schall
+- `bam()`, chunked processing, fREML
 - Extended families (Tweedie, Beta, SHASH, Cox PH, ordered categorical) — NB is implemented in v1.0
 - P-splines (`ps`, `cp`), B-splines (`bs`)
 - Factor-smooth interactions (`bs="fs"`)

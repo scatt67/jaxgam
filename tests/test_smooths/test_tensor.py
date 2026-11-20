@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 
 from jaxgam.formula.terms import SmoothSpec
+from jaxgam.smooths import source_penalty_coordinates
 from jaxgam.smooths.tensor import (
     TensorInteractionSmooth,
     TensorProductSmooth,
@@ -38,6 +39,23 @@ from tests.tolerances import (
     normalize_column_signs,
     normalize_symmetric_signs,
 )
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [("Accelerate", True), ("scipy-openblas", False)],
+)
+def test_tensor_eigen_provider_uses_scipy_build_config(
+    monkeypatch: pytest.MonkeyPatch, provider: str, expected: bool
+) -> None:
+    """A macOS wheel using OpenBLAS must take the pinned provider path."""
+    monkeypatch.setattr(
+        source_penalty_coordinates.scipy_config,
+        "CONFIG",
+        {"Build Dependencies": {"lapack": {"name": provider}}},
+    )
+    assert source_penalty_coordinates.scipy_uses_accelerate_lapack() is expected
+
 
 # ===========================================================================
 # 1. Row-wise Kronecker product tests (STRICT)
@@ -115,9 +133,14 @@ class TestAbsorbConstraint:
         # Symmetric
         np.testing.assert_allclose(S_c, S_c.T, rtol=STRICT.rtol, atol=STRICT.atol)
 
-        # PSD
+        # PSD, relative to the spectrum: the constrained penalty has one
+        # structural zero eigenvalue and a largest one of 3.4e4, so eigvalsh
+        # returns that zero only to about eps * 3.4e4 = 7.6e-12 of either
+        # sign. An absolute STRICT.atol is below that rounding floor (the
+        # pinned Linux arm64 image returned -1.36e-12, 4e-17 of the largest).
         eigvals = np.linalg.eigvalsh(S_c)
-        assert np.all(eigvals >= -STRICT.atol), (
+        floor = STRICT.atol + STRICT.rtol * np.max(np.abs(eigvals))
+        assert np.all(eigvals >= -floor), (
             f"Constrained penalty has negative eigenvalue: {np.min(eigvals):.2e}"
         )
 
@@ -377,6 +400,37 @@ class TestRComparison:
         smooth.setup({"x1": x1, "x2": x2})
 
         return smooth, r_result, {"x1": x1, "x2": x2}
+
+    def test_te_cr_source_normalization_matches_r_strict(self) -> None:
+        """smoothCon's DLANGE normalization is preserved before constraints."""
+        import pandas as pd
+
+        from tests.r_bridge import RBridge
+
+        position = np.arange(97, dtype=np.float64)
+        x = (position + 0.2 * np.sin(position * 0.7)) / len(position)
+        z = np.cos(position * 0.23) + 0.07 * np.sin(position * 0.91)
+        expected = RBridge(mode="rpy2").smooth_construct(
+            "te(x,z,bs='cr',k=3)",
+            pd.DataFrame({"x": x, "z": z}),
+        )
+        smooth = TensorProductSmooth(
+            make_smooth_spec(["x", "z"], bs="cr", k=3, smooth_type="te")
+        )
+        smooth.setup({"x": x, "z": z})
+
+        np.testing.assert_allclose(
+            smooth.training_design_matrix(),
+            expected["X"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        for observed, target in zip(
+            smooth.build_penalty_matrices(), expected["S"], strict=True
+        ):
+            np.testing.assert_allclose(
+                observed.S, target, rtol=STRICT.rtol, atol=STRICT.atol
+            )
 
     def _setup_te_tp(self) -> tuple:
         """Setup te(x1, x2, bs='tp', k=5) for R comparison."""
