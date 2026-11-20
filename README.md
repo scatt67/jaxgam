@@ -338,6 +338,80 @@ Note: jaxgam currently implements `gam(REML)` only. The benchmarks above
 compare against both R's `gam(REML)` (apples-to-apples) and `bam(fREML)`
 (to show what mgcv can do with its large data optimizer!).
 
+### Large data: the discretized route against `bam(discrete=TRUE)`
+
+`FitControl(execution="discrete")` fits on the same compact discretized
+design as `mgcv::bam(discrete=TRUE)` and, with
+`smoothing_strategy="working_model_reml"`, selects the smoothing
+parameters by the same performance iteration (see
+[Discrete execution](docs/api.md#discrete-execution)). The table times
+whole fits by both on the same generated data, on one laptop. Ratios
+follow the tables above: R time divided by jaxgam time, so above 1 means
+jaxgam was faster. `cold/R` compares the two first calls and `warm/R`
+the two warm ones.
+
+| model | family | n | coefficients | cold (s) | warm (s) | R first (s) | R warm (s) | cold/R | warm/R | jaxgam cores |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `s(x0) + te(x0, x1)`, k=6 | gaussian | 1,000,000 | 40 | 1.34 | 0.30 | 0.89 | 0.62 | 0.7x | 2.1x | 1.9 |
+| `s(x0, bs="gp", k=30)` | gaussian | 1,000,000 | 30 | 0.93 | 0.27 | 0.77 | 0.46 | 0.8x | 1.7x | 1.1 |
+| 10 smooths, k=11 | gaussian | 1,000,000 | 101 | 2.04 | 0.61 | 2.14 | 1.81 | 1.1x | 2.9x | 2.2 |
+| 10 smooths, k=11 | gaussian | 3,000,000 | 101 | 3.16 | 1.71 | 6.25 | 5.86 | 2.0x | 3.4x | 2.3 |
+| 2 smooths, k=10 | nb | 1,000,000 | 19 | 4.19 | 2.67 | 14.37 | 12.85 | 3.4x | 4.8x | 3.6 |
+| `s(x0) + s(g, bs="re")`, 1,000 levels | gaussian | 100,000 | 1,006 | 2.25 | 0.92 | 1.37 | 0.92 | 0.6x | 1.0x | 3.9 |
+| 100 smooths, k=10 | gaussian | 100,000 | 901 | 6.36 | 2.46 | 5.65 | 5.27 | 0.9x | 2.1x | 3.1 |
+| 100 smooths, k=20 | gaussian | 100,000 | 1,901 | 13.60 | 9.43 | 23.16 | 21.95 | 1.7x | 2.3x | 4.3 |
+| 500 smooths, k=10 | gaussian | 100,000 | 4,501 | 180 | 170 | 230 | – | 1.3x | 1.4x | 4.3 |
+
+How these were measured:
+
+- **jaxgam:** one whole `GAM(...).fit(source, result="prediction")` call,
+  setup included. *cold* is the first call in a fresh process with the
+  on-disk compilation cache disabled, so it includes all JIT compilation.
+  *warm* is the fastest of the next four calls in that process.
+- **R:** the `bam(..., method="fREML", discrete=TRUE)` call alone, with
+  `gam.control(maxit=200, epsilon=1e-7)`. *first* is the first call in a
+  fresh R process and *warm* the fastest of the next four; R also speeds
+  up over its first calls. Copying the data into R is not timed.
+- **500 smooths:** two jaxgam calls and one `bam` call; both ratios use
+  that one call.
+- **Setup:** R 4.5.2 and mgcv 1.9-3, an Apple M4 laptop with 10 cores,
+  commit `8c4c533`. Data and formulas come from
+  `scripts/benchmark_scaling.py`; smooths are `bs="cr"` unless shown.
+  The gp, random-effect and many-smooth rows ran with memory budgets
+  raised above the defaults.
+
+Read the ratios with the core counts in mind:
+
+- **`bam` ran on one core in every case.** mgcv in this R installation
+  was built without OpenMP, so `nthreads` has no effect there. A `bam`
+  with OpenMP and several threads may be faster than shown; that was not
+  measured. R used Apple's Accelerate BLAS here, not the reference BLAS
+  of the tables above.
+- **jaxgam used 1.1 to 4.3 cores.** NumPy and SciPy were held to one
+  BLAS thread, but JAX's CPU backend runs on several cores by itself.
+  The last column is jaxgam's CPU time divided by its wall time for the
+  warm fit.
+- **In CPU time rather than wall time,** `bam` is ahead on the
+  random-effect and many-smooth rows (100 smooths with k=20:
+  41 CPU-seconds for jaxgam against 22) and jaxgam is ahead on the
+  other five (10 smooths at 3 million rows: 3.9 against 5.8).
+
+Do the two fits agree?
+
+- **First six rows:** total EDF agrees to 7e-9 relative or better, and
+  deviance, scale and REML score to 3e-12 or better.
+- **Many-smooth rows:** both converge, but the criterion is flat in
+  several smoothing parameters, so the stopping point is not determined
+  beyond the stopping rule. Total EDF is 218.07 against 218.06
+  (100 smooths, k=10), 347.6 against 344.1 (k=20) and 685.78 against
+  685.66 (500 smooths); deviance and scale agree to 2e-4 relative
+  or better and the REML score to 7e-7. `bam`'s own stopping point
+  moves too: asked for `nthreads=4` on the same data (still one core
+  here) it returns EDF 345.5 instead of 344.1 at k=20.
+
+These are single-machine timings from five calls each; treat them as
+indicative.
+
 ### When to use jaxgam
 
 **jaxgam is a good fit when:**
