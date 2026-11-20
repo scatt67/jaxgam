@@ -12,7 +12,7 @@ from jaxgam.fitting.family_execution import (
     FamilyExecutionContext,
     FamilyExecutionParameters,
 )
-from jaxgam.fitting.operator_family import operator_family_rows
+from jaxgam.fitting.operator.family import operator_family_rows
 from jaxgam.links.links import IdentityLink, InverseLink, LogLink, SqrtLink
 from tests.helpers import _AssertCollector
 from tests.tolerances import STRICT

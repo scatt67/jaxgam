@@ -48,7 +48,7 @@ Concrete methods on the base class that the fit calls: `working_weights` (`wt / 
 Optional methods that some routes require, each raising `NotImplementedError` on the base class:
 
 - `deviance_contributions` (per-row deviance without the square root) and `deviance_derivative_contributions` (a smooth form for automatic differentiation). The dense route differentiates the latter to form observed-information weights, which mgcv uses in the REML `log|H|` for non-canonical links (`jaxgam/fitting/pirls.py`), so a custom family with a non-canonical link needs it even on the dense route.
-- `source_dev_resids`: pinned `dev.resids` arithmetic with no domain safeguard, for the discretized performance iteration (`jaxgam/fitting/discrete_working.py`).
+- `source_dev_resids`: pinned `dev.resids` arithmetic with no domain safeguard, for the discretized performance iteration (`jaxgam/fitting/discrete/working.py`).
 
 Class attributes: `n_theta` (number of estimated extra parameters, 0 by default), `scale_known`, `response_support` (`REAL`, `NON_NEGATIVE`, `POSITIVE` or `UNIT_INTERVAL`) and `canonical_link_cls`. `is_canonical` is true when the link is an instance of `canonical_link_cls`; Gaussian, Binomial, Poisson and Gamma declare `IdentityLink`, `LogitLink`, `LogLink` and `InverseLink`. `NegativeBinomial` declares none, so it is never canonical.
 
@@ -83,21 +83,21 @@ The base class fills the capabilities from what the subclass implements: `direct
 
 | Capability | Meaning | Read by |
 |---|---|---|
-| `row_separable` | Per-row quantities depend only on that row. | `jaxgam/api.py` (`_check_stream_fixed_family`), `jaxgam/execution/stream.py`, `jaxgam/execution/regular_stream.py`, `jaxgam/fitting/family_execution.py`, `jaxgam/fitting/operator_family.py` |
-| `fisher_working_system` | A positive Fisher working system exists. | `jaxgam/api.py`, `jaxgam/execution/stream.py`, `jaxgam/execution/regular_stream.py`, `jaxgam/fitting/family_execution.py` |
-| `observed_information` | Observed information is available through the direct deviance. | `jaxgam/api.py`, `jaxgam/execution/regular_stream.py`, `jaxgam/fitting/family_execution.py`, `jaxgam/fitting/operator_family.py` |
-| `direct_deviance` | `deviance_contributions` is implemented. | `jaxgam/api.py`, `jaxgam/execution/stream.py`, `jaxgam/execution/regular_stream.py`, `jaxgam/fitting/family_execution.py`, `jaxgam/fitting/operator_family.py` |
-| `differentiable_deviance` | `deviance_derivative_contributions` is implemented. | `jaxgam/api.py` (required for unknown-scale streamed fixed-sp fits), `jaxgam/fitting/family_execution.py`, `jaxgam/fitting/operator_family.py` |
-| `saturated_loglikelihood` | `saturated_loglik` is usable in a score. | `jaxgam/api.py`, `jaxgam/execution/stream.py`, `jaxgam/execution/regular_stream.py`, `jaxgam/fitting/family_execution.py` |
-| `dynamic_theta` | Theta is estimated and passed as a dynamic argument. | `jaxgam/api.py`, `jaxgam/execution/regular_stream.py`, `jaxgam/execution/reml.py`, `jaxgam/fitting/family_execution.py`, `jaxgam/fitting/stream_reml.py` |
+| `row_separable` | Per-row quantities depend only on that row. | `jaxgam/api.py` (`_check_stream_fixed_family`), `jaxgam/execution/stream/pirls.py`, `jaxgam/execution/stream/regular.py`, `jaxgam/fitting/family_execution.py`, `jaxgam/fitting/operator/family.py` |
+| `fisher_working_system` | A positive Fisher working system exists. | `jaxgam/api.py`, `jaxgam/execution/stream/pirls.py`, `jaxgam/execution/stream/regular.py`, `jaxgam/fitting/family_execution.py` |
+| `observed_information` | Observed information is available through the direct deviance. | `jaxgam/api.py`, `jaxgam/execution/stream/regular.py`, `jaxgam/fitting/family_execution.py`, `jaxgam/fitting/operator/family.py` |
+| `direct_deviance` | `deviance_contributions` is implemented. | `jaxgam/api.py`, `jaxgam/execution/stream/pirls.py`, `jaxgam/execution/stream/regular.py`, `jaxgam/fitting/family_execution.py`, `jaxgam/fitting/operator/family.py` |
+| `differentiable_deviance` | `deviance_derivative_contributions` is implemented. | `jaxgam/api.py` (required for unknown-scale streamed fixed-sp fits), `jaxgam/fitting/family_execution.py`, `jaxgam/fitting/operator/family.py` |
+| `saturated_loglikelihood` | `saturated_loglik` is usable in a score. | `jaxgam/api.py`, `jaxgam/execution/stream/pirls.py`, `jaxgam/execution/stream/regular.py`, `jaxgam/fitting/family_execution.py` |
+| `dynamic_theta` | Theta is estimated and passed as a dynamic argument. | `jaxgam/api.py`, `jaxgam/execution/stream/regular.py`, `jaxgam/execution/stream/reml.py`, `jaxgam/fitting/family_execution.py`, `jaxgam/fitting/stream/reml.py` |
 | `dynamic_phi` | The scale is estimated. | No reader outside `jaxgam/families/` at HEAD. |
-| `coefficient_system` | `"fisher"` or `"observed"` coefficient system. | `jaxgam/api.py`, `jaxgam/execution/stream.py`, `jaxgam/execution/regular_stream.py`, `jaxgam/fitting/family_execution.py`, `jaxgam/fitting/stream_reml.py` |
-| `fisher_equals_observed_for_score` | The two informations coincide in the score (canonical links). | `jaxgam/api.py`, `jaxgam/execution/efs.py`, `jaxgam/execution/stream.py`, `jaxgam/execution/regular_stream.py`, `jaxgam/fitting/stream_reml.py` |
+| `coefficient_system` | `"fisher"` or `"observed"` coefficient system. | `jaxgam/api.py`, `jaxgam/execution/stream/pirls.py`, `jaxgam/execution/stream/regular.py`, `jaxgam/fitting/family_execution.py`, `jaxgam/fitting/stream/reml.py` |
+| `fisher_equals_observed_for_score` | The two informations coincide in the score (canonical links). | `jaxgam/api.py`, `jaxgam/execution/efs.py`, `jaxgam/execution/stream/pirls.py`, `jaxgam/execution/stream/regular.py`, `jaxgam/fitting/stream/reml.py` |
 | `regular_fletcher_scale` | The Fletcher scale reduction applies (Gamma, non-canonical Gaussian). | `jaxgam/fitting/family_execution.py` |
-| `single_step_pirls` | The first accepted coefficient solve is final (Gaussian identity, `gam.fit3`'s strictly additive branch). | `jaxgam/execution/operator_fit.py`, `jaxgam/execution/regular_stream.py`, `jaxgam/fitting/efs_regular_pirls.py` |
+| `single_step_pirls` | The first accepted coefficient solve is final (Gaussian identity, `gam.fit3`'s strictly additive branch). | `jaxgam/execution/operator/fit.py`, `jaxgam/execution/stream/regular.py`, `jaxgam/fitting/efs_regular_pirls.py` |
 | `initial_alpha_resolution` | Flags the Binomial/log start whose alpha is cancellation-sensitive. | `jaxgam/fitting/family_execution.py` |
-| `regular_performance_iteration` | `bgam.fitd`'s Fisher performance iteration is validated for this family and link. | `jaxgam/api.py` (`_fit_discrete`), `jaxgam/execution/discrete_regular.py` |
-| `extended_performance_iteration` | `bgam.fitd`'s extended-family iteration is validated (NB log, identity, sqrt). | `jaxgam/api.py`, `jaxgam/execution/discrete_regular.py` |
+| `regular_performance_iteration` | `bgam.fitd`'s Fisher performance iteration is validated for this family and link. | `jaxgam/api.py` (`_fit_discrete`), `jaxgam/execution/discrete/regular.py` |
+| `extended_performance_iteration` | `bgam.fitd`'s extended-family iteration is validated (NB log, identity, sqrt). | `jaxgam/api.py`, `jaxgam/execution/discrete/regular.py` |
 
 The dense route does not read the descriptor; it uses `is_canonical`, `n_theta` and `scale_known` directly. A route's own acceptance policy can be narrower than the capabilities: the streamed EFS check `_check_stream_efs_family` in `jaxgam/api.py` accepts only the built-in classes, by `isinstance`.
 
@@ -349,7 +349,7 @@ This is the contract view of the smooth hierarchy drawn on [setup.md](setup.md):
 2. In `jaxgam/links/links.py`, subclass `Link`; implement `link`, `inverse`, `derivative`, `second_derivative` and `mu_eta` with `array_module`; override `valid_eta` and `initial_link_cpu` if the domain is restricted or `link` clamps; set `_stateless = True` only if the class has no parameters.
 3. For a built-in link, add it to `link_registry` in `jaxgam/links/registry.py` and to `jaxgam/links/__init__.py`. For user code, call `link_registry.register("name", MyLink)` before constructing families with it.
 4. A built-in link becomes a cell of `FAMILY_EXECUTION_INVENTORY`: add it to `_LINKS` and the tables in `jaxgam/families/execution_inventory.py`.
-5. If a family should run it on the discretized or NB routes, extend that family's link lists in `execution_capabilities` and, for NB, `_link_name` in `jaxgam/execution/nb_stream.py` and `_check_stream_efs_family`.
+5. If a family should run it on the discretized or NB routes, extend that family's link lists in `execution_capabilities` and, for NB, `_link_name` in `jaxgam/execution/stream/nb.py` and `_check_stream_efs_family`.
 6. Tests in `tests/test_links.py`: round trip, `mu_eta` against finite differences, values against R `make.link` through the R bridge, JAX against NumPy, and JIT compilation. Add family fits with the new link to `tests/test_validation_matrix.py` if it is meant for R parity.
 
 ### Checklist: adding a family
@@ -369,6 +369,6 @@ This is the contract view of the smooth hierarchy drawn on [setup.md](setup.md):
 4. For a built-in smooth, add the key to `smooth_registry` in `jaxgam/smooths/registry.py` and the export to `jaxgam/smooths/__init__.py`, and update the expected keys in `tests/test_registry.py`. For user code, call `smooth_registry.register("key", MySmooth)`; it is then selectable with `s(x, bs="key")` on the dense route.
 5. Add the class to the audit in `tests/test_smooths/test_prediction_copy.py`, either by overriding `copy_for_prediction` or by adding it to the audited default list there.
 6. Tests: a new `tests/test_smooths/test_<name>.py` comparing basis, penalty and prediction matrix with R's `smoothCon` output through the R bridge; prediction round trip; `by=` and `te` margin use if supported; and R fits in `tests/test_validation_matrix.py`.
-7. If the streamed, discretized or operator routes should accept it, extend `_cubic_class` in `jaxgam/formula/prepare.py`, the memory bounds in `jaxgam/formula/continuous_setup.py` and `jaxgam/formula/discrete_design.py`, or the term checks in `jaxgam/formula/operator_prepare.py`; see [setup.md](setup.md).
+7. If the streamed, discretized or operator routes should accept it, extend `_cubic_class` in `jaxgam/formula/prepare.py`, the memory bounds in `jaxgam/formula/discrete/continuous_setup.py` and `jaxgam/formula/discrete/design.py`, or the term checks in `jaxgam/formula/operator/prepare.py`; see [setup.md](setup.md).
 
 The proposed fitting-engine refactor in [docs/unify_fit/design.md](../unify_fit/design.md) concerns `jaxgam/fitting/`, `jaxgam/execution/` and routing in `jaxgam/api.py`; it describes the family capability contract as an abstraction to keep.

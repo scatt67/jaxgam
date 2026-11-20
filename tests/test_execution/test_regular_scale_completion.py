@@ -7,10 +7,10 @@ import numpy as np
 import pytest
 from scipy.optimize import minimize as scipy_minimize
 
-import jaxgam.execution.reml as reml_execution
+import jaxgam.execution.stream.reml as reml_execution
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.reml import StreamREMLControl, optimize_regular_stream_reml
-from jaxgam.execution.stream import StreamPIRLSControl
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
+from jaxgam.execution.stream.reml import StreamREMLControl, optimize_regular_stream_reml
 from jaxgam.families.standard import Gamma, Gaussian
 from jaxgam.formula.design_provider import StreamDesign
 from tests.helpers import _AssertCollector

@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from jaxgam.fitting.iterative import (
+from jaxgam.fitting.operator.iterative import (
     CONVERGED,
     MAX_ITERATIONS,
     NONFINITE,

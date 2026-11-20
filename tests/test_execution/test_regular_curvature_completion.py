@@ -18,8 +18,8 @@ import numpy as np
 import pytest
 from scipy.optimize import OptimizeResult
 
-import jaxgam.execution.reml as reml_execution
-from jaxgam.execution.reml import StreamREMLControl, optimize_regular_stream_reml
+import jaxgam.execution.stream.reml as reml_execution
+from jaxgam.execution.stream.reml import StreamREMLControl, optimize_regular_stream_reml
 from tests.tolerances import STRICT
 
 # Unforced pinned-Linux Gamma/inverse_squared exact score and the magnitude of

@@ -17,19 +17,19 @@ and predictor are in [results and prediction](results_and_prediction.md).
 | Module | Role |
 |---|---|
 | `jaxgam/api.py` (`GAM._fit_discrete`) | Route entry: refusals, family admission, dispatch to the Gaussian or regular driver, result construction. |
-| `jaxgam/execution/discrete.py` | Shared prepared problem (`_prepared_discrete`), fit memory plan, the additive Gaussian driver (`fit_discrete_gaussian`), fixed-sp REML score and scale iteration, `DiscreteFit`. |
-| `jaxgam/execution/discrete_regular.py` | Regular-family and negative-binomial driver (`fit_discrete_regular`): source-scanning working rows, theta nuisance, budget and compile, final fields. |
-| `jaxgam/execution/regular_working_model.py` | Host port of `bgam.fitd`'s outer loop for non-additive families: coefficient step control, convergence test, iteration trace. |
-| `jaxgam/execution/working_model.py` | Host trial control around one `Sl.fitChol` proposal: the host pivoted-Cholesky boundary, `Nstep` halving, the frozen-statistic Gaussian controller, compile-time memory measurement. |
-| `jaxgam/execution/working_theta.py` | Host port of `estimate.theta` (mgcv `R/efam.r`) for one log theta, each objective one source scan. |
-| `jaxgam/fitting/discrete_ops.py` | JIT kernels for the indexed design: forward, transpose, `X'WX`, `X'Wy`, `diag(X V X')`, and their cost and scratch models. |
-| `jaxgam/fitting/discrete_working.py` | JIT per-batch working statistics: Fisher weights and pseudodata, NB `dDeta` weights, `estimate.theta` row terms. |
-| `jaxgam/fitting/working_model.py` | JIT kernels of the `Sl.fitChol` proposal: reparameterization, factor inputs, REML value, gradient, Hessian, Newton step, `H^-1`. |
+| `jaxgam/execution/discrete/gaussian.py` | Shared prepared problem (`_prepared_discrete`), fit memory plan, the additive Gaussian driver (`fit_discrete_gaussian`), fixed-sp REML score and scale iteration, `DiscreteFit`. |
+| `jaxgam/execution/discrete/regular.py` | Regular-family and negative-binomial driver (`fit_discrete_regular`): source-scanning working rows, theta nuisance, budget and compile, final fields. |
+| `jaxgam/execution/discrete/regular_working_model.py` | Host port of `bgam.fitd`'s outer loop for non-additive families: coefficient step control, convergence test, iteration trace. |
+| `jaxgam/execution/discrete/working_model.py` | Host trial control around one `Sl.fitChol` proposal: the host pivoted-Cholesky boundary, `Nstep` halving, the frozen-statistic Gaussian controller, compile-time memory measurement. |
+| `jaxgam/execution/discrete/working_theta.py` | Host port of `estimate.theta` (mgcv `R/efam.r`) for one log theta, each objective one source scan. |
+| `jaxgam/fitting/discrete/ops.py` | JIT kernels for the indexed design: forward, transpose, `X'WX`, `X'Wy`, `diag(X V X')`, and their cost and scratch models. |
+| `jaxgam/fitting/discrete/working.py` | JIT per-batch working statistics: Fisher weights and pseudodata, NB `dDeta` weights, `estimate.theta` row terms. |
+| `jaxgam/fitting/discrete/working_model.py` | JIT kernels of the `Sl.fitChol` proposal: reparameterization, factor inputs, REML value, gradient, Hessian, Newton step, `H^-1`. |
 | `jaxgam/fitting/penalty_ops.py` | Device-side local penalty algebra (`JaxPenaltyStructure`, stacked groups) used by the proposal kernels. |
-| `jaxgam/formula/continuous_setup.py` | Phase 1: ordinary basis setup on the compact frame (`build_continuous_discrete_setup`). |
-| `jaxgam/formula/continuous_design.py` | Phase 1: evaluates the frozen bases on compact representatives into lookup tables (`build_continuous_discrete_design`). |
-| `jaxgam/formula/discrete_design.py` | Phase 1: descriptor types (`FrozenDiscreteDesign`, `LookupBlock`, `TensorLookupBlock`) and the per-batch memory plan (`_memory_plan`). |
-| `jaxgam/formula/continuous_metadata.py` | Phase 1: the row-free record of the fitted discretization and the `predict.bamd` request grouping. |
+| `jaxgam/formula/discrete/continuous_setup.py` | Phase 1: ordinary basis setup on the compact frame (`build_continuous_discrete_setup`). |
+| `jaxgam/formula/discrete/continuous_design.py` | Phase 1: evaluates the frozen bases on compact representatives into lookup tables (`build_continuous_discrete_design`). |
+| `jaxgam/formula/discrete/design.py` | Phase 1: descriptor types (`FrozenDiscreteDesign`, `LookupBlock`, `TensorLookupBlock`) and the per-batch memory plan (`_memory_plan`). |
+| `jaxgam/formula/discrete/continuous_metadata.py` | Phase 1: the row-free record of the fitted discretization and the `predict.bamd` request grouping. |
 | `jaxgam/formula/kernel_groups.py` | Pair schedule and `pair_reduction_plan` (histogram or direct rows). |
 | `jaxgam/smooths/source_lapack.py` | The pinned DPSTRF (`source_pivoted_cholesky`) used by every working-model trial. |
 
@@ -66,7 +66,7 @@ unique, possibly rounded, rows plus one integer selector per observation
 on the compact rows. The fit then never holds an n-by-p matrix: every term is a
 lookup block whose design rows are `table[selector]`.
 
-`FrozenDiscreteDesign` (in `jaxgam/formula/discrete_design.py`) holds:
+`FrozenDiscreteDesign` (in `jaxgam/formula/discrete/design.py`) holds:
 
 - `LookupBlock`: one constrained table (`q` unique rows by `k` columns) and its
   selector, for an ordinary smooth or parametric block.
@@ -141,7 +141,7 @@ exactly symmetric. Rows past the batch are padded with weight zero. It equals
 the pair reductions up to rounding (`tests/test_fitting/test_stacked_kernels.py`).
 
 The choice is made once per fit by `_row_xwxd_chunk` in
-`jaxgam/execution/discrete.py`:
+`jaxgam/execution/discrete/gaussian.py`:
 
 1. Compare the flop-equivalent estimates `discrete_row_xwxd_cost(p, batch_rows)`
    (`n p^2` matrix-product work) and `discrete_xwxd_cost(design, batch_rows)`
@@ -155,7 +155,7 @@ The choice is made once per fit by `_row_xwxd_chunk` in
    (`memory_budget_bytes - fit_peak_bytes`). If none fits, use the pair kernels.
 
 The row-chunk kernel is used only in the statistics scan of the additive
-Gaussian fit. The regular-family kernels in `jaxgam/fitting/discrete_working.py`
+Gaussian fit. The regular-family kernels in `jaxgam/fitting/discrete/working.py`
 always call `discrete_xwxd`.
 
 ```mermaid
@@ -279,7 +279,7 @@ problem, budgets `_regular_solver_plan`, compiles the proposal
   Every call is one complete source scan. `initial()` evaluates at `eta =
   linkfun(mustart)` from the family initializer; `evaluate(beta,
   statistics=...)` evaluates at `X beta + offset`. Each batch runs a JIT kernel
-  from `jaxgam/fitting/discrete_working.py` and returns per-row deviance plus,
+  from `jaxgam/fitting/discrete/working.py` and returns per-row deviance plus,
   when requested, `X'WX`, `X'Wz` and `sum(w z^2)`. Per-row deviances are reduced
   on the host by `source_sum`, R's left-to-right long-double `sum`, because
   step-control decisions compare two such sums near convergence.
@@ -370,7 +370,7 @@ coefficient-space work on the host or in the proposal kernels.
 
 #### Theta
 
-`source_estimate_theta` in `jaxgam/execution/working_theta.py` ports
+`source_estimate_theta` in `jaxgam/execution/discrete/working_theta.py` ports
 `estimate.theta` for one log theta with known scale: a Newton iteration on
 `nll = sum(dev.resids)/2 - ls` at fixed `mu`, with the absolute value of a
 non-positive Hessian (and a 1e-5 relative floor), a step capped at 4, halving
@@ -390,7 +390,7 @@ dense route's nested exact REML: the Gaussian controller passes frozen
 
 **Reparameterization.** `WorkingModelCriterionMetadata.from_structure` builds
 `Sl.setup`-style blocks (`build_working_penalty_blocks` in
-`jaxgam/formula/working_penalties.py`): per block a coefficient transform,
+`jaxgam/formula/discrete/working_penalties.py`): per block a coefficient transform,
 local penalties declared diagonal when they are, and for coupled
 multi-penalty blocks the projected roots used by the determinant. The
 statistics are transformed once per set by `working_model_statistics`, the
@@ -681,7 +681,7 @@ classDiagram
 `WorkingRows` is the only way the controller reaches rows; any provider that
 implements it (tests use an explicit design) runs the identical controller.
 `GaussianWorkingModelFit` and `WorkingModelState` in
-`jaxgam/execution/working_model.py` play the roles of `RegularWorkingModelFit`
+`jaxgam/execution/discrete/working_model.py` play the roles of `RegularWorkingModelFit`
 and `RegularWorkingModelState` for the frozen Gaussian controller.
 
 ## Rules and invariants
@@ -766,18 +766,18 @@ and `RegularWorkingModelState` for the frozen Gaussian controller.
   `regular_performance_iteration` or `extended_performance_iteration`
   capability (see [families, links and smooths](families_links_smooths.md)) and
   check `GAM._fit_discrete`'s admission; extended families also need the
-  `source_*` row methods used in `jaxgam/fitting/discrete_working.py`.
+  `source_*` row methods used in `jaxgam/fitting/discrete/working.py`.
 - **Change how `X'WX` is reduced**: `_pair_part` and the schedule in
   `jaxgam/formula/kernel_groups.py`; keep `discrete_xwxd_cost` and the
   descriptor's `_memory_plan` in step with any new reduction.
 - **Change the row-chunk choice**: `_row_xwxd_chunk` and `_ROW_XWXD_CHUNKS` in
-  `jaxgam/execution/discrete.py`, the cost constants in
-  `jaxgam/fitting/discrete_ops.py`.
-- **Change the proposal arithmetic**: `jaxgam/fitting/working_model.py`; rerun
+  `jaxgam/execution/discrete/gaussian.py`, the cost constants in
+  `jaxgam/fitting/discrete/ops.py`.
+- **Change the proposal arithmetic**: `jaxgam/fitting/discrete/working_model.py`; rerun
   the matched-state R tests in `tests/test_fitting/test_working_model.py`.
 - **Change step control or convergence**: `accept_working_model_proposal` and
-  `advance_gaussian_working_model` in `jaxgam/execution/working_model.py`, and
-  `advance_regular_working_model` in `jaxgam/execution/regular_working_model.py`.
+  `advance_gaussian_working_model` in `jaxgam/execution/discrete/working_model.py`, and
+  `advance_regular_working_model` in `jaxgam/execution/discrete/regular_working_model.py`.
 - **Change memory accounting**: `_solver_plan`, `_regular_solver_plan`,
   `_prospective_memory` and `compile_working_model_proposal`.
 - **Change what the result reports**: `DiscreteFit` and

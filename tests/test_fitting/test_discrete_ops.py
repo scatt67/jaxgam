@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.fitting.discrete_ops import (
+from jaxgam.fitting.discrete.ops import (
     DeviceDiscreteDesign,
     DeviceLookupBlock,
     DeviceTensorLookupBlock,
@@ -24,7 +24,7 @@ from jaxgam.fitting.discrete_ops import (
     to_device_discrete_design,
 )
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.discrete_design import (
+from jaxgam.formula.discrete.design import (
     DiscreteDesignUnavailable,
     LookupBlock,
     build_discrete_design_from_predict_spec,

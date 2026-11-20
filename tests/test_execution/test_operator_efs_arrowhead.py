@@ -11,21 +11,21 @@ from scipy.special import gammaln, xlogy
 from jaxgam.control import EFSControl, OperatorControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.efs import _fit_state, dense_efs_known_scale
-from jaxgam.execution.operator_efs_controller import (
+from jaxgam.execution.operator.efs_controller import (
     SourceOperatorEFSFitProvider,
     _arrowhead_poisson_score_bound,
     _raw_ratio,
     _trial_rho,
     run_operator_efs_known_scale,
 )
-from jaxgam.execution.operator_efs_provider import MatchedOperatorEFSProvider
-from jaxgam.execution.operator_fit import fit_operator_fixed_sp
-from jaxgam.execution.operator_logdet import OperatorLogDetControl
+from jaxgam.execution.operator.efs_provider import MatchedOperatorEFSProvider
+from jaxgam.execution.operator.fit import fit_operator_fixed_sp
+from jaxgam.execution.operator.logdet import OperatorLogDetControl
 from jaxgam.families.standard import Poisson
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.efs import efs_raw_update, prepare_efs_statistics
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )

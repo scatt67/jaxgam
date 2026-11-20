@@ -15,7 +15,7 @@ from jaxgam.fitting.family_execution import (
     FamilyExecutionContext,
     FamilyExecutionParameters,
 )
-from jaxgam.fitting.nb_stream_reml import nb_batch_statistics_vjp
+from jaxgam.fitting.stream.nb_reml import nb_batch_statistics_vjp
 from tests.helpers import r_available
 from tests.r_bridge import RBridge
 from tests.tolerances import STRICT

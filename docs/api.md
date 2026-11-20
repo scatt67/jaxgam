@@ -1141,7 +1141,7 @@ exceeds `max_calibration_standard_errors` (default 5, a two-sided level of
 5.7e-7 per row). The Monte Carlo standard error describes sampling
 variation only, not bias of the iterative solves, and calibration on the
 selected rows is not a guarantee for other rows. An unknown-scale family
-needs `scale=`. `control` is a `PCGControl` from `jaxgam.execution.operator`
+needs `scale=`. `control` is a `PCGControl` from `jaxgam.execution.operator.system`
 (default relative tolerance 1e-10), independent of `FitControl.operator`.
 The method raises `RuntimeError` on a result from another route or one that
 did not converge.

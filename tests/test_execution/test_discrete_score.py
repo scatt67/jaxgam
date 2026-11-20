@@ -8,11 +8,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import jaxgam.execution.discrete as execution
+import jaxgam.execution.discrete.gaussian as execution
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.discretize import DiscretizationBudget
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.formula.continuous_setup import (
+from jaxgam.formula.discrete.continuous_setup import (
     ContinuousDiscreteSetup,
     build_continuous_discrete_setup,
 )

@@ -10,7 +10,9 @@ import numpy as np
 import pytest
 
 from jaxgam.data.source import ArrayRowSource
-from jaxgam.execution.family_initialization import select_initial_working_state_cpu
+from jaxgam.execution.stream.family_initialization import (
+    select_initial_working_state_cpu,
+)
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.family_execution import (

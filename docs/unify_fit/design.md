@@ -1,6 +1,6 @@
 # Unified Fitting Engine: Design Document
 
-**Status:** proposed, not started. Its precondition is met: the scaling and EFS work was merged into `main` on 2026-11-20 as pull request #87 (commit `e919938`). The PR labels used below (PR9, PR11, PR12, EFS6, PR13) are those of the scaling plan in [`docs/scale_jaxgam/`](../scale_jaxgam/jaxgam_scaling_implementation_plan.md); all of them are part of that merge.
+**Status:** proposed, not started. Its precondition is met: the scaling and EFS work was merged into `main` on 2026-11-20 as pull request #87 (commit `e919938`). The PR labels used below (PR9, PR11, PR12, EFS6, PR13) are those of the scaling plan in [`docs/scale_jaxgam/`](../scale_jaxgam/jaxgam_scaling_implementation_plan.md); all of them are part of that merge. One preparatory step is done: on 2026-11-20 the modules of `fitting/`, `execution/` and `formula/` were grouped into sub-packages by route (§9, question 5), with no change to their contents. Paths in this document use that layout; the file and line counts in §2 were taken before it and are unchanged by it.
 
 For a description of the code as it is today, which this design starts from, see the [architecture pages](../architecture/index.md).
 
@@ -50,13 +50,13 @@ Measured again on `main` after the merge (commit `e919938`, 2026-11-20): `execut
 
 | mgcv procedure | JaxGAM implementations |
 |---|---|
-| PIRLS step control (`gam.fit3`/`gam.fit4` step halving, divergence and domain recovery) | `fitting/pirls.py` (dense; 1,765 lines incl. an EFS-specific beta step); `fitting/efs_regular_pirls.py` (EFS regular, 635); `execution/stream.py` (streamed canonical); `execution/regular_stream.py` (streamed signed); `execution/nb_stream.py` (streamed NB); `execution/operator_fit.py` (operator, PR12); `execution/discrete.py`/`working_model.py` (discrete, PR11) |
-| Outer smoothing-parameter controller | `fitting/newton.py::NewtonOptimizer` (dense, host loop inside `fitting/`); `execution/reml.py::optimize_stream_reml` and `optimize_regular_stream_reml`; `execution/nb_reml.py::optimize_nb_stream_reml`; `execution/gaussian_optimizer.py::optimize_gaussian_qr_lbfgs` (PR9); `execution/efs.py::_run_efs_known_scale` and `_run_efs_unknown_scale`; `execution/operator_efs_controller.py::_run_operator_efs` (EFS6); `execution/working_model.py::advance_gaussian_working_model` (PR11) |
-| REML/score assembly | `fitting/reml.py` (dense); `fitting/stream_reml.py`; `fitting/nb_stream_reml.py`; `fitting/gaussian.py` (PR9); `fitting/working_model.py` (PR11, `Sl.fitChol`); `fitting/efs_operator_score.py` + `execution/operator_score.py` (EFS6) |
-| `efsudr` raw update | `fitting/efs.py::efs_raw_update` (JAX); `execution/operator_efs_controller.py::_raw_ratio` + `_trial_rho` (NumPy) |
-| NB theta | `fitting/efs_theta.py` (conditional Newton); `fitting/nb_theta_stream.py` + `execution/nb_theta_stream.py` (streamed); joint-REML theta in `execution/nb_reml.py`; PR11 milestone B will add `estimate.theta` |
-| Saturated log-likelihood reduction | `fitting/family_execution.py::batch_saturated_loglikelihood`; `fitting/stream_kernels.py::saturated_loglik_reduction` |
-| Route preflight | `execution/reml.py::_preflight_regular_reml`; `execution/nb_reml.py::_preflight_nb_reml`; `execution/stream.py::_preflight`; plus `api.py` `_check_stream_*` helpers |
+| PIRLS step control (`gam.fit3`/`gam.fit4` step halving, divergence and domain recovery) | `fitting/pirls.py` (dense; 1,765 lines incl. an EFS-specific beta step); `fitting/efs_regular_pirls.py` (EFS regular, 635); `execution/stream/pirls.py` (streamed canonical); `execution/stream/regular.py` (streamed signed); `execution/stream/nb.py` (streamed NB); `execution/operator/fit.py` (operator, PR12); `execution/discrete/gaussian.py`/`working_model.py` (discrete, PR11) |
+| Outer smoothing-parameter controller | `fitting/newton.py::NewtonOptimizer` (dense, host loop inside `fitting/`); `execution/stream/reml.py::optimize_stream_reml` and `optimize_regular_stream_reml`; `execution/stream/nb_reml.py::optimize_nb_stream_reml`; `execution/gaussian_qr/optimizer.py::optimize_gaussian_qr_lbfgs` (PR9); `execution/efs.py::_run_efs_known_scale` and `_run_efs_unknown_scale`; `execution/operator/efs_controller.py::_run_operator_efs` (EFS6); `execution/discrete/working_model.py::advance_gaussian_working_model` (PR11) |
+| REML/score assembly | `fitting/reml.py` (dense); `fitting/stream/reml.py`; `fitting/stream/nb_reml.py`; `fitting/gaussian_qr/kernel.py` (PR9); `fitting/discrete/working_model.py` (PR11, `Sl.fitChol`); `fitting/operator/efs_score.py` + `execution/operator/score.py` (EFS6) |
+| `efsudr` raw update | `fitting/efs.py::efs_raw_update` (JAX); `execution/operator/efs_controller.py::_raw_ratio` + `_trial_rho` (NumPy) |
+| NB theta | `fitting/efs_theta.py` (conditional Newton); `fitting/stream/nb_theta.py` + `execution/stream/nb_theta.py` (streamed); joint-REML theta in `execution/stream/nb_reml.py`; PR11 milestone B will add `estimate.theta` |
+| Saturated log-likelihood reduction | `fitting/family_execution.py::batch_saturated_loglikelihood`; `fitting/stream/kernels.py::saturated_loglik_reduction` |
+| Route preflight | `execution/stream/reml.py::_preflight_regular_reml`; `execution/stream/nb_reml.py::_preflight_nb_reml`; `execution/stream/pirls.py::_preflight`; plus `api.py` `_check_stream_*` helpers |
 | Public routing | `api.py`: `_fit_stream`, `_fit_stream_gaussian_qr`, `_fit_stream_fixed_regular`, `_fit_stream_fixed_nb`, `_fit_stream_exact_reml`, `_fit_stream_parametric_bypass`, `_fit_operator`, `_fit_operator_efs`, `_fit_discrete`, `_fit_fixed_sp`; about 1,400 lines across lines; six `execution_route` labels |
 
 ### 2.2 Near-duplicate scans
@@ -69,28 +69,28 @@ Representative results:
 
 | Pair | Structural | Token |
 |---|---|---|
-| `fitting/efs_theta.py::_conditional_theta_nll_jit` ↔ `fitting/nb_theta_stream.py::objective` | 0.98 | — |
+| `fitting/efs_theta.py::_conditional_theta_nll_jit` ↔ `fitting/stream/nb_theta.py::objective` | 0.98 | — |
 | `fitting/efs_regular_pirls.py::midpoint` ↔ `fitting/pirls.py::midpoint` | 0.98 | — |
-| `execution/nb_reml.py::evaluate` ↔ `execution/reml.py::evaluate` | 0.97 | — |
-| `execution/nb_stream.py::scan_at` ↔ `execution/regular_stream.py::scan_at` | 0.96 | — |
+| `execution/stream/nb_reml.py::evaluate` ↔ `execution/stream/reml.py::evaluate` | 0.97 | — |
+| `execution/stream/nb.py::scan_at` ↔ `execution/stream/regular.py::scan_at` | 0.96 | — |
 | `execution/efs.py::_run_efs_known_scale` (175 L) ↔ `_run_efs_unknown_scale` (192 L) | 0.86 | — |
-| `execution/reml.py::optimize_regular_stream_reml` ↔ `execution/nb_reml.py::optimize_nb_stream_reml` | 0.72 | — |
-| `execution/reml.py::evaluate_regular_stream_reml` (195 L) ↔ `execution/nb_reml.py::evaluate_nb_stream_reml` (193 L) | 0.80 | 0.36 |
-| `fitting/family_execution.py::batch_saturated_loglikelihood` ↔ `fitting/stream_kernels.py::saturated_loglik_reduction` | 0.80 | 0.42 |
-| `execution/operator_efs_controller.py::_indexed_poisson_score_bound` ↔ `_indexed_gaussian_score_bound` | — | 0.68 |
-| `execution/operator_efs_controller.py::_run_operator_efs` (284 L) ↔ `execution/efs.py::_run_efs_known_scale` | 0.42 | — |
+| `execution/stream/reml.py::optimize_regular_stream_reml` ↔ `execution/stream/nb_reml.py::optimize_nb_stream_reml` | 0.72 | — |
+| `execution/stream/reml.py::evaluate_regular_stream_reml` (195 L) ↔ `execution/stream/nb_reml.py::evaluate_nb_stream_reml` (193 L) | 0.80 | 0.36 |
+| `fitting/family_execution.py::batch_saturated_loglikelihood` ↔ `fitting/stream/kernels.py::saturated_loglik_reduction` | 0.80 | 0.42 |
+| `execution/operator/efs_controller.py::_indexed_poisson_score_bound` ↔ `_indexed_gaussian_score_bound` | — | 0.68 |
+| `execution/operator/efs_controller.py::_run_operator_efs` (284 L) ↔ `execution/efs.py::_run_efs_known_scale` | 0.42 | — |
 | `fitting/efs_regular_pirls.py::_efs_regular_pirls_loop_jit` ↔ `fitting/pirls.py::_pirls_loop_jit` | 0.12 | — |
 
-Exact helper copies: `_factor_inverse_residual` is identical in `execution/reml.py` and `execution/nb_reml.py`; `_link_name` is near-identical in `execution/nb_stream.py` and `fitting/nb_stream_reml.py`.
+Exact helper copies: `_factor_inverse_residual` is identical in `execution/stream/reml.py` and `execution/stream/nb_reml.py`; `_link_name` is near-identical in `execution/stream/nb.py` and `fitting/stream/nb_reml.py`.
 
 The low PIRLS and operator-EFS ratios matter. Most of the duplication is **algorithmic**, not textual: the same R procedure is re-derived with different names and data access. A copy-paste linter alone will not find it.
 
 ### 2.3 Observed drift between ports
 
-- **`efsudr` ratio order.** `fitting/efs.py::efs_raw_update` computes `phi * numerator / max(0, q)`. `operator_efs_controller.py::_raw_ratio` computes `numerator / max(0, q) * phi`. Both claim pinned `efsudr` order, and they can differ in the last bit.
+- **`efsudr` ratio order.** `fitting/efs.py::efs_raw_update` computes `phi * numerator / max(0, q)`. `execution/operator/efs_controller.py::_raw_ratio` computes `numerator / max(0, q) * phi`. Both claim pinned `efsudr` order, and they can differ in the last bit.
 - **Family allowlists.** Between 36 and 43 `isinstance(family, (Gaussian|Poisson|…))` checks in `execution/` and `fitting/` per line, instead of capability queries; on `main` after the merge there are 46. The family capability contract exists so that such allowlists are not needed.
 - **Host control flow in `fitting/`.** `fitting/newton.py::NewtonOptimizer` (`while` loops with `bool(jnp.isfinite(...))` host pulls) and `fitting/data.py::FittingData.from_setup` (NumPy preparation) break the "`fitting/` is JIT-only" rule. The scaling plan's audit already noted this. At the time of the October measurement nothing in `fitting/` imported `execution/` or host SciPy. On `main` after the merge there is one such import: `fitting/data.py::_structural_penalty_roots` imports `structural_rank` from `execution/qr.py` inside the function, to avoid a circular import. Phase 2 should remove it.
-- **Misleading pairs.** `fitting/reml.py` is the dense criterion. `execution/reml.py` is the *streamed* driver and does not use it; its kernels are in `fitting/stream_reml.py`. The same holds for `execution/nb_reml.py` ↔ `fitting/nb_stream_reml.py`.
+- **Misleading pairs.** `fitting/reml.py` is the dense criterion. `execution/stream/reml.py` is the *streamed* driver and does not use it; its kernels are in `fitting/stream/reml.py`. The same holds for `execution/stream/nb_reml.py` ↔ `fitting/stream/nb_reml.py`.
 
 ### 2.4 Root cause
 
@@ -169,8 +169,10 @@ jaxgam/execution/uncertainty/  selected and bulk variance (PR13), Fisher/observe
 jaxgam/fitting/                pure JAX kernels only (no host loops, no I/O, no SciPy)
     family/ (link/variance/deviance/derivative kernels), pirls_step.py, penalty_ops.py,
     reml_terms.py (score from sufficient statistics), efs_update.py, linalg actions (qr/signed_qr),
-    discrete_ops.py, operators.py, preconditioners.py, iterative.py, stream_kernels.py
+    the route kernels: stream/, discrete/, operator/, gaussian_qr/
 ```
+
+Today `execution/` and `fitting/` are grouped by route, not by role: `execution/stream/`, `execution/discrete/`, `execution/operator/` and `execution/gaussian_qr/` each hold one route's drivers, and `fitting/` has the same four folders for its kernels. Each provider above is carved out of the matching route folder; the optimizers, the inner driver and the solvers are what the route folders have in common.
 
 **Dependency rule:** `api → routing → optimizers → inner → providers/solvers → fitting`. Nothing in `fitting/` imports `execution/`. Providers and solvers never import optimizers. Phase-1 modules never import JAX (already enforced).
 
@@ -274,4 +276,4 @@ Each difference between routes moves to exactly one place:
 2. **`FittingData`:** should it become the in-memory provider's internal state, or stay as a shared Phase-1→2 transfer type? Decide from its current call sites.
 3. **Retiring `optimize_stream_reml` (canonical known-scale):** retire it outright, or keep it as a mode of `exact_lbfgs`. Its regime is a strict subset of `optimize_regular_stream_reml`.
 4. **The two §2.3 port disagreements:** which order matches pinned `efsudr`? Verify against `R/gam.fit4.r` 1.9-3 before unifying.
-5. **Sub-packages by route first?** (raised 2026-11-20, undecided) Before any unification, group `fitting/` and `execution/` into sub-packages by route (stream, efs, discrete, gaussian_qr, operator, plus dense and shared linear algebra) in one move-only PR, instead of the renames inside the flat directories that plan Phase 2 lists. It would remove the eight module names that exist in both packages and make the route folders the starting point of the providers in §5. Decide before Phase 2.
+5. **Sub-packages by route first?** (raised 2026-11-20; **decided and done the same day**) `fitting/`, `execution/` and `formula/` were grouped into sub-packages by route (`stream/`, `discrete/`, `operator/` and, in the first two, `gaussian_qr/`) in one move-only change; dense and shared modules stay at the top of each package. It replaced the renames that plan Phase 2 item 1 listed, removed the module names that existed in both packages without being a pair, and makes each route folder the starting point of the matching provider in §5.

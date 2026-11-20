@@ -6,8 +6,10 @@
 > the operator route with bulk uncertainty, and the acceptance harness
 > (`scripts/benchmark_scaling.py`). The text below is the plan as written and
 > amended during the work. It is kept as a record and is not maintained: its
-> PR numbers are the plan's own, and it refers to working documents that are
-> no longer in the repository. For what was built see the
+> PR numbers are the plan's own, it refers to working documents that are no
+> longer in the repository, and its module paths are those of the flat
+> `fitting/` and `execution/` packages before they were divided into route
+> sub-packages. For what was built, and where it is now, see the
 > [architecture pages](../architecture/index.md); for how to use it see the
 > [user guide](../guide/choosing_a_route.md).
 >

@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from jaxgam.execution.signed_qr import signed_qr_update, solve_signed_qr
+from jaxgam.execution.stream.signed_qr import signed_qr_update, solve_signed_qr
 from jaxgam.fitting.signed_qr import SignedQRCoefficientFactor
 from jaxgam.fitting.state import PivotedQRCoefficientFactor
 from tests.r_bridge import RBridge

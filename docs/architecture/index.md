@@ -32,16 +32,77 @@ operator route for random effects with very many levels.
 | `jaxgam/registry.py` | `Registry`, the case-insensitive string-to-class map used by families, links and smooths. |
 | `jaxgam/platform_guard.py` | `warn_if_accelerate_lapack`, the Apple Accelerate warning. |
 | `jaxgam/data/` | Phase 1. `RowSource` protocol, `RowBatch`, built-in sources, fingerprints, discretization of row sources. |
-| `jaxgam/formula/` | Phase 1. Formula parser, term specs, dense `ModelSetup`, `PredictSpec`, streamed, discretized and operator setup. |
+| `jaxgam/formula/` | Phase 1. Formula parser, term specs, dense `ModelSetup`, `PredictSpec` and the prepared model of the row-source routes; the discretized and operator setup are in `jaxgam/formula/discrete/` and `jaxgam/formula/operator/`. |
 | `jaxgam/smooths/` | Phase 1. Smooth bases and penalties, the smooth registry, `CoefficientMap` identifiability constraints, pinned-arithmetic helpers. |
 | `jaxgam/penalties/` | Phase 1. `Penalty`, `PenaltyStructure` block descriptors, stable reparameterization of multi-penalty blocks. |
 | `jaxgam/families/` | Used by the fit and by prediction; Phase 1 receives family objects as arguments without importing the package. Family base classes, the five registered families, the execution-capability contract. |
 | `jaxgam/links/` | Used by the families. The eight link functions and their registry. |
-| `jaxgam/fitting/` | Phase 2 kernels. JAX code for PIRLS, the REML criterion, the dense Newton optimizer, Fellner-Schall algebra, streamed, discretized and operator kernels. |
-| `jaxgam/execution/` | Phase 2 host drivers. Python control loops that scan row sources, call `fitting/` kernels, and own budgets and step control. |
+| `jaxgam/fitting/` | Phase 2 kernels. JAX code for PIRLS, the REML criterion, the dense Newton optimizer and Fellner-Schall algebra at the top level; one sub-package of kernels per route (`gaussian_qr/`, `stream/`, `discrete/`, `operator/`). |
+| `jaxgam/execution/` | Phase 2 host drivers. Python control loops that scan row sources, call `fitting/` kernels, and own budgets and step control; one sub-package per route (`gaussian_qr/`, `stream/`, `discrete/`, `operator/`). |
 | `jaxgam/inference/` | Phase 3. `GAMPredictor`, the shared prediction finish (`jaxgam/inference/_core.py`), the operator prediction geometry. |
 | `jaxgam/summary/` | Phase 3. `summary`, `GAMSummary`, Davies' method for weighted chi-square tails. |
 | `jaxgam/plot/` | Phase 3. `plot_gam` (matplotlib). |
+
+### Layout by route
+
+`jaxgam/formula/`, `jaxgam/fitting/` and `jaxgam/execution/` are laid out the
+same way. A module that only one route uses is in that route's sub-package,
+and the sub-package has the same name in each of the three packages. A module
+that the dense fit uses, or that more than one route uses, stays at the top
+level of its package.
+
+| Route | Phase 1 setup | Kernels (`jaxgam/fitting/`) | Host drivers (`jaxgam/execution/`) | Page |
+|---|---|---|---|---|
+| Dense, Newton REML | `jaxgam/formula/design.py` | top level: `jaxgam/fitting/pirls.py`, `jaxgam/fitting/reml.py`, `jaxgam/fitting/newton.py`, `jaxgam/fitting/stable_log_det.py`, `jaxgam/fitting/source_pirls.py` | none: the Newton loop is in `jaxgam/fitting/newton.py` | [Dense fitting](fitting_dense.md) |
+| Dense Fellner-Schall | `jaxgam/formula/design.py` | top level: `jaxgam/fitting/efs.py`, `jaxgam/fitting/efs_regular_pirls.py`, `jaxgam/fitting/efs_theta.py` | top level: `jaxgam/execution/efs.py`, `jaxgam/execution/efs_provider.py` | [Dense fitting](fitting_dense.md) |
+| Gaussian QR | `jaxgam/formula/rank_coordinates.py` | `jaxgam/fitting/gaussian_qr/` | `jaxgam/execution/gaussian_qr/` | [Dense fitting](fitting_dense.md) |
+| Streamed | `jaxgam/formula/prepare.py`, `jaxgam/formula/design_provider.py` | `jaxgam/fitting/stream/` | `jaxgam/execution/stream/` | [Streamed fitting](fitting_streamed.md) |
+| Discretized | `jaxgam/formula/discrete/`, with `jaxgam/data/` | `jaxgam/fitting/discrete/` | `jaxgam/execution/discrete/` | [Discretized fitting](fitting_discrete.md) |
+| Operator | `jaxgam/formula/operator/` | `jaxgam/fitting/operator/` | `jaxgam/execution/operator/` | [Operator fitting](fitting_operator.md) |
+
+```text
+jaxgam/execution/
+├── efs.py, efs_provider.py     Fellner-Schall loop: the dense adapter, shared with the streamed route
+├── qr.py, null_coefficient.py  reductions that several routes use
+├── gaussian_qr/                preparation.py, optimizer.py
+├── stream/                     pirls.py, regular.py, nb.py, nb_theta.py, reml.py, nb_reml.py,
+│                               efs.py, efs_provider.py, efs_start.py, family_initialization.py, signed_qr.py
+├── discrete/                   gaussian.py, regular.py, working_model.py, regular_working_model.py,
+│                               working_theta.py
+└── operator/                   system.py, fit.py, variance.py, bulk_variance.py, arrowhead.py, logdet.py,
+                                penalty_determinant.py, score.py, score_rows.py, efs_controller.py,
+                                efs_provider.py, efs_start.py, efs_trace.py
+
+jaxgam/fitting/
+├── pirls.py, reml.py, newton.py, initialization.py, stable_log_det.py, source_pirls.py   dense fit
+├── efs.py, efs_regular_pirls.py, efs_theta.py                                            Fellner-Schall algebra
+├── data.py, state.py, family_execution.py, penalty_ops.py, qr.py, signed_qr.py           shared by the routes
+├── gaussian_qr/                kernel.py, rank_coordinates.py
+├── stream/                     kernels.py, regular.py, nb_kernels.py, nb_theta.py, reml.py, nb_reml.py,
+│                               efs_factor.py
+├── discrete/                   ops.py, working.py, working_model.py
+└── operator/                   actions.py, family.py, iterative.py, preconditioners.py, efs_score.py
+
+jaxgam/formula/
+├── parser.py, terms.py, design.py, predict_matrix.py                dense setup and prediction state
+├── prepare.py, design_provider.py, fitting_prepare.py               prepared model of the row-source routes
+├── kernel_groups.py, rank_coordinates.py                            shared helpers
+├── discrete/                   continuous_setup.py, continuous_design.py, continuous_metadata.py, design.py,
+│                               working_penalties.py
+└── operator/                   prepare.py, modest.py, radial.py, workspace.py
+```
+
+Several file names occur in more than one place: for example
+`jaxgam/fitting/reml.py` (the dense criterion), `jaxgam/fitting/stream/reml.py`
+and `jaxgam/execution/stream/reml.py`, or `jaxgam/formula/prepare.py` and
+`jaxgam/formula/operator/prepare.py`. The package path tells them apart, so
+these pages always write the full path. A sub-package's initializer, such as
+`jaxgam/execution/operator/__init__.py`, holds a description and imports
+nothing, so importing one module of a route does not load the rest. The other packages
+(`data/`, `smooths/`, `penalties/`, `families/`, `links/`, `inference/`,
+`summary/`, `plot/`) are flat, and so are the test directories: the tests of
+`jaxgam/execution/operator/fit.py` are in
+`tests/test_execution/test_operator_fit.py`.
 
 ## How it works
 
@@ -54,8 +115,8 @@ Every fit passes through three phases.
   (`ModelSetup.build` in `jaxgam/formula/design.py`) or prepare
   observation-independent metadata by scanning a row source
   (`prepare_model` in `jaxgam/formula/prepare.py`,
-  `build_continuous_discrete_setup` in `jaxgam/formula/continuous_setup.py`,
-  `prepare_operator_model` in `jaxgam/formula/operator_prepare.py`).
+  `build_continuous_discrete_setup` in `jaxgam/formula/discrete/continuous_setup.py`,
+  `prepare_operator_model` in `jaxgam/formula/operator/prepare.py`).
   Packages: `data`, `formula`, `smooths`, `penalties`.
 - **Phase 2, fit (JAX).** Arrays cross to a JAX device and the smoothing
   parameters and coefficients are estimated. JIT kernels live in
@@ -107,8 +168,8 @@ Which packages import JAX (an AST walk of the import statements at HEAD):
 
 | Package or module | JAX imports |
 |---|---|
-| `fitting/` | 32 of its 33 files at module level (all but `jaxgam/fitting/__init__.py`). |
-| `execution/` | 18 of 36 files at module level; the other 18 use NumPy and SciPy only. |
+| `fitting/` | 32 of its 37 files at module level (all but the five `__init__.py` files). |
+| `execution/` | 18 of 40 files at module level; the other 22, five `__init__.py` files among them, use NumPy and SciPy only. |
 | `families/` | `jaxgam/families/standard.py` and `jaxgam/families/negative_binomial.py` at module level; `jaxgam/families/base.py` imports `jaxgam.jax_utils`. |
 | `links/` | `jaxgam/links/links.py` only under `TYPE_CHECKING` and inside functions, but it imports `jaxgam.jax_utils` at module level. |
 | `jaxgam/api.py` | Under `TYPE_CHECKING` and inside functions only. |
@@ -237,7 +298,7 @@ The one known exception to "kernels do not depend on drivers" is in
 comment giving the circular import as the reason. It runs from
 `FittingData.from_setup` for every dense model with penalties, so a dense fit
 loads `jaxgam.execution`. Two other edges cross the phase lines on purpose:
-`jaxgam/execution/discrete.py` calls the Phase 1 setup builders for the
+`jaxgam/execution/discrete/gaussian.py` calls the Phase 1 setup builders for the
 discretized route, and `GAMPredictionResult.bulk_link_variance` in
 `jaxgam/results.py` calls into `jaxgam/execution/` after the fit.
 
@@ -249,10 +310,10 @@ the sub-route, which the result reports in `execution_route`.
 
 | Route | Selected by | Input | Phase 1 entry | Host driver package and main drivers | Result type |
 |---|---|---|---|---|---|
-| dense | `execution="dense"` (default) | DataFrame or dict | `parse_formula`, `ModelSetup.build` | mostly none: `jaxgam/api.py` calls `newton_optimize`, `pirls_loop` and `source_pirls` in `fitting/` directly; `jaxgam/execution/efs.py` for `optimizer="efs"`, `jaxgam/execution/gaussian_optimizer.py` for Gaussian QR | `GAMResults`, `GAMInferenceResult` or `GAMPredictionResult`, by `result=` |
-| stream | `execution="stream"` | `RowSource` | `prepare_model`, `StreamDesign` | `jaxgam/execution/stream.py`, `jaxgam/execution/regular_stream.py`, `jaxgam/execution/nb_stream.py`, `jaxgam/execution/reml.py`, `jaxgam/execution/nb_reml.py`, `jaxgam/execution/efs_stream.py`, `jaxgam/execution/gaussian_optimizer.py` | `GAMPredictionResult` only |
-| discrete | `execution="discrete"` plus `FitControl.discretization` | `RowSource` | `build_continuous_discrete_setup` (called from the driver) | `jaxgam/execution/discrete.py` (`fit_discrete_gaussian`), `jaxgam/execution/discrete_regular.py` (`fit_discrete_regular`) | `GAMPredictionResult` only |
-| operator | `execution="operator"` plus `linear_solver="pcg"` | `RowSource` | `prepare_operator_model` | `jaxgam/execution/operator_fit.py` (`fit_operator_fixed_sp`), `jaxgam/execution/operator_efs_controller.py` (`run_operator_efs_known_scale`) | `GAMPredictionResult` only |
+| dense | `execution="dense"` (default) | DataFrame or dict | `parse_formula`, `ModelSetup.build` | mostly none: `jaxgam/api.py` calls `newton_optimize`, `pirls_loop` and `source_pirls` in `fitting/` directly; `jaxgam/execution/efs.py` for `optimizer="efs"`, `jaxgam/execution/gaussian_qr/optimizer.py` for Gaussian QR | `GAMResults`, `GAMInferenceResult` or `GAMPredictionResult`, by `result=` |
+| stream | `execution="stream"` | `RowSource` | `prepare_model`, `StreamDesign` | `jaxgam/execution/stream/pirls.py`, `jaxgam/execution/stream/regular.py`, `jaxgam/execution/stream/nb.py`, `jaxgam/execution/stream/reml.py`, `jaxgam/execution/stream/nb_reml.py`, `jaxgam/execution/stream/efs.py`, `jaxgam/execution/gaussian_qr/optimizer.py` | `GAMPredictionResult` only |
+| discrete | `execution="discrete"` plus `FitControl.discretization` | `RowSource` | `build_continuous_discrete_setup` (called from the driver) | `jaxgam/execution/discrete/gaussian.py` (`fit_discrete_gaussian`), `jaxgam/execution/discrete/regular.py` (`fit_discrete_regular`) | `GAMPredictionResult` only |
+| operator | `execution="operator"` plus `linear_solver="pcg"` | `RowSource` | `prepare_operator_model` | `jaxgam/execution/operator/fit.py` (`fit_operator_fixed_sp`), `jaxgam/execution/operator/efs_controller.py` (`run_operator_efs_known_scale`) | `GAMPredictionResult` only |
 
 ```mermaid
 flowchart TD
@@ -411,6 +472,7 @@ are drawn on [Phase 3: results and prediction](results_and_prediction.md).
 | Add a family, link or smooth | see [Extension points](families_links_smooths.md) |
 | Change what a result keeps | `jaxgam/results.py`, `jaxgam/inference/predictor.py`; see [Phase 3](results_and_prediction.md) |
 | Change the Phase 1 to 2 transfer | `to_jax` in `jaxgam/jax_utils.py`, `FittingData.from_setup` in `jaxgam/fitting/data.py` |
+| Add a module to a route | That route's sub-package in `jaxgam/formula/`, `jaxgam/fitting/` or `jaxgam/execution/`. Put it at the top level of the package instead when the dense fit or a second route uses it; see [Layout by route](#layout-by-route). |
 
 A planned refactor will merge the per-route controllers in `fitting/` and
 `execution/` and the routing in `jaxgam/api.py`; see
@@ -449,8 +511,8 @@ A planned refactor will merge the per-route controllers in `fitting/` and
 - **Fellner-Schall (EFS).** The extended Fellner-Schall update of smoothing
   parameters, selected by `optimizer="efs"`, a port of `efsudr` in mgcv's
   `R/gam.fit4.r`. Dense in `jaxgam/execution/efs.py`, streamed in
-  `jaxgam/execution/efs_stream.py`, operator in
-  `jaxgam/execution/operator_efs_controller.py`; settings in `EFSControl`.
+  `jaxgam/execution/stream/efs.py`, operator in
+  `jaxgam/execution/operator/efs_controller.py`; settings in `EFSControl`.
 - **Row source.** An object satisfying the `RowSource` protocol
   (`jaxgam/data/source.py`): `n_rows`, `scan(batch_rows)` yielding `RowBatch`
   objects in a stable order, and `fingerprint()`. Built-ins:
@@ -482,10 +544,10 @@ A planned refactor will merge the per-route controllers in `fitting/` and
 - **Operator route.** The matrix-free route for large random effects:
   indexed random effects (`IndexedRandomEffect`) never form dense columns,
   a small "modest" block holds the other terms, and systems are solved by
-  preconditioned conjugate gradients (`jaxgam/fitting/iterative.py`).
+  preconditioned conjugate gradients (`jaxgam/fitting/operator/iterative.py`).
 - **Gaussian QR compression.** `FitControl(gaussian_compression=True)`:
   one weighted QR reduction of a Gaussian identity model, then
-  coefficient-space smoothing trials (`jaxgam/execution/gaussian.py`).
+  coefficient-space smoothing trials (`jaxgam/execution/gaussian_qr/preparation.py`).
 - **Fisher factor.** A retained triangular factor of the penalized Fisher
   information (lower Cholesky, or a `PivotedQRFisherFactor`) from which
   prediction standard errors are computed without a dense covariance.

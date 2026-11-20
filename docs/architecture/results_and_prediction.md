@@ -22,11 +22,11 @@ factor levels, the discretized route's prediction policies, and `summary` and
 | `jaxgam/formula/design.py` | `ModelSetup.build_predict_matrix` and `ModelSetup._lazy_predict_spec`, which builds and caches the dense route's `PredictSpec`. |
 | `jaxgam/smooths/constraints.py` | `CoefficientMap` and `TermBlock`; `transform_X` applies a term's identifiability constraint to its raw basis block. |
 | `jaxgam/data/continuous_request.py` | `RequestCompressionSpec`, `FrozenRequestGrid`: request compression for `prediction_policy="mgcv_predict_bamd"`. |
-| `jaxgam/formula/continuous_metadata.py` | The discretized route's retained metadata and `build_request_compression`. |
+| `jaxgam/formula/discrete/continuous_metadata.py` | The discretized route's retained metadata and `build_request_compression`. |
 | `jaxgam/summary/summary.py` | `summary`, `GAMSummary`, the Wood (2013) smooth test, the random-effect test, `psum_chisq_davies`. |
 | `jaxgam/summary/_davies.py` | Numba port of Davies' algorithm from mgcv's `src/davies.c`. |
 | `jaxgam/plot/plot_gam.py` | `plot_gam`. |
-| `jaxgam/execution/operator_bulk_variance.py` | `BulkOperatorVariance`, used by `GAMPredictionResult.bulk_link_variance`. |
+| `jaxgam/execution/operator/bulk_variance.py` | `BulkOperatorVariance`, used by `GAMPredictionResult.bulk_link_variance`. |
 
 ## How it works
 
@@ -371,7 +371,7 @@ have no `predict_iter`; call it on their predictor.
 
 | Term | Unseen level | Missing value (None or NaN) | Code |
 |---|---|---|---|
-| `s(g, bs="re")` | zero random-effect contribution, no warning | zero contribution | `RandomEffectSmooth.predict_matrix` in `jaxgam/smooths/random_effects.py` sets non-finite indicator entries to 0; on the operator route `IndexedRandomEffect.evaluate` in `jaxgam/formula/operator_prepare.py` sets the amplitude to 0 |
+| `s(g, bs="re")` | zero random-effect contribution, no warning | zero contribution | `RandomEffectSmooth.predict_matrix` in `jaxgam/smooths/random_effects.py` sets non-finite indicator entries to 0; on the operator route `IndexedRandomEffect.evaluate` in `jaxgam/formula/operator/prepare.py` sets the amplitude to 0 |
 | factor `by` variable | `NaN` row for the smooth block and a `UserWarning` ("factor levels ... not in original fit") | the same, as a missing value is not a fitted level | `FactorBySmooth.predict_matrix` in `jaxgam/smooths/by_variable.py` |
 | parametric factor | `ValueError` ("Parametric factor ... has new level(s)") | `NaN` row | `_build_parametric_matrix` and `_encode_factor` in `jaxgam/formula/predict_matrix.py` |
 
@@ -408,7 +408,7 @@ in its `prediction_policy` property.
   `MemoryError`.
 - A model without smooth terms follows `"continuous_frozen_basis"` even when
   `"mgcv_predict_bamd"` was requested (`effective_prediction_policy` in
-  `jaxgam/formula/continuous_metadata.py`); the requested policy stays in
+  `jaxgam/formula/discrete/continuous_metadata.py`); the requested policy stays in
   `discretization.requested_prediction_policy`.
 
 `tests/test_execution/test_discrete_prediction.py` covers both policies,
@@ -641,7 +641,7 @@ keyword arguments passed to `plot_gam`.
 | Add an uncertainty provider | `GAMPredictor` fields, `finish_prediction`, `_check_prediction_budgets`, and the constructor that retains it |
 | Change batched prediction | `GAMPredictor.predict_iter` and `_predict_iter` in `jaxgam/inference/predictor.py` |
 | Change unseen-level behaviour | the smooth's `predict_matrix` (`jaxgam/smooths/random_effects.py`, `jaxgam/smooths/by_variable.py`) or `_build_parametric_matrix`, and `IndexedRandomEffect.evaluate` for the operator route |
-| Change discrete request compression | `jaxgam/data/continuous_request.py` and `build_request_compression` in `jaxgam/formula/continuous_metadata.py` |
+| Change discrete request compression | `jaxgam/data/continuous_request.py` and `build_request_compression` in `jaxgam/formula/discrete/continuous_metadata.py` |
 | Change summary tables | `summary` and its helpers in `jaxgam/summary/summary.py` |
 | Change plots | `plot_gam` in `jaxgam/plot/plot_gam.py` |
 | Add pickle compatibility for a new predictor field | give it a default and add it to `GAMPredictor.__setstate__` |

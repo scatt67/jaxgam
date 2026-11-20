@@ -4,7 +4,9 @@
 > is implemented and public as `GAM(..., optimizer="efs")` on the dense,
 > streamed and operator routes, merged into `main` as pull request #87. The
 > text below is the plan as written and amended during the work. It is kept
-> as a record and is not maintained. For what was built see
+> as a record and is not maintained; its module paths are those of the flat
+> `fitting/` and `execution/` packages before they were divided into route
+> sub-packages. For what was built, and where it is now, see
 > [the dense fit](../architecture/fitting_dense.md),
 > [the streamed fit](../architecture/fitting_streamed.md) and
 > [the operator fit](../architecture/fitting_operator.md); for how to use it

@@ -33,18 +33,20 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from jaxgam.data.source import RowSource
-    from jaxgam.execution.discrete import DiscreteFit
-    from jaxgam.execution.operator import PCGControl
-    from jaxgam.execution.operator_bulk_variance import (
+    from jaxgam.execution.discrete.gaussian import DiscreteFit
+    from jaxgam.execution.operator.bulk_variance import (
         BulkOperatorVariance,
         BulkVarianceCalibration,
     )
-    from jaxgam.execution.operator_fit import OperatorFitDiagnostics, OperatorFitResult
+    from jaxgam.execution.operator.fit import OperatorFitDiagnostics, OperatorFitResult
+    from jaxgam.execution.operator.system import PCGControl
     from jaxgam.families.base import ExponentialFamily, FamilyParameterSnapshot
     from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
     from jaxgam.fitting.state import ConsumedFitResult, StreamFitState
-    from jaxgam.formula.continuous_metadata import ContinuousDiscretizationMetadata
     from jaxgam.formula.design import ModelSetup, SmoothInfo
+    from jaxgam.formula.discrete.continuous_metadata import (
+        ContinuousDiscretizationMetadata,
+    )
     from jaxgam.formula.predict_matrix import Data
     from jaxgam.formula.prepare import PreparedModel
     from jaxgam.formula.terms import FormulaSpec
@@ -556,10 +558,10 @@ class GAMPredictionResult:
         default 5 is a two-sided level of 5.7e-7 per row).
         """
         from jaxgam.data.source import RowSource
-        from jaxgam.execution.operator import FrozenScanSystem, PCGControl
-        from jaxgam.execution.operator_bulk_variance import BulkOperatorVariance
-        from jaxgam.execution.operator_fit import FrozenOperatorWorkingState
-        from jaxgam.formula.operator_prepare import (
+        from jaxgam.execution.operator.bulk_variance import BulkOperatorVariance
+        from jaxgam.execution.operator.fit import FrozenOperatorWorkingState
+        from jaxgam.execution.operator.system import FrozenScanSystem, PCGControl
+        from jaxgam.formula.operator.prepare import (
             OperatorPreparationControl,
             prepare_operator_model,
         )

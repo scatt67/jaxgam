@@ -258,7 +258,7 @@ class GAM:
                     "Gaussian QR compression requires Newton smoothing selection."
                 )
             else:
-                from jaxgam.execution.gaussian_optimizer import (
+                from jaxgam.execution.gaussian_qr.optimizer import (
                     GaussianQRIneligible,
                     build_dense_gaussian_qr_provider,
                 )
@@ -340,7 +340,7 @@ class GAM:
         else:
             use_lbfgs = False
             if score_provider is not None:
-                from jaxgam.execution.gaussian_optimizer import (
+                from jaxgam.execution.gaussian_qr.optimizer import (
                     optimize_gaussian_qr_lbfgs,
                     use_gaussian_qr_lbfgs,
                 )
@@ -396,8 +396,8 @@ class GAM:
         """Run CPU operator fitting with compact prediction retention."""
         import numbers
 
-        from jaxgam.execution.operator_fit import fit_operator_fixed_sp
-        from jaxgam.formula.operator_prepare import (
+        from jaxgam.execution.operator.fit import fit_operator_fixed_sp
+        from jaxgam.formula.operator.prepare import (
             OperatorPreparationControl,
             prepare_operator_model,
         )
@@ -482,18 +482,18 @@ class GAM:
         self, source: RowSource, family: ExponentialFamily
     ) -> GAMPredictionResult:
         """Materialize calibrated indexed and modest-indexed Poisson EFS fits."""
-        from jaxgam.execution.operator_efs_controller import (
+        from jaxgam.execution.operator.efs_controller import (
             CALIBRATED_OPERATOR_EFS_DOMAIN,
             CALIBRATED_OPERATOR_EFS_MAX_MODEST,
             SourceOperatorEFSFitProvider,
             run_operator_efs_known_scale,
         )
-        from jaxgam.execution.operator_efs_start import (
+        from jaxgam.execution.operator.efs_start import (
             prepare_indexed_operator_efs_start,
         )
-        from jaxgam.execution.operator_logdet import OperatorLogDetControl
+        from jaxgam.execution.operator.logdet import OperatorLogDetControl
         from jaxgam.families.standard import Poisson
-        from jaxgam.formula.operator_prepare import (
+        from jaxgam.formula.operator.prepare import (
             OperatorPreparationControl,
             prepare_operator_model,
         )
@@ -679,7 +679,7 @@ class GAM:
         execution_fallback_reason: str | None,
     ) -> GAMPredictionResult:
         """Prepare a validated streamed fit and dispatch it to its route."""
-        from jaxgam.execution.stream import StreamPIRLSControl, fit_streamed_pirls
+        from jaxgam.execution.stream.pirls import StreamPIRLSControl, fit_streamed_pirls
 
         spec = parse_formula(self.formula)
         prepared = prepare_model(
@@ -692,7 +692,7 @@ class GAM:
         stream = StreamDesign(prepared, data)
         gaussian_qr_workspace = None
         if gaussian_qr_candidate:
-            from jaxgam.execution.gaussian import (
+            from jaxgam.execution.gaussian_qr.preparation import (
                 preflight_streamed_gaussian_qr_workspace,
             )
 
@@ -724,7 +724,7 @@ class GAM:
                     ),
                     execution_fallback_reason,
                 )
-            from jaxgam.execution.efs_stream import fit_streamed_efs
+            from jaxgam.execution.stream.efs import fit_streamed_efs
 
             execution = fit_streamed_efs(
                 stream,
@@ -751,10 +751,10 @@ class GAM:
             )
         metadata = None
         if gaussian_qr_workspace is not None:
-            from jaxgam.execution.gaussian import GaussianQRIneligible
-            from jaxgam.execution.gaussian_optimizer import (
+            from jaxgam.execution.gaussian_qr.optimizer import (
                 build_stream_gaussian_qr_provider,
             )
+            from jaxgam.execution.gaussian_qr.preparation import GaussianQRIneligible
 
             metadata = PreparedFittingMetadata.from_prepared(
                 prepared, family, jax_device
@@ -904,8 +904,8 @@ class GAM:
         ``smoothing_strategy='working_model_reml'``; the dense
         ``optimizer='efs'`` selection is not a discrete strategy.
         """
-        from jaxgam.execution.discrete import fit_discrete_gaussian
-        from jaxgam.execution.discrete_regular import fit_discrete_regular
+        from jaxgam.execution.discrete.gaussian import fit_discrete_gaussian
+        from jaxgam.execution.discrete.regular import fit_discrete_regular
         from jaxgam.families.standard import Gaussian
 
         if not isinstance(data, RowSource):
@@ -1044,7 +1044,7 @@ def _fit_stream_gaussian_qr(
         if fixed
         else metadata.log_lambda_init
     )
-    from jaxgam.execution.gaussian_optimizer import (
+    from jaxgam.execution.gaussian_qr.optimizer import (
         optimize_gaussian_qr_lbfgs,
         use_gaussian_qr_lbfgs,
     )
@@ -1135,7 +1135,7 @@ def _check_stream_fixed_family(family: ExponentialFamily, linear_solver: str) ->
             "second_derivative implementation."
         )
     if isinstance(family, NegativeBinomial):
-        from jaxgam.execution.nb_stream import _link_name
+        from jaxgam.execution.stream.nb import _link_name
 
         _link_name(family)
         if linear_solver != "qr":
@@ -1199,9 +1199,9 @@ def _fit_stream_fixed_regular(
     device: jax.Device | None,
     supplied_sp: np.ndarray | list | float | None = None,
 ) -> GAMPredictionResult:
-    from jaxgam.execution.regular_stream import fit_regular_streamed_pirls
-    from jaxgam.execution.reml import optimize_regular_stream_reml
-    from jaxgam.execution.stream import StreamPIRLSControl
+    from jaxgam.execution.stream.pirls import StreamPIRLSControl
+    from jaxgam.execution.stream.regular import fit_regular_streamed_pirls
+    from jaxgam.execution.stream.reml import optimize_regular_stream_reml
 
     coefficient_control = StreamPIRLSControl(
         batch_rows=control.batch_rows,
@@ -1275,10 +1275,10 @@ def _fit_stream_fixed_nb(
     device: jax.Device | None,
     supplied_sp: np.ndarray | list | float | None = None,
 ) -> GAMPredictionResult:
-    from jaxgam.execution.nb_reml import optimize_nb_stream_reml
-    from jaxgam.execution.nb_stream import fit_nb_streamed_pirls
-    from jaxgam.execution.reml import StreamREMLControl
-    from jaxgam.execution.stream import StreamPIRLSControl
+    from jaxgam.execution.stream.nb import fit_nb_streamed_pirls
+    from jaxgam.execution.stream.nb_reml import optimize_nb_stream_reml
+    from jaxgam.execution.stream.pirls import StreamPIRLSControl
+    from jaxgam.execution.stream.reml import StreamREMLControl
 
     coefficient_control = StreamPIRLSControl(
         batch_rows=control.batch_rows, solver_policy="qr", tol=1e-11
@@ -1361,13 +1361,13 @@ def _fit_stream_exact_reml(
     device: jax.Device | None,
 ) -> GAMPredictionResult:
     """Expose one accepted exact source trial through the public result seam."""
-    from jaxgam.execution.efs_stream_start import prepare_stream_reml_start
-    from jaxgam.execution.nb_reml import optimize_nb_stream_reml
-    from jaxgam.execution.reml import (
+    from jaxgam.execution.stream.efs_start import prepare_stream_reml_start
+    from jaxgam.execution.stream.nb_reml import optimize_nb_stream_reml
+    from jaxgam.execution.stream.pirls import StreamPIRLSControl
+    from jaxgam.execution.stream.reml import (
         StreamREMLControl,
         optimize_regular_stream_reml,
     )
-    from jaxgam.execution.stream import StreamPIRLSControl
     from jaxgam.families.negative_binomial import NegativeBinomial
 
     n_lambda = metadata.n_penalties
@@ -1543,9 +1543,9 @@ def _fit_stream_parametric_bypass(
     device: jax.Device | None,
 ) -> GAMPredictionResult:
     """Preserve the ordinary no-penalty fit before streamed EFS dispatch."""
-    from jaxgam.execution.nb_stream import fit_nb_streamed_pirls
-    from jaxgam.execution.regular_stream import fit_regular_streamed_pirls
-    from jaxgam.execution.stream import StreamPIRLSControl
+    from jaxgam.execution.stream.nb import fit_nb_streamed_pirls
+    from jaxgam.execution.stream.pirls import StreamPIRLSControl
+    from jaxgam.execution.stream.regular import fit_regular_streamed_pirls
     from jaxgam.families.negative_binomial import NegativeBinomial
     from jaxgam.fitting.family_execution import (
         FamilyExecutionLineage,
@@ -1594,7 +1594,7 @@ def _fit_stream_parametric_bypass(
             # second coefficient fit or EFS outer loop is needed. The
             # saturated likelihood is scale-dependent and needs one bounded
             # replay at that selected scale.
-            from jaxgam.execution.stream import _source_batches
+            from jaxgam.execution.stream.pirls import _source_batches
 
             lineage = FamilyExecutionLineage.from_prepared(prepared, family)
             reported_scale = float(np.asarray(state.scale))
@@ -1883,7 +1883,7 @@ def _fit_fixed_sp(
     log_lambda = _fixed_log_smoothing_parameters(sp, fd.n_penalties)
 
     if score_provider is not None:
-        from jaxgam.execution.gaussian_optimizer import (
+        from jaxgam.execution.gaussian_qr.optimizer import (
             optimize_gaussian_qr_lbfgs,
             use_gaussian_qr_lbfgs,
         )

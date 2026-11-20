@@ -11,7 +11,7 @@ import pytest
 
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.fitting.data import _to_jax_structure
-from jaxgam.fitting.operators import (
+from jaxgam.fitting.operator.actions import (
     accumulate_rmatvec_batch,
     matvec_batch,
     normal_matvec_batch,
@@ -19,7 +19,7 @@ from jaxgam.fitting.operators import (
     rmatvec_batch,
     to_device_operator_batch,
 )
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )

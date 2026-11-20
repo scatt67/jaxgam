@@ -10,9 +10,9 @@ import pandas as pd
 import pytest
 
 from jaxgam.data.source import ArrayRowSource, DataFrameRowSource
-from jaxgam.formula import operator_prepare
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator import prepare as operator_prepare
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )

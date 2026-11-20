@@ -13,7 +13,7 @@ import pytest
 
 from jaxgam import GAM, FitControl, GAMPredictionResult
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution import reml as regular_reml
+from jaxgam.execution.stream import reml as regular_reml
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson

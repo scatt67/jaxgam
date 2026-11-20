@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxgam.fitting.efs_operator_score import operator_reml_score
+from jaxgam.fitting.operator.efs_score import operator_reml_score
 from tests.tolerances import STRICT
 
 

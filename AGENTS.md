@@ -76,6 +76,8 @@ Every fit flows through three phases. This boundary is load-bearing - do not mix
 
 `fitting/` does not import `execution/`, with one lazy exception in `fitting/data.py` (`structural_rank`).
 
+Both packages, and `formula/`, are laid out by route. A module that only one route uses lives in that route's sub-package: `stream/`, `discrete/`, `operator/` and, in `fitting/` and `execution/`, `gaussian_qr/`. A module that the dense fit or more than one route uses stays at the top level of its package. The same route has the same sub-package name in each package, so `execution/operator/` drives the kernels in `fitting/operator/` on the model that `formula/operator/` prepares. A sub-package's `__init__.py` holds a description and imports nothing.
+
 **Phase 3 - Post-estimation (NumPy).** `results.py`, `inference/`, `summary/`, `plot/`. Prediction uses the `CoefficientMap` and frozen smooth state from Phase 1. No module in `inference/`, `summary/` or `plot/` imports JAX.
 
 ```
@@ -126,13 +128,23 @@ jaxgam/
 ├── jax_utils.py         # Array dispatch, device transfer, linear-algebra helpers
 ├── platform_guard.py    # Apple Accelerate LAPACK warning
 ├── data/                # Phase 1: row sources, discretization
-├── formula/             # Phase 1: parsing, terms, design, streamed/discretized/operator setup
+├── formula/             # Phase 1: parsing, terms, design, prepared model
+│   ├── discrete/        #   setup for the discretized route
+│   └── operator/        #   setup for the operator route
 ├── smooths/             # Phase 1: bases, constraints, pinned LAPACK provider
 ├── penalties/           # Phase 1: penalty construction
 ├── families/            # Families (Phase 2; import JAX)
 ├── links/               # Link functions
-├── fitting/             # Phase 2: JAX kernels + dense Newton optimizer
-├── execution/           # Phase 2: host drivers (EFS, Gaussian QR, stream, discrete, operator)
+├── fitting/             # Phase 2: JAX kernels (PIRLS, REML, EFS algebra) + dense Newton optimizer
+│   ├── gaussian_qr/     #   kernels of one route each
+│   ├── stream/
+│   ├── discrete/
+│   └── operator/
+├── execution/           # Phase 2: host drivers; top level holds the EFS loop and shared reductions
+│   ├── gaussian_qr/     #   drivers of one route each
+│   ├── stream/
+│   ├── discrete/
+│   └── operator/
 ├── inference/           # Phase 3: prediction-only core (GAMPredictor)
 ├── summary/             # Phase 3: summary, EDF, p-values
 └── plot/                # Phase 3: matplotlib plotting
@@ -143,7 +155,7 @@ tests/
 ├── r_bridge.py          # Typed rpy2 bridge to pinned R 4.5.2 + mgcv 1.9-3
 ├── sharding.py          # CI shard assignment
 ├── test_validation_matrix.py   # Broad final-model R parity and hard-gate invariants
-└── test_<package>/      # One directory per package area
+└── test_<package>/      # One directory per package area (not divided by route)
 scripts/                 # Benchmarks and demos
 ```
 

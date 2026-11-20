@@ -26,13 +26,13 @@ on [the results page](results_and_prediction.md).
 | `jaxgam/fitting/newton.py` | `NewtonOptimizer` / `newton_optimize`: the host outer loop, the differentiable score `_diff_score` with its `jax.custom_jvp`, `NewtonResult`, `OuterScoreProvider`. |
 | `jaxgam/fitting/efs.py` | Jitted EFS algebra: `prepare_efs_statistics`, `efs_statistics` (d, t, q), `efs_raw_update`, `efs_fisher_factor`. |
 | `jaxgam/fitting/efs_theta.py` | Conditional NB theta Newton kernel (port of mgcv's `estimate.theta` branch used by `gam.fit4` under EFS). |
-| `jaxgam/fitting/efs_factor.py` | `efs_factor_statistics`: d, t, q computed from a coefficient-factor object; used by streamed EFS only. |
-| `jaxgam/fitting/gaussian.py` | `FrozenGaussianQR` and `gaussian_qr_reml_score`: the Gaussian REML score from frozen QR statistics. |
-| `jaxgam/fitting/rank_coordinates.py` | `reduced_augmented_qr` JAX kernel for rank-coordinate Gaussian QR solves; no module in `jaxgam/` imports it today, only tests. |
+| `jaxgam/fitting/stream/efs_factor.py` | `efs_factor_statistics`: d, t, q computed from a coefficient-factor object; used by streamed EFS only. |
+| `jaxgam/fitting/gaussian_qr/kernel.py` | `FrozenGaussianQR` and `gaussian_qr_reml_score`: the Gaussian REML score from frozen QR statistics. |
+| `jaxgam/fitting/gaussian_qr/rank_coordinates.py` | `reduced_augmented_qr` JAX kernel for rank-coordinate Gaussian QR solves; no module in `jaxgam/` imports it today, only tests. |
 | `jaxgam/execution/efs.py` | Host EFS controller (`dense_efs_known_scale`, `dense_efs_unknown_scale`, `_run_efs_known_scale`, `_run_efs_unknown_scale`), `EFSFitState`, `EFSResult`, start values. |
 | `jaxgam/execution/efs_provider.py` | The provider seam: `EFSFitRequest`, `EFSControllerContext`, `EFSFitProvider` protocol. |
-| `jaxgam/execution/gaussian.py` | Host preparation of the frozen Gaussian QR (`prepare_frozen_gaussian_qr`), `GaussianQRIneligible`, the penalty-count threshold, workspace estimates. |
-| `jaxgam/execution/gaussian_optimizer.py` | `DenseGaussianQROuterProvider`, `build_dense_gaussian_qr_provider`, `optimize_gaussian_qr_lbfgs`, `use_gaussian_qr_lbfgs`. |
+| `jaxgam/execution/gaussian_qr/preparation.py` | Host preparation of the frozen Gaussian QR (`prepare_frozen_gaussian_qr`), `GaussianQRIneligible`, the penalty-count threshold, workspace estimates. |
+| `jaxgam/execution/gaussian_qr/optimizer.py` | `DenseGaussianQROuterProvider`, `build_dense_gaussian_qr_provider`, `optimize_gaussian_qr_lbfgs`, `use_gaussian_qr_lbfgs`. |
 
 Phase 2 is split as on every route: jitted kernels in `jaxgam/fitting/`, host
 control in `jaxgam/execution/`. The dense route is the exception that its main
@@ -101,7 +101,7 @@ moves arrays with `to_jax` (`jax.device_put` of float64). In order:
 
 `_structural_penalty_roots` imports `structural_rank` from `jaxgam.execution.qr`
 inside the function. A module-level import would be circular:
-`jaxgam/execution/__init__.py` imports `jaxgam/execution/stream.py`, which
+`jaxgam/execution/__init__.py` imports `jaxgam/execution/stream/pirls.py`, which
 imports `_to_jax_structure` from `jaxgam/fitting/data.py`. As a consequence a
 dense penalized fit loads `jaxgam.execution` (and its stream module) even though
 the dense route uses nothing else from it. This is the only import from
@@ -566,7 +566,7 @@ Read from the top: every "no" on the eligibility chain raises
 runs with `execution_route="dense"` and the message in
 `execution_fallback_reason`. Other errors from preparation are not caught.
 
-**Frozen statistics.** `prepare_frozen_gaussian_qr` (`jaxgam/execution/gaussian.py`,
+**Frozen statistics.** `prepare_frozen_gaussian_qr` (`jaxgam/execution/gaussian_qr/preparation.py`,
 modelled on `qr_update` in mgcv's `R/bam.r` and `Sl.fit` in `R/fast-REML.r`)
 QR-reduces `[sqrt(w) X, sqrt(w)(y - offset)]` with `reduce_positive_qr`,
 re-expresses the factor in the coordinate map's global coordinates (on the dense
@@ -945,8 +945,8 @@ described on [the streamed page](fitting_streamed.md).
   (`jaxgam/execution/efs.py`); the controller itself does not change.
 - To change the Gaussian QR eligibility or threshold, edit
   `build_dense_gaussian_qr_provider` and `use_gaussian_qr_lbfgs`
-  (`jaxgam/execution/gaussian_optimizer.py`) and
-  `GAUSSIAN_LBFGS_PENALTY_THRESHOLD` (`jaxgam/execution/gaussian.py`).
+  (`jaxgam/execution/gaussian_qr/optimizer.py`) and
+  `GAUSSIAN_LBFGS_PENALTY_THRESHOLD` (`jaxgam/execution/gaussian_qr/preparation.py`).
 
 A proposed refactor would merge the several inner loops and outer controllers
 across routes; see [the unified fitting design](../unify_fit/design.md).

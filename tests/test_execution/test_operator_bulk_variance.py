@@ -10,20 +10,20 @@ from scipy.stats import binom, chi2, norm
 from jaxgam import GAM, FitControl
 from jaxgam.control import OperatorControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.operator import FrozenScanSystem, PCGControl
-from jaxgam.execution.operator_bulk_variance import (
+from jaxgam.execution.operator.bulk_variance import (
     BulkOperatorVariance,
     BulkVarianceSolveError,
     _penalty_noise,
     equivalent_normal_deviates,
 )
-from jaxgam.execution.operator_fit import (
+from jaxgam.execution.operator.fit import (
     FrozenOperatorWorkingState,
     fit_operator_fixed_sp,
 )
+from jaxgam.execution.operator.system import FrozenScanSystem, PCGControl
 from jaxgam.families.standard import Gaussian, Poisson
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )

@@ -31,8 +31,8 @@ import pytest
 
 from jaxgam.data.continuous_frame import CompactSetupFrame, build_compact_setup_frame
 from jaxgam.data.source import DataFrameRowSource, RowBatch, declared_row_vectors
-from jaxgam.execution.discrete_regular import regular_working_components
-from jaxgam.formula.continuous_setup import build_continuous_discrete_setup
+from jaxgam.execution.discrete.regular import regular_working_components
+from jaxgam.formula.discrete.continuous_setup import build_continuous_discrete_setup
 from jaxgam.formula.parser import parse_formula
 from tests.helpers import _AssertCollector, check_that
 from tests.test_execution.test_discrete_regular import (

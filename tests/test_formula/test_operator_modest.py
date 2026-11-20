@@ -10,9 +10,9 @@ from scipy import linalg
 
 from jaxgam import GAM, FitControl, OperatorControl
 from jaxgam.data.source import ArrayRowSource, DataFrameRowSource
-from jaxgam.formula import operator_modest
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator import modest as operator_modest
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )
@@ -524,7 +524,7 @@ def test_factor_tensor_penalty_overlap_budget_rejects_before_margin_constructor(
 def test_actual_tensor_penalty_layout_rejects_wrong_public_sp_before_fitting(
     monkeypatch,
 ):
-    import jaxgam.execution.operator_fit as operator_fit
+    import jaxgam.execution.operator.fit as operator_fit
 
     calls = []
     monkeypatch.setattr(

@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from jaxgam.fitting.gaussian import (
+from jaxgam.fitting.gaussian_qr.kernel import (
     FrozenGaussianQR,
     GaussianQRScore,
     gaussian_qr_reml_score,

@@ -13,7 +13,7 @@ import jax
 import numpy as np
 import pytest
 
-from jaxgam.fitting.rank_coordinates import jit_reduced_augmented_qr
+from jaxgam.fitting.gaussian_qr.rank_coordinates import jit_reduced_augmented_qr
 from jaxgam.formula.fitting_prepare import (
     _source_penalty_frobenius_norm,
     global_penalty_coordinates,

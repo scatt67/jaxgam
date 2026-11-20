@@ -17,36 +17,36 @@ compared with is in [the dense fit](fitting_dense.md).
 | Module | Role |
 |---|---|
 | `jaxgam/api.py` (`GAM._fit_operator`, `GAM._fit_operator_efs`) | Route entry: refusals, `sp` checks, preparation, fixed-sp fit or the EFS admission and budget split, result construction. |
-| `jaxgam/formula/operator_prepare.py` | Phase 1: `prepare_operator_model`, `PreparedOperatorModel`, `IndexedRandomEffect`, `FactorEncoding`, `OperatorBatch`, and `_CheckedSource` (bounded, replay-hashed scans). |
-| `jaxgam/formula/operator_modest.py` | Phase 1: rowless preparation of capped cubic, `by` and tensor terms (`prepare_modest_cubic_by`). |
-| `jaxgam/formula/operator_radial.py` | Phase 1: rowless thin-plate and Gaussian-process setup with mgcv's knot harvesting (`prepare_radial_smooth`). |
-| `jaxgam/formula/operator_workspace.py` | Phase 1: prospective evaluator workspace bounds for modest prediction (`predict_spec_evaluator_workspace_bound`). |
+| `jaxgam/formula/operator/prepare.py` | Phase 1: `prepare_operator_model`, `PreparedOperatorModel`, `IndexedRandomEffect`, `FactorEncoding`, `OperatorBatch`, and `_CheckedSource` (bounded, replay-hashed scans). |
+| `jaxgam/formula/operator/modest.py` | Phase 1: rowless preparation of capped cubic, `by` and tensor terms (`prepare_modest_cubic_by`). |
+| `jaxgam/formula/operator/radial.py` | Phase 1: rowless thin-plate and Gaussian-process setup with mgcv's knot harvesting (`prepare_radial_smooth`). |
+| `jaxgam/formula/operator/workspace.py` | Phase 1: prospective evaluator workspace bounds for modest prediction (`predict_spec_evaluator_workspace_bound`). |
 | `jaxgam/inference/operator_geometry.py` | Phase 3: `OperatorPredictionGeometry`, the retained prediction encoding (modest rows plus symbolic random effects). |
-| `jaxgam/fitting/operators.py` | JIT batch actions: `matvec_batch`, `rmatvec_batch`, `normal_matvec_batch`, donated accumulators, `penalty_matvec`. |
-| `jaxgam/fitting/operator_family.py` | JIT family rows: observed (Newton) curvature and working response from AD of the deviance (`operator_family_rows`). |
-| `jaxgam/fitting/iterative.py` | JIT PCG recurrences and status codes (`initialize_pcg`, `advance_pcg`, `verify_pcg`); a resident `lax.while_loop` solver. |
-| `jaxgam/fitting/preconditioners.py` | Diagonal, small-block and coarse inverse preconditioners (`prepare_preconditioner`, `apply_preconditioner`). |
-| `jaxgam/execution/operator.py` | `FrozenScanSystem` (certified `X'WX + S` replayed from the source), `PCGControl`, `solve_host_pcg`. |
-| `jaxgam/execution/operator_fit.py` | Fixed-sp observed Newton driver `fit_operator_fixed_sp`, `FrozenOperatorWorkingState`, source null start, `OperatorFitDiagnostics`, `OperatorFitResult`. |
-| `jaxgam/execution/operator_arrowhead.py` | Exact Schur algebra for one modest block plus one indexed identity block (`ExactArrowheadFactorization`). |
-| `jaxgam/execution/operator_efs_controller.py` | Operator EFS policy (`_run_operator_efs`), calibrated domain, score envelopes and their admission, `SourceOperatorEFSFitProvider`. |
-| `jaxgam/execution/operator_efs_provider.py` | Matched-state components at one fit: score rows, penalty determinant, observed log-determinant, Fisher traces, EDF (`MatchedOperatorEFSProvider`). |
-| `jaxgam/execution/operator_efs_start.py` | Source `initial.spg` start for one indexed identity penalty (`prepare_indexed_operator_efs_start`). |
-| `jaxgam/execution/operator_efs_trace.py` | Fisher traces `tr(H_F^-1 S_j)` and quadratics: structured, coordinate-solve and stochastic providers. |
-| `jaxgam/execution/operator_logdet.py` | `log det(H)`: structured diagonal, structured arrowhead, or stochastic Lanczos quadrature (`FrozenOperatorLogDet`). |
-| `jaxgam/execution/operator_penalty_determinant.py` | Local `log|S|+` and its log-sp gradient without a p-by-p array (`LocalOperatorPenaltyDeterminant`). |
-| `jaxgam/execution/operator_score_rows.py` | One replay of direct deviance, `family$ls` and penalty quadratic at a frozen state (`MatchedOperatorScoreReducer`). |
-| `jaxgam/execution/operator_score.py` | Score assembly (`assemble_operator_score`) and the bounded three-way comparison (`compare_operator_scores`). |
-| `jaxgam/fitting/efs_operator_score.py` | JIT scalar REML formula `operator_reml_score`. |
-| `jaxgam/execution/operator_variance.py` | Exact selected-row Fisher variances by one solve per row (`SelectedOperatorVariance`). |
-| `jaxgam/execution/operator_bulk_variance.py` | Monte Carlo bulk Fisher variance and its chi-square calibration (`BulkOperatorVariance`). |
+| `jaxgam/fitting/operator/actions.py` | JIT batch actions: `matvec_batch`, `rmatvec_batch`, `normal_matvec_batch`, donated accumulators, `penalty_matvec`. |
+| `jaxgam/fitting/operator/family.py` | JIT family rows: observed (Newton) curvature and working response from AD of the deviance (`operator_family_rows`). |
+| `jaxgam/fitting/operator/iterative.py` | JIT PCG recurrences and status codes (`initialize_pcg`, `advance_pcg`, `verify_pcg`); a resident `lax.while_loop` solver. |
+| `jaxgam/fitting/operator/preconditioners.py` | Diagonal, small-block and coarse inverse preconditioners (`prepare_preconditioner`, `apply_preconditioner`). |
+| `jaxgam/execution/operator/system.py` | `FrozenScanSystem` (certified `X'WX + S` replayed from the source), `PCGControl`, `solve_host_pcg`. |
+| `jaxgam/execution/operator/fit.py` | Fixed-sp observed Newton driver `fit_operator_fixed_sp`, `FrozenOperatorWorkingState`, source null start, `OperatorFitDiagnostics`, `OperatorFitResult`. |
+| `jaxgam/execution/operator/arrowhead.py` | Exact Schur algebra for one modest block plus one indexed identity block (`ExactArrowheadFactorization`). |
+| `jaxgam/execution/operator/efs_controller.py` | Operator EFS policy (`_run_operator_efs`), calibrated domain, score envelopes and their admission, `SourceOperatorEFSFitProvider`. |
+| `jaxgam/execution/operator/efs_provider.py` | Matched-state components at one fit: score rows, penalty determinant, observed log-determinant, Fisher traces, EDF (`MatchedOperatorEFSProvider`). |
+| `jaxgam/execution/operator/efs_start.py` | Source `initial.spg` start for one indexed identity penalty (`prepare_indexed_operator_efs_start`). |
+| `jaxgam/execution/operator/efs_trace.py` | Fisher traces `tr(H_F^-1 S_j)` and quadratics: structured, coordinate-solve and stochastic providers. |
+| `jaxgam/execution/operator/logdet.py` | `log det(H)`: structured diagonal, structured arrowhead, or stochastic Lanczos quadrature (`FrozenOperatorLogDet`). |
+| `jaxgam/execution/operator/penalty_determinant.py` | Local `log|S|+` and its log-sp gradient without a p-by-p array (`LocalOperatorPenaltyDeterminant`). |
+| `jaxgam/execution/operator/score_rows.py` | One replay of direct deviance, `family$ls` and penalty quadratic at a frozen state (`MatchedOperatorScoreReducer`). |
+| `jaxgam/execution/operator/score.py` | Score assembly (`assemble_operator_score`) and the bounded three-way comparison (`compare_operator_scores`). |
+| `jaxgam/fitting/operator/efs_score.py` | JIT scalar REML formula `operator_reml_score`. |
+| `jaxgam/execution/operator/variance.py` | Exact selected-row Fisher variances by one solve per row (`SelectedOperatorVariance`). |
+| `jaxgam/execution/operator/bulk_variance.py` | Monte Carlo bulk Fisher variance and its chi-square calibration (`BulkOperatorVariance`). |
 
 The PCG solver and the preconditioners are documented in code as new
 algorithms, not mgcv ports. The Newton loop and the PCG driver are host Python
 loops in `jaxgam/execution/`; only per-batch kernels and PCG recurrences are
 JIT-compiled. `solve_resident_pcg`, the `lax.while_loop` solver in
-`jaxgam/fitting/iterative.py`, has no caller outside that module. The
-`jaxgam/formula/operator_*.py` modules import no JAX.
+`jaxgam/fitting/operator/iterative.py`, has no caller outside that module. The
+The modules of `jaxgam/formula/operator/` import no JAX.
 
 A planned refactor will move this route onto a shared engine; see
 [the unified fit design](../unify_fit/design.md).
@@ -135,7 +135,7 @@ fit.
 `to_device_operator_batch` validates one `OperatorBatch` (finite modest values,
 ids in range, non-overlapping coefficient intervals), charges its transfer,
 and makes a `DeviceOperatorBatch` with `DeviceIndexedRows`. The kernels in
-`jaxgam/fitting/operators.py` follow `Xbd`/`XWyd`'s gather/reduce contract in
+`jaxgam/fitting/operator/actions.py` follow `Xbd`/`XWyd`'s gather/reduce contract in
 public coordinates:
 
 - `matvec_batch`: `modest_values @ v[modest_columns]` plus, per indexed term,
@@ -149,7 +149,7 @@ public coordinates:
 - `penalty_matvec`: `S_lambda v` from local penalty blocks
   (`penalty_ops.apply`, mgcv's `Sl.Sb` pattern).
 
-`operator_family_rows` (`jaxgam/fitting/operator_family.py`) evaluates one
+`operator_family_rows` (`jaxgam/fitting/operator/family.py`) evaluates one
 batch's family rows at `eta`: it takes the first and second derivatives of the
 row deviance with JAX AD, giving `half_gradient = D'/2`, the observed curvature
 `observed_weight = D''/2`, and the working response
@@ -217,7 +217,7 @@ construction bound is `17p` plus the capped block terms.
 `solve_host_pcg` (reached through `FrozenScanSystem.solve`) charges 14 float64
 p-vectors plus the measured scratch of its four compiled kernels before
 allocating, then iterates on the host with JIT steps from
-`jaxgam/fitting/iterative.py`. The threshold is
+`jaxgam/fitting/operator/iterative.py`. The threshold is
 `max(atol, rtol * ||rhs||)`. A recursive residual below the threshold only
 moves the state to `VERIFY_RESIDUAL`; convergence (`CONVERGED`) needs a fresh
 true residual `rhs - H x` from another matvec, and a failed verification
@@ -666,7 +666,7 @@ its `MatchedOperatorEFSComponents`, `score_error_bound` and
 - **EFS decisions only with admitted bounds**
   (`tests/test_execution/test_operator_score.py`,
   `test_common_probe_difference_reports_noise_but_waits_for_calibration`).
-- **Phase 1 stays NumPy.** `jaxgam/formula/operator_*.py` import no JAX.
+- **Phase 1 stays NumPy.** The modules of `jaxgam/formula/operator/` import no JAX.
 
 ## Pitfalls
 
@@ -695,29 +695,29 @@ its `MatchedOperatorEFSComponents`, `score_error_bound` and
   `OperatorPredictionGeometry` keeps `FitControl.batch_rows`, so a prediction
   request may be larger than the training data.
 - `PCGControl` is not exported from the top-level package; import it from
-  `jaxgam/execution/operator.py`.
+  `jaxgam/execution/operator/system.py`.
 
 ## Where to change things
 
 - **Admit a new basis in the modest block**: `prepare_operator_model`'s term
-  check and `jaxgam/formula/operator_modest.py` (or
-  `jaxgam/formula/operator_radial.py`), plus its evaluator bound in
-  `jaxgam/formula/operator_workspace.py`.
-- **Change the actions**: `jaxgam/fitting/operators.py`; keep
+  check and `jaxgam/formula/operator/modest.py` (or
+  `jaxgam/formula/operator/radial.py`), plus its evaluator bound in
+  `jaxgam/formula/operator/workspace.py`.
+- **Change the actions**: `jaxgam/fitting/operator/actions.py`; keep
   `to_device_operator_batch`'s validation and charges in step.
 - **Change the SPD certificate or preconditioner**: `FrozenScanSystem.__init__`
-  in `jaxgam/execution/operator.py` and `jaxgam/fitting/preconditioners.py`.
-- **Change PCG**: `solve_host_pcg` and `jaxgam/fitting/iterative.py`; keep the
+  in `jaxgam/execution/operator/system.py` and `jaxgam/fitting/operator/preconditioners.py`.
+- **Change PCG**: `solve_host_pcg` and `jaxgam/fitting/operator/iterative.py`; keep the
   true-residual rule.
 - **Change the Newton driver, start or step halving**: `fit_operator_fixed_sp`
-  and `_initial_null_beta` in `jaxgam/execution/operator_fit.py`.
+  and `_initial_null_beta` in `jaxgam/execution/operator/fit.py`.
 - **Widen operator EFS admission**: the domain, envelopes and
   `admitted_operator_efs_score_bound` in
-  `jaxgam/execution/operator_efs_controller.py`, `_fit_operator_efs` in
+  `jaxgam/execution/operator/efs_controller.py`, `_fit_operator_efs` in
   `jaxgam/api.py`, and the start provider; re-measure with
   `scripts/benchmark_operator_efs_calibration.py` and update
   `tests/test_execution/test_operator_efs_calibrated.py`.
-- **Change score assembly**: `jaxgam/execution/operator_score.py` and
-  `jaxgam/fitting/efs_operator_score.py`.
-- **Change bulk variance**: `jaxgam/execution/operator_bulk_variance.py` and
+- **Change score assembly**: `jaxgam/execution/operator/score.py` and
+  `jaxgam/fitting/operator/efs_score.py`.
+- **Change bulk variance**: `jaxgam/execution/operator/bulk_variance.py` and
   `GAMPredictionResult.bulk_link_variance` in `jaxgam/results.py`.

@@ -10,7 +10,7 @@ import pytest
 
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.fitting.efs_theta import conditional_theta_nll
-from jaxgam.fitting.nb_theta_stream import (
+from jaxgam.fitting.stream.nb_theta import (
     nb_conditional_theta_batch,
     nb_conditional_theta_step,
 )

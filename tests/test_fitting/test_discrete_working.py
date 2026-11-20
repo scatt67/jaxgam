@@ -11,11 +11,11 @@ import pandas as pd
 import pytest
 
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.regular_working_model import source_sum
+from jaxgam.execution.discrete.regular_working_model import source_sum
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
-from jaxgam.fitting.discrete_ops import to_device_discrete_design
-from jaxgam.fitting.discrete_working import (
+from jaxgam.fitting.discrete.ops import to_device_discrete_design
+from jaxgam.fitting.discrete.working import (
     discrete_extended_initial_working_batch,
     discrete_extended_working_batch,
     discrete_initial_working_batch,
@@ -23,7 +23,7 @@ from jaxgam.fitting.discrete_working import (
     discrete_working_batch,
 )
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.discrete_design import (
+from jaxgam.formula.discrete.design import (
     DiscreteDesignUnavailable,
     build_discrete_design_from_setup,
 )

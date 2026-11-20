@@ -13,12 +13,12 @@ import pytest
 from scipy.optimize import OptimizeResult
 from scipy.optimize import minimize as scipy_minimize
 
-import jaxgam.execution.nb_reml as nb_reml_execution
-import jaxgam.execution.reml as reml_execution
+import jaxgam.execution.stream.nb_reml as nb_reml_execution
+import jaxgam.execution.stream.reml as reml_execution
 from jaxgam import GAM, FitControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.reml import StreamREMLControl
-from jaxgam.execution.stream import StreamPIRLSControl
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
+from jaxgam.execution.stream.reml import StreamREMLControl
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.newton import _jit_diff_hess

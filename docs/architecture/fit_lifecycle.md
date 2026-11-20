@@ -19,7 +19,7 @@ report. The algorithms behind each route are on the Phase 2 pages.
 | `jaxgam/formula/parser.py` | `parse_formula`, called on every route. |
 | `jaxgam/formula/design.py` | `ModelSetup.build`, dense Phase 1. |
 | `jaxgam/formula/prepare.py`, `jaxgam/formula/design_provider.py` | `prepare_model` and `StreamDesign`, streamed Phase 1. |
-| `jaxgam/formula/operator_prepare.py` | `prepare_operator_model`, operator Phase 1. |
+| `jaxgam/formula/operator/prepare.py` | `prepare_operator_model`, operator Phase 1. |
 | `jaxgam/fitting/data.py` | `FittingData.from_setup` (dense) and `PreparedFittingMetadata.from_prepared` (streamed), the Phase 1 to 2 hand-off. |
 | `jaxgam/data/source.py` | `RowSource`, `single_fit_fingerprints`. |
 | `jaxgam/results.py` | The result constructors each route ends in. |
@@ -113,7 +113,7 @@ Read from the top. The three row-source routes leave `fit` at the first
 branch; the dense route runs to the bottom. `use_gaussian_qr_lbfgs` is only
 consulted when a Gaussian QR provider was built (otherwise it is skipped and
 Newton runs); it is true above 50 penalties
-(`GAUSSIAN_LBFGS_PENALTY_THRESHOLD` in `jaxgam/execution/gaussian.py`).
+(`GAUSSIAN_LBFGS_PENALTY_THRESHOLD` in `jaxgam/execution/gaussian_qr/preparation.py`).
 
 ### The dense route, inline in `fit`
 
@@ -131,7 +131,7 @@ The dense route has no `_fit_dense` method; it is the tail of `GAM.fit`.
 4. Gaussian QR request. With `control.gaussian_compression`:
    if `optimizer == "efs"` and `sp is None` the request is recorded as unmet;
    otherwise `build_dense_gaussian_qr_provider(fd)`
-   (`jaxgam/execution/gaussian_optimizer.py`) either returns a score provider
+   (`jaxgam/execution/gaussian_qr/optimizer.py`) either returns a score provider
    and sets `execution_route = "gaussian_qr"`, or raises
    `GaussianQRIneligible`, whose message becomes `execution_fallback_reason`
    while the ordinary dense fit runs.
@@ -263,24 +263,24 @@ Read from the top; each leaf shows the function that fits and the
 
 What each streamed leaf calls:
 
-- `fit_streamed_pirls` (`jaxgam/execution/stream.py`): fixed-sp streamed
+- `fit_streamed_pirls` (`jaxgam/execution/stream/pirls.py`): fixed-sp streamed
   PIRLS with a Cholesky or QR solve.
 - `_fit_stream_fixed_regular`: known scale uses `fit_regular_streamed_pirls`
-  (`jaxgam/execution/regular_stream.py`); unknown scale uses
-  `optimize_regular_stream_reml` (`jaxgam/execution/reml.py`) with the
+  (`jaxgam/execution/stream/regular.py`); unknown scale uses
+  `optimize_regular_stream_reml` (`jaxgam/execution/stream/reml.py`) with the
   smoothing parameters pinned and the log scale free.
 - `_fit_stream_fixed_nb`: fixed theta uses `fit_nb_streamed_pirls`
-  (`jaxgam/execution/nb_stream.py`); estimated theta uses
-  `optimize_nb_stream_reml` (`jaxgam/execution/nb_reml.py`) with the
+  (`jaxgam/execution/stream/nb.py`); estimated theta uses
+  `optimize_nb_stream_reml` (`jaxgam/execution/stream/nb_reml.py`) with the
   smoothing parameters pinned, then `put_theta`.
 - `_fit_stream_exact_reml`: two startup scans in
-  `prepare_stream_reml_start` (`jaxgam/execution/efs_stream_start.py`) when
+  `prepare_stream_reml_start` (`jaxgam/execution/stream/efs_start.py`) when
   there are penalties, then `optimize_nb_stream_reml` or
   `optimize_regular_stream_reml` over log smoothing parameters plus log
   theta or log scale. With no penalty, known scale and no theta it delegates
   to the fixed-sp functions and relabels the result
   (`lambda_strategy = "exact_reml_no_parameters"`).
-- `fit_streamed_efs` (`jaxgam/execution/efs_stream.py`) with `control.efs`.
+- `fit_streamed_efs` (`jaxgam/execution/stream/efs.py`) with `control.efs`.
 - `_fit_stream_parametric_bypass`: one streamed coefficient fit
   (`fit_nb_streamed_pirls` or `fit_regular_streamed_pirls`), plus one
   replay for the saturated likelihood when the scale is unknown;
@@ -313,7 +313,7 @@ calls `fit_discrete_gaussian` (Gaussian identity) or `fit_discrete_regular`
 when `sp` is given, and ignores `gaussian_compression` except to report it.
 
 Phase 1 for this route is called from the driver:
-`_prepared_discrete` in `jaxgam/execution/discrete.py` runs
+`_prepared_discrete` in `jaxgam/execution/discrete/gaussian.py` runs
 `build_continuous_discrete_setup` (which scans the source to build the
 compact frame and runs `ModelSetup.build` on it), `build_discretization_metadata`,
 `build_request_compression` (only for `prediction_policy="mgcv_predict_bamd"`)
@@ -327,7 +327,7 @@ sequenceDiagram
     participant fit_discrete_gaussian as fit_discrete_gaussian
     participant build_continuous_discrete_setup as build_continuous_discrete_setup
     participant RowSource as RowSource
-    participant discrete_ops as fitting/discrete_ops.py kernels
+    participant discrete_ops as fitting/discrete/ops.py kernels
     participant fit_gaussian_working_model_statistics as fit_gaussian_working_model_statistics
     participant GAMPredictionResult as GAMPredictionResult._from_discrete
     GAM->>GAM: route checks, parse_formula, _resolve_device
@@ -360,7 +360,7 @@ sequenceDiagram
 
 Read top to bottom: setup scans happen before any fit scan, and
 `source_scans` on the result counts only the two fit scans. For the other
-families `fit_discrete_regular` (`jaxgam/execution/discrete_regular.py`)
+families `fit_discrete_regular` (`jaxgam/execution/discrete/regular.py`)
 replaces the middle part with the performance iteration of `bgam.fitd`
 (`R/bam.r`): every outer iteration rescans the source to form working
 weights and takes one `Sl.fitChol` proposal (`R/fast-REML.r`), and an
@@ -381,7 +381,7 @@ the smaller of `batch_rows` and the source's row count
 (`_operator_fit_batch_rows`), `memory_budget_bytes` and
 `OperatorControl.max_modest_coefficients`, rechecks the `sp` count against
 `model.penalties.n_penalties`, fits with `fit_operator_fixed_sp`
-(`jaxgam/execution/operator_fit.py`) and builds the result with
+(`jaxgam/execution/operator/fit.py`) and builds the result with
 `GAMPredictionResult._from_operator_fit`.
 
 `_fit_operator_efs` admits only a canonical `Poisson` family and `batch_rows`
@@ -391,7 +391,7 @@ against the calibrated domain (one indexed random effect, at most
 `CALIBRATED_OPERATOR_EFS_MAX_MODEST` modest coefficients), builds the start
 with `prepare_indexed_operator_efs_start`, and runs
 `run_operator_efs_known_scale` over a `SourceOperatorEFSFitProvider`
-(`jaxgam/execution/operator_efs_controller.py`). Outside the domain it
+(`jaxgam/execution/operator/efs_controller.py`). Outside the domain it
 raises `NotImplementedError`; a result that cannot fit the remaining budget
 raises `MemoryError`. The result is `_from_operator_fit` on the accepted
 fit, then `dataclasses.replace` with the selected score, its error bound,
@@ -406,7 +406,7 @@ preparation and fit verify replay themselves.
 | dense | `fit(weights=, offset=)`, each of shape `(n,)`. `ModelSetup.build` defaults weights to ones, rejects a wrong shape, negative or non-finite weights, all-zero weights and a non-finite offset with `ValueError`. | `setup.weights` and `setup.offset`, transferred to the device as `fd.wt` and `fd.offset`; used again in `_from_fit` for the null deviance, and `_offset_was_nonzero(setup)` tells the predictor to warn when new data come without an offset. |
 | stream | `RowBatch.weight` and `RowBatch.offset` of each scanned batch; `fit` refuses separate arrays. | Reduced per batch by the drivers. `prepare_model` records their range in `prepared.fitting.response`, which decides Gaussian QR weight eligibility and the predictor's `offset_was_nonzero`. |
 | discrete | `RowBatch.weight` and `RowBatch.offset`. `declared_row_vectors` reads the source's `has_explicit_weights` and `has_explicit_offset`; an undeclared attribute counts as supplied, which changes the seeded compact-frame padding as supplied vectors do in `bam`. | Accumulated into the indexed statistics in every fit scan; `DiscreteFit.offset_was_nonzero` reaches the predictor. |
-| operator | `RowBatch.weight` and `RowBatch.offset`. | Moved to the device per batch in `jaxgam/execution/operator_fit.py`; the fit reports `offset_was_nonzero`. Operator EFS additionally requires unit weights and a zero offset. |
+| operator | `RowBatch.weight` and `RowBatch.offset`. | Moved to the device per batch in `jaxgam/execution/operator/fit.py`; the fit reports `offset_was_nonzero`. Operator EFS additionally requires unit weights and a zero offset. |
 
 ### How each route builds its result
 
@@ -453,7 +453,7 @@ then runs on the route it would have taken without the request.
 | "Gaussian QR compression requires Newton smoothing selection." | `GAM.fit` (dense) and `_gaussian_qr_request_fallback` (stream) |
 | "Gaussian QR requires the exact Gaussian family with identity link" | `_gaussian_qr_request_fallback` (stream); also a `GaussianQRIneligible` message |
 | "Gaussian QR currently requires unclipped finite positive weights" | `_fit_stream_routes`; also a `GaussianQRIneligible` message |
-| the message of a caught `GaussianQRIneligible` | `GAM.fit` (dense, from `build_dense_gaussian_qr_provider`) and `_fit_stream_routes` (from `build_stream_gaussian_qr_provider`). Messages include "Gaussian QR smoothing optimization requires at least one penalty", "Gaussian QR currently requires a full identifiable coefficient map" and "Gaussian QR requires finite dense fitting data" (`jaxgam/execution/gaussian_optimizer.py`, `jaxgam/execution/gaussian.py`). |
+| the message of a caught `GaussianQRIneligible` | `GAM.fit` (dense, from `build_dense_gaussian_qr_provider`) and `_fit_stream_routes` (from `build_stream_gaussian_qr_provider`). Messages include "Gaussian QR smoothing optimization requires at least one penalty", "Gaussian QR currently requires a full identifiable coefficient map" and "Gaussian QR requires finite dense fitting data" (`jaxgam/execution/gaussian_qr/optimizer.py`, `jaxgam/execution/gaussian_qr/preparation.py`). |
 | "Gaussian QR compression requires execution 'dense' or 'stream'." | `_discrete_gaussian_qr_request_fallback` |
 
 The operator route never reads `gaussian_compression`, so its results always
@@ -529,7 +529,7 @@ classDiagram
 `NewtonResult` (`jaxgam/fitting/newton.py`) is the optimizer-neutral fit
 record the dense route hands to `GAMResults._from_fit`; the streamed
 optimizer routes build one with `_selected_stream_fit` to carry the outer
-score. `DiscreteFit` (`jaxgam/execution/discrete.py`) is the row-free state
+score. `DiscreteFit` (`jaxgam/execution/discrete/gaussian.py`) is the row-free state
 of a discretized fit. The class diagram shows only the members that this page
 discusses.
 

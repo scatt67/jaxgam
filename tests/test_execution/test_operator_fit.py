@@ -9,7 +9,7 @@ import pytest
 from jaxgam.api import GAM
 from jaxgam.control import FitControl, OperatorControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.operator_fit import (
+from jaxgam.execution.operator.fit import (
     FrozenOperatorWorkingState,
     _evaluate_geometry,
     _initial_null_beta,
@@ -18,7 +18,7 @@ from jaxgam.execution.operator_fit import (
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )

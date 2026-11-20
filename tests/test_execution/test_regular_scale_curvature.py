@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.reml import evaluate_regular_stream_reml
-from jaxgam.execution.stream import StreamPIRLSControl
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
+from jaxgam.execution.stream.reml import evaluate_regular_stream_reml
 from jaxgam.families.standard import Gamma, Gaussian, Poisson
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula

@@ -2,7 +2,7 @@
 
 ## Scope
 
-This page covers everything that happens before fitting, on the CPU with NumPy and SciPy: parsing the formula, constructing smooth bases and penalties, absorbing identifiability constraints into a `CoefficientMap`, and assembling the dense model matrix. It then covers the three row-source setups that never build a dense training matrix: streamed preparation (`jaxgam/formula/prepare.py`), the compact setup of the discretized route (`jaxgam/formula/continuous_setup.py` and its neighbours) and the operator preparation modules. Fitting starts at the Phase 1 to 2 boundary described in [fitting_dense.md](fitting_dense.md).
+This page covers everything that happens before fitting, on the CPU with NumPy and SciPy: parsing the formula, constructing smooth bases and penalties, absorbing identifiability constraints into a `CoefficientMap`, and assembling the dense model matrix. It then covers the three row-source setups that never build a dense training matrix: streamed preparation (`jaxgam/formula/prepare.py`), the compact setup of the discretized route (`jaxgam/formula/discrete/continuous_setup.py` and its neighbours) and the operator preparation modules. Fitting starts at the Phase 1 to 2 boundary described in [fitting_dense.md](fitting_dense.md).
 
 ## Where the code is
 
@@ -16,17 +16,17 @@ This page covers everything that happens before fitting, on the CPU with NumPy a
 | `jaxgam/formula/design_provider.py` | `StreamDesign` (prepared metadata plus a source, evaluates one batch at a time) and `DenseDesign` (explicit materialization, used by tests). |
 | `jaxgam/formula/prepare.py` | Streamed preparation: `prepare_model`, `prepare_fitting`, `PreparedModel`, `SetupWorkspace`, exact cubic knots. |
 | `jaxgam/formula/fitting_prepare.py` | CPU fitting-coordinate preparation shared by dense and streamed setup: `reparameterize_structure`, `qr_penalty_roots`, `initial_log_sp_from_diagonal` (port of `initial.sp`), `FittingPreparation`. |
-| `jaxgam/formula/rank_coordinates.py` | CPU rank-coordinate maps for Gaussian QR fitting (`IdentifiableCoordinateMap`, used by `jaxgam/execution/gaussian.py`); follows `gdiPK`'s coordinate choice. |
-| `jaxgam/formula/working_penalties.py` | `build_working_penalty_blocks`: the initial local penalty parameterization of `Sl.setup` (`R/fast-REML.r`) for the discrete working model. |
+| `jaxgam/formula/rank_coordinates.py` | CPU rank-coordinate maps for Gaussian QR fitting (`IdentifiableCoordinateMap`, used by `jaxgam/execution/gaussian_qr/preparation.py`); follows `gdiPK`'s coordinate choice. |
+| `jaxgam/formula/discrete/working_penalties.py` | `build_working_penalty_blocks`: the initial local penalty parameterization of `Sl.setup` (`R/fast-REML.r`) for the discrete working model. |
 | `jaxgam/formula/kernel_groups.py` | Host grouping of equal-shape items (`shape_groups`, `pair_reduction_plan`, `discrete_pair_schedule`) so JIT kernels in `jaxgam/fitting/` trace one loop per shape. |
-| `jaxgam/formula/discrete_design.py` | Indexed design descriptors: `FrozenDiscreteDesign`, `LookupBlock`, `TensorLookupBlock`, `DiscreteDesignControl`, the memory `_Ledger` and `_memory_plan`. |
-| `jaxgam/formula/continuous_setup.py` | `build_continuous_discrete_setup`: basis setup on the compact frame of the discretized route. |
-| `jaxgam/formula/continuous_design.py` | `build_continuous_discrete_design`: evaluates the frozen bases on compact representatives into a `FrozenDiscreteDesign`. |
-| `jaxgam/formula/continuous_metadata.py` | Row-free record of the fitted discretization (`ContinuousDiscretizationMetadata`) and the prediction request grouping (`build_request_compression`). |
-| `jaxgam/formula/operator_prepare.py` | `prepare_operator_model`: bounded preparation for the operator route, with symbolic random-effect blocks (`IndexedRandomEffect`). |
-| `jaxgam/formula/operator_modest.py` | `prepare_modest_cubic_by`: the capped non-random-effect part of an operator model when it has `by=`, `te`/`ti` or radial terms. |
-| `jaxgam/formula/operator_radial.py` | `prepare_radial_smooth`: rowless thin-plate and Gaussian-process setup for the operator route. |
-| `jaxgam/formula/operator_workspace.py` | Prospective evaluator workspace bounds for operator prediction (`smooth_evaluator_workspace_bound`). |
+| `jaxgam/formula/discrete/design.py` | Indexed design descriptors: `FrozenDiscreteDesign`, `LookupBlock`, `TensorLookupBlock`, `DiscreteDesignControl`, the memory `_Ledger` and `_memory_plan`. |
+| `jaxgam/formula/discrete/continuous_setup.py` | `build_continuous_discrete_setup`: basis setup on the compact frame of the discretized route. |
+| `jaxgam/formula/discrete/continuous_design.py` | `build_continuous_discrete_design`: evaluates the frozen bases on compact representatives into a `FrozenDiscreteDesign`. |
+| `jaxgam/formula/discrete/continuous_metadata.py` | Row-free record of the fitted discretization (`ContinuousDiscretizationMetadata`) and the prediction request grouping (`build_request_compression`). |
+| `jaxgam/formula/operator/prepare.py` | `prepare_operator_model`: bounded preparation for the operator route, with symbolic random-effect blocks (`IndexedRandomEffect`). |
+| `jaxgam/formula/operator/modest.py` | `prepare_modest_cubic_by`: the capped non-random-effect part of an operator model when it has `by=`, `te`/`ti` or radial terms. |
+| `jaxgam/formula/operator/radial.py` | `prepare_radial_smooth`: rowless thin-plate and Gaussian-process setup for the operator route. |
+| `jaxgam/formula/operator/workspace.py` | Prospective evaluator workspace bounds for operator prediction (`smooth_evaluator_workspace_bound`). |
 | `jaxgam/smooths/__init__.py` | Re-exports the smooth classes, wrappers, `CoefficientMap`, `TermBlock` and the registry. |
 | `jaxgam/smooths/base.py` | Abstract `Smooth` base class and the `smoothCon` penalty normalization helpers. |
 | `jaxgam/smooths/registry.py` | `smooth_registry` and `get_smooth_class`. |
@@ -55,7 +55,7 @@ This page covers everything that happens before fitting, on the CPU with NumPy a
 |---|---|---|
 | `dense` | `parse_formula`, then `ModelSetup.build` (`jaxgam/api.py`) | Yes, dense `X` |
 | `stream` | `parse_formula`, then `prepare_model(..., family=...)` and `StreamDesign` | No; one batch at a time |
-| `discrete` | `parse_formula`, then `build_continuous_discrete_setup` from `jaxgam/execution/discrete.py` | Only on the compact frame, then discarded |
+| `discrete` | `parse_formula`, then `build_continuous_discrete_setup` from `jaxgam/execution/discrete/gaussian.py` | Only on the compact frame, then discarded |
 | `operator` | `prepare_operator_model` | No; random effects stay symbolic |
 
 The route dispatch itself is on [fit_lifecycle.md](fit_lifecycle.md).
@@ -236,9 +236,9 @@ The discretized route reproduces `bam(discrete=TRUE)`: covariates are compressed
 3. `ModelSetup.build(formula, compact.frame, source_penalty_coordinates=True)` runs the ordinary dense setup on the compact frame, so every registered basis is accepted. Only `build_predict_spec`, the penalties and the source determinant penalties are kept; the compact training `X` is discarded.
 4. The result is a `ContinuousDiscreteSetup` with a `basis_fingerprint` (SHA-256 of the pickled `PredictSpec`) and a byte ledger.
 
-Then `_prepared_discrete` in `jaxgam/execution/discrete.py` calls `build_discretization_metadata` and, for `prediction_policy="mgcv_predict_bamd"`, `build_request_compression` (both in `jaxgam/formula/continuous_metadata.py`), and `build_continuous_discrete_design` (`jaxgam/formula/continuous_design.py`). That last step evaluates each term's frozen `predict_matrix` on its group's compact representatives and stores the constrained table with the group's selector as a `LookupBlock`, or as a `TensorLookupBlock` for tensor and by terms, where margins and the by multiplier are separate indexed tables. Each step returns a typed unavailable value (`ContinuousSetupUnavailable`, `DiscreteDesignUnavailable`) instead of raising; `_prepared_discrete` turns it into `MemoryError("{reason}: requires {n} bytes, budget is {m}.")`. A multi-variable random effect, `s(x, g, bs="re")`, is refused by `_reject_unsupported_formula`. The fit itself is on [fitting_discrete.md](fitting_discrete.md).
+Then `_prepared_discrete` in `jaxgam/execution/discrete/gaussian.py` calls `build_discretization_metadata` and, for `prediction_policy="mgcv_predict_bamd"`, `build_request_compression` (both in `jaxgam/formula/discrete/continuous_metadata.py`), and `build_continuous_discrete_design` (`jaxgam/formula/discrete/continuous_design.py`). That last step evaluates each term's frozen `predict_matrix` on its group's compact representatives and stores the constrained table with the group's selector as a `LookupBlock`, or as a `TensorLookupBlock` for tensor and by terms, where margins and the by multiplier are separate indexed tables. Each step returns a typed unavailable value (`ContinuousSetupUnavailable`, `DiscreteDesignUnavailable`) instead of raising; `_prepared_discrete` turns it into `MemoryError("{reason}: requires {n} bytes, budget is {m}.")`. A multi-variable random effect, `s(x, g, bs="re")`, is refused by `_reject_unsupported_formula`. The fit itself is on [fitting_discrete.md](fitting_discrete.md).
 
-`jaxgam/formula/discrete_design.py` also holds exact (unrounded) descriptor builders, `build_discrete_design_from_predict_spec` and its `build_discrete_design_from_prepared` and `build_discrete_design_from_setup` adapters. They replay a frozen `PredictSpec` over `exact_index_columns` rather than re-running setup on unique rows, because re-running it would change centering and normalization. At HEAD only tests call them.
+`jaxgam/formula/discrete/design.py` also holds exact (unrounded) descriptor builders, `build_discrete_design_from_predict_spec` and its `build_discrete_design_from_prepared` and `build_discrete_design_from_setup` adapters. They replay a frozen `PredictSpec` over `exact_index_columns` rather than re-running setup on unique rows, because re-running it would change centering and normalization. At HEAD only tests call them.
 
 ### Operator preparation
 
@@ -248,7 +248,7 @@ Then `_prepared_discrete` in `jaxgam/execution/discrete.py` calls `build_discret
 - **The modest part** (all other terms) is capped at `OperatorPreparationControl.max_modest_coefficients` (default 64) raw columns. Plain cubic and numeric terms use `prepare_model(..., allow_cyclic=True)`; terms with `by=`, `te`/`ti` or radial bases use `prepare_modest_cubic_by`, which calls `prepare_radial_smooth` for `tp`/`ts`/`gp`. That function harvests knots following `uniquecombs(ordered=TRUE)` and the R sampler and, for `tp`/`ts`, reuses the dense `tprs_setup` port (`_source_tprs_knot_basis`).
 - **Replay checking.** Every scan goes through `_CheckedSource`, which hashes every row (position, every column value, `y`, weight, offset) and requires each replay to give the same digest.
 
-`jaxgam/formula/operator_workspace.py` bounds the prediction scratch of radial smooths, whose knots can make evaluation larger than the coefficient width suggests. The fit is on [fitting_operator.md](fitting_operator.md).
+`jaxgam/formula/operator/workspace.py` bounds the prediction scratch of radial smooths, whose knots can make evaluation larger than the coefficient width suggests. The fit is on [fitting_operator.md](fitting_operator.md).
 
 ## Key types
 
@@ -509,5 +509,5 @@ These are the row-free outputs of the three row-source setups; none holds an obs
 - **Change parametric or factor encoding:** `_build_parametric_matrix` and `_encode_factor` in `jaxgam/formula/predict_matrix.py`. Training and prediction share them, so both change together.
 - **Change how penalties are stored:** `make_penalty_structure` in `jaxgam/penalties/structure.py`, and every consumer of `PenaltyBlock` in `jaxgam/formula/fitting_prepare.py` and `jaxgam/fitting/`.
 - **Widen streamed preparation:** `_cubic_class` and the checks at the top of `prepare_model`; extend `SetupWorkspace.for_design` for any new per-row array.
-- **Change the discretized setup bound:** `_prospective_basis_bytes` in `jaxgam/formula/continuous_setup.py` and `_memory_plan` in `jaxgam/formula/discrete_design.py`.
+- **Change the discretized setup bound:** `_prospective_basis_bytes` in `jaxgam/formula/discrete/continuous_setup.py` and `_memory_plan` in `jaxgam/formula/discrete/design.py`.
 - **Widen operator preparation:** the term checks in `prepare_operator_model` and `prepare_modest_cubic_by`.

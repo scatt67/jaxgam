@@ -43,16 +43,18 @@ import pytest
 
 from jaxgam import ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution import regular_working_model as regular
-from jaxgam.execution.discrete_regular import (
+from jaxgam.execution.discrete import regular_working_model as regular
+from jaxgam.execution.discrete.regular import (
     fit_discrete_regular,
     regular_working_components,
 )
-from jaxgam.execution.working_model import evaluate_gaussian_working_model_proposal
+from jaxgam.execution.discrete.working_model import (
+    evaluate_gaussian_working_model_proposal,
+)
 from jaxgam.families.standard import Binomial, Gamma, Poisson
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import canonical_working_quantities, pirls_loop
-from jaxgam.formula.continuous_setup import build_continuous_discrete_setup
+from jaxgam.formula.discrete.continuous_setup import build_continuous_discrete_setup
 from jaxgam.formula.parser import parse_formula
 from tests.helpers import (
     _AssertCollector,

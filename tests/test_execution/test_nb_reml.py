@@ -12,8 +12,8 @@ import pandas as pd
 import pytest
 
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.nb_reml import evaluate_nb_stream_reml
-from jaxgam.execution.stream import StreamPIRLSControl
+from jaxgam.execution.stream.nb_reml import evaluate_nb_stream_reml
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Gamma
 from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
@@ -245,7 +245,7 @@ def test_dynamic_theta_isolation_warm_start_and_no_conditional_update():
     """One family evaluates theta trials without mutation or EFS substitution."""
     stream, family, params = _case("identity", estimated=True)
     with patch(
-        "jaxgam.execution.nb_stream.conditional_theta_stream",
+        "jaxgam.execution.stream.nb.conditional_theta_stream",
         side_effect=AssertionError("joint REML must not run conditional theta"),
     ):
         first = evaluate_nb_stream_reml(
@@ -342,7 +342,7 @@ def test_nb_host_preflights_memory_and_reports_complete_scan_counts():
     stream, family, params = _case("sqrt", estimated=True)
     with (
         patch.object(PreparedFittingMetadata, "from_prepared") as metadata,
-        patch("jaxgam.execution.nb_reml.fit_nb_streamed_pirls") as fit,
+        patch("jaxgam.execution.stream.nb_reml.fit_nb_streamed_pirls") as fit,
         pytest.raises(MemoryError, match="known workspace"),
     ):
         evaluate_nb_stream_reml(
@@ -399,7 +399,7 @@ def test_large_count_prefix_is_charged_before_fit_or_derivative_allocation():
         )
     )
     with (
-        patch("jaxgam.execution.nb_reml.fit_nb_streamed_pirls") as fit,
+        patch("jaxgam.execution.stream.nb_reml.fit_nb_streamed_pirls") as fit,
         pytest.raises(MemoryError, match="count-prefix workspace"),
     ):
         evaluate_nb_stream_reml(

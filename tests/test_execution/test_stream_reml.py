@@ -14,18 +14,18 @@ import pytest
 
 from jaxgam import GAM
 from jaxgam.data.source import ArrayRowSource
-from jaxgam.execution.reml import (
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
+from jaxgam.execution.stream.reml import (
     StreamREMLControl,
     _AcceptedTrialObjective,
     _projected_gradient,
     evaluate_stream_reml,
     optimize_stream_reml,
 )
-from jaxgam.execution.stream import StreamPIRLSControl
 from jaxgam.families.standard import Binomial, Gaussian, Poisson
 from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
 from jaxgam.fitting.newton import NewtonOptimizer, newton_optimize
-from jaxgam.fitting.stream_reml import (
+from jaxgam.fitting.stream.reml import (
     batch_is_adjoint_interior,
     batch_statistics_beta_vjp,
 )
@@ -372,7 +372,7 @@ def test_stream_reml_provider_reports_source_and_inner_failures(
             stream, family, np.array([0.2, -0.1]), warm_start=mismatched_warm
         )
 
-    import jaxgam.execution.reml as stream_reml_execution
+    import jaxgam.execution.stream.reml as stream_reml_execution
 
     with monkeypatch.context() as scoped:
         scoped.setattr(
@@ -398,7 +398,7 @@ def test_stream_reml_lbfgsb_uses_only_callback_accepted_warm_starts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A rejected line-search candidate cannot become a later warm start."""
-    import jaxgam.execution.reml as stream_reml_execution
+    import jaxgam.execution.stream.reml as stream_reml_execution
 
     calls: list[tuple[np.ndarray, object | None]] = []
 
@@ -447,7 +447,7 @@ def test_stream_reml_lbfgsb_reports_bounded_nonconvergence_and_kkt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A genuine iteration stop returns diagnostics, while bounds use KKT signs."""
-    import jaxgam.execution.reml as stream_reml_execution
+    import jaxgam.execution.stream.reml as stream_reml_execution
 
     initial = SimpleNamespace(
         rho=np.array([-40.0]),
@@ -505,7 +505,7 @@ def test_stream_reml_lbfgsb_reports_bounded_nonconvergence_and_kkt(
 def test_stream_reml_lbfgsb_rechecks_cached_source_and_ftol_gradient(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import jaxgam.execution.reml as stream_reml_execution
+    import jaxgam.execution.stream.reml as stream_reml_execution
 
     trial = SimpleNamespace(
         rho=np.array([0.0]),
@@ -564,7 +564,7 @@ def test_stream_reml_lbfgsb_rechecks_cached_source_and_ftol_gradient(
 def test_stream_reml_lbfgsb_rejects_zero_penalty_and_callback_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import jaxgam.execution.reml as stream_reml_execution
+    import jaxgam.execution.stream.reml as stream_reml_execution
 
     zero_fitting = SimpleNamespace(penalty_structure=SimpleNamespace(n_penalties=0))
     zero_stream = SimpleNamespace(prepared=SimpleNamespace(fitting=zero_fitting))
@@ -704,7 +704,7 @@ def test_stream_reml_observed_adjoint_fails_closed_on_a_bad_residual(
     monkeypatch,
 ) -> None:
     """An unacceptable scaled adjoint residual raises, never returns a trial."""
-    import jaxgam.execution.reml as stream_reml_module
+    import jaxgam.execution.stream.reml as stream_reml_module
 
     _formula, stream, _data = _null_smooth_problem()
     exact = stream_reml_module.solve_observed_adjoint

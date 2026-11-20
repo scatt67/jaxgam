@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from jaxgam.formula.operator_prepare import IndexedRandomEffect
+from jaxgam.formula.operator.prepare import IndexedRandomEffect
 from jaxgam.formula.predict_matrix import Data, PredictSpec
 
 
@@ -60,7 +60,7 @@ class OperatorPredictionGeometry:
         _freeze(self.modest, set())
 
     def workspace_bound(self, n_rows: int, *, matrix_output: bool = False) -> int:
-        from jaxgam.formula.operator_workspace import (
+        from jaxgam.formula.operator.workspace import (
             predict_spec_evaluator_workspace_bound,
         )
 

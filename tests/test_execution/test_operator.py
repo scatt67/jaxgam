@@ -10,15 +10,19 @@ import pandas as pd
 import pytest
 
 from jaxgam.data.source import ArrayRowSource, DataFrameRowSource
-from jaxgam.execution.operator import (
+from jaxgam.execution.operator.system import (
     FrozenScanSystem,
     PCGControl,
     solve_host_pcg,
 )
-from jaxgam.fitting.iterative import MAX_ITERATIONS, NONFINITE, NONPOSITIVE_CURVATURE
-from jaxgam.fitting.preconditioners import prepare_preconditioner
+from jaxgam.fitting.operator.iterative import (
+    MAX_ITERATIONS,
+    NONFINITE,
+    NONPOSITIVE_CURVATURE,
+)
+from jaxgam.fitting.operator.preconditioners import prepare_preconditioner
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     PreparedOperatorModel,
     prepare_operator_model,

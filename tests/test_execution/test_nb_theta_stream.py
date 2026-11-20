@@ -4,13 +4,13 @@ import jax
 import numpy as np
 import pytest
 
-from jaxgam.execution.nb_stream import fit_nb_streamed_pirls
-from jaxgam.execution.nb_theta_stream import (
+from jaxgam.execution.stream.nb import fit_nb_streamed_pirls
+from jaxgam.execution.stream.nb_theta import (
     NBThetaStreamControl,
     conditional_theta_stream,
 )
-from jaxgam.execution.regular_stream import preflight_regular_stream_workspace
-from jaxgam.execution.stream import StreamPIRLSControl
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
+from jaxgam.execution.stream.regular import preflight_regular_stream_workspace
 from jaxgam.fitting.efs_theta import conditional_theta_newton
 from jaxgam.fitting.family_execution import (
     FamilyExecutionLineage,
@@ -263,8 +263,8 @@ def _pinned_controller(stream, link, start, tol=1e-11):
 def test_global_source_newton_failure_retention_and_recoverable_infinite_trials(
     monkeypatch, case, status
 ):
-    from jaxgam.execution import nb_theta_stream
-    from jaxgam.fitting.nb_theta_stream import NBConditionalThetaBatch
+    from jaxgam.execution.stream import nb_theta as nb_theta_stream
+    from jaxgam.fitting.stream.nb_theta import NBConditionalThetaBatch
 
     stream, family = _fixture(estimated=True)
     lineage = FamilyExecutionLineage.from_prepared(stream.prepared, family)
@@ -372,7 +372,7 @@ def test_converged_theta_transition_keeps_source_score_and_reported_state():
 def test_count_budget_is_checked_after_summary_before_theta_dispatch(
     monkeypatch,
 ):
-    import jaxgam.execution.nb_theta_stream as engine
+    import jaxgam.execution.stream.nb_theta as engine
 
     stream, family = _fixture(estimated=True)
     control, theta_control = _controls(), NBThetaStreamControl()
@@ -413,7 +413,7 @@ def test_no_intercept_null_projection_counts_zero_priors_and_releases_qr(
 
     import pandas as pd
 
-    import jaxgam.execution.nb_stream as controller
+    import jaxgam.execution.stream.nb as controller
     from jaxgam.data.source import DataFrameRowSource
     from jaxgam.families.negative_binomial import NegativeBinomial
     from jaxgam.formula.design_provider import StreamDesign
@@ -512,7 +512,7 @@ def test_exact_six_row_theta_boundary_has_reviewed_field_specific_source_gates(
 
     from jaxgam.data.source import DataFrameRowSource
     from jaxgam.families.negative_binomial import NegativeBinomial
-    from jaxgam.fitting.nb_theta_stream import nb_conditional_theta_batch
+    from jaxgam.fitting.stream.nb_theta import nb_conditional_theta_batch
     from jaxgam.formula.design_provider import StreamDesign
     from jaxgam.formula.parser import parse_formula
     from jaxgam.formula.prepare import prepare_model
@@ -640,7 +640,7 @@ def test_conditional_n_growth_keeps_numeric_buffers_histories_and_ledger_bounded
 
     import pandas as pd
 
-    import jaxgam.execution.nb_stream as controller
+    import jaxgam.execution.stream.nb as controller
     from jaxgam.data.source import DataFrameRowSource
     from jaxgam.families.negative_binomial import NegativeBinomial
     from jaxgam.formula.design_provider import StreamDesign
@@ -701,7 +701,7 @@ def test_conditional_n_growth_keeps_numeric_buffers_histories_and_ledger_bounded
 
 
 def test_initial_batch_cap_fails_before_design_or_null_qr(monkeypatch):
-    import jaxgam.execution.nb_stream as controller
+    import jaxgam.execution.stream.nb as controller
 
     stream, family = _fixture(estimated=True)
     original = controller._source_batches

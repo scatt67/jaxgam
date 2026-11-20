@@ -20,9 +20,9 @@ from jaxgam.fitting.efs import (
     efs_statistics,
     prepare_efs_statistics,
 )
-from jaxgam.fitting.efs_factor import efs_factor_statistics
 from jaxgam.fitting.signed_qr import SignedQRCoefficientFactor
 from jaxgam.fitting.state import CholeskyCoefficientFactor, PivotedQRCoefficientFactor
+from jaxgam.fitting.stream.efs_factor import efs_factor_statistics
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.prepare import prepare_model
 from tests.helpers import _AssertCollector, r_available

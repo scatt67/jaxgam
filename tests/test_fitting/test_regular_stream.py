@@ -9,7 +9,7 @@ from jaxgam.fitting.family_execution import (
     FamilyExecutionContext,
     FamilyExecutionParameters,
 )
-from jaxgam.fitting.regular_stream import regular_trial_deviance
+from jaxgam.fitting.stream.regular import regular_trial_deviance
 from tests.tolerances import STRICT
 
 

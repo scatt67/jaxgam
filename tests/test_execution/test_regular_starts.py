@@ -10,11 +10,11 @@ import pytest
 
 from jaxgam.control import FitControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.regular_stream import (
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
+from jaxgam.execution.stream.regular import (
     fit_regular_streamed_pirls,
     preflight_regular_stream_workspace,
 )
-from jaxgam.execution.stream import StreamPIRLSControl
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.data import PreparedFittingMetadata
 from jaxgam.formula.design import ModelSetup

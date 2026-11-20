@@ -42,8 +42,8 @@ from jaxgam.api import GAM
 from jaxgam.control import EFSControl, FitControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.efs import efs_initial_log_lambda, efs_initial_log_scale
-from jaxgam.execution.reml import StreamREMLControl, evaluate_regular_stream_reml
-from jaxgam.execution.stream import StreamPIRLSControl
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
+from jaxgam.execution.stream.reml import StreamREMLControl, evaluate_regular_stream_reml
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.newton import NewtonOptimizer
@@ -1464,7 +1464,7 @@ def test_public_exact_gamma_inverse_squared_roundoff_stops_complete_pinned_r(
     also lowered to 30 ULPs below the completed trial's own raw score, the
     lucky-low roundoff draw that defeated the former one-ULP raw-score test.
     """
-    from jaxgam.execution import reml as reml_execution
+    from jaxgam.execution.stream import reml as reml_execution
 
     data, weight, offset = _public_exact_regular_case(Gamma, "inverse_squared")
     source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
@@ -1641,7 +1641,7 @@ def test_public_exact_gamma_inverse_squared_gtol_stop_judged_at_completed_point(
     physical fields are judged at STRICT from the public fixed-sp refit at
     JAX's own Newton-completed sp instead (_pr83_r_endpoint_checks).
     """
-    from jaxgam.execution import reml as reml_execution
+    from jaxgam.execution.stream import reml as reml_execution
 
     data, weight, offset = _public_exact_regular_case(Gamma, "inverse_squared")
     source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
@@ -4013,8 +4013,8 @@ def _public_regular_efs_profile_digest(
 def test_public_regular_efs_profile_digest_binds_basis_controls_and_starts() -> None:
     """A reviewed numerical profile cannot migrate to a nearby model."""
     from jaxgam.control import EFSControl
-    from jaxgam.execution.efs_stream_provider import RegularStreamEFSProvider
-    from jaxgam.execution.efs_stream_start import prepare_stream_efs_start
+    from jaxgam.execution.stream.efs_provider import RegularStreamEFSProvider
+    from jaxgam.execution.stream.efs_start import prepare_stream_efs_start
     from jaxgam.formula.design_provider import StreamDesign
     from jaxgam.formula.prepare import prepare_model
     from jaxgam.penalties.structure import DenseLocalPenalty, DenseTransform
@@ -4170,8 +4170,8 @@ def test_public_streamed_efs_regular_family_link_inventory(
     family_name: str, link: str
 ) -> None:
     """Every public regular cell has selected R parity or its pinned boundary."""
-    from jaxgam.execution.efs_stream_provider import RegularStreamEFSProvider
-    from jaxgam.execution.efs_stream_start import prepare_stream_efs_start
+    from jaxgam.execution.stream.efs_provider import RegularStreamEFSProvider
+    from jaxgam.execution.stream.efs_start import prepare_stream_efs_start
     from jaxgam.families.standard import Binomial, Gamma
     from jaxgam.formula.design_provider import StreamDesign
     from jaxgam.formula.prepare import prepare_model
@@ -4396,7 +4396,7 @@ def test_public_streamed_efs_regular_family_link_inventory(
 )
 def test_public_streamed_default_start_efs_matches_pinned_selected_fit(r_bridge, case):
     """Public row-source results preserve the reviewed internal/R selected fit."""
-    from jaxgam.execution.efs_stream import fit_streamed_efs
+    from jaxgam.execution.stream.efs import fit_streamed_efs
     from jaxgam.families.standard import Binomial, Gamma
     from jaxgam.results import _prepared_transform_coefficients_cpu
     from tests.test_execution.test_efs_stream_start import _regular
@@ -4577,7 +4577,7 @@ def test_streamed_regular_recovery_anchor_matches_pinned_efs_default(r_bridge):
     """mgcv.r omits G$null.coef when dispatching every efsudr refit."""
     versions_match, reason = r_bridge.check_versions()
     assert versions_match, reason
-    from jaxgam.execution.efs_stream import fit_streamed_efs
+    from jaxgam.execution.stream.efs import fit_streamed_efs
     from tests.test_execution.test_efs_stream_start import _regular
 
     family = Gaussian()

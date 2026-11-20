@@ -16,8 +16,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import jaxgam.execution.discrete as discrete_execution
-import jaxgam.execution.discrete_regular as discrete_regular_execution
+import jaxgam.execution.discrete.gaussian as discrete_execution
+import jaxgam.execution.discrete.regular as discrete_regular_execution
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import DataFrameRowSource
 from tests.helpers import _AssertCollector

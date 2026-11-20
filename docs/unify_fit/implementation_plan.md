@@ -90,10 +90,10 @@ Re-run the design §2 inventory on the final composed stack and update `design.m
 
 Each item is its own commit, and the phase ships as one PR.
 
-1. **`_factor_inverse_residual`:** keep one copy, move it to a shared execution utility, and use it from both `reml.py` and `nb_reml.py`.
-2. **`_link_name`:** delete both copies, `execution/nb_stream.py` and `fitting/nb_stream_reml.py`. Use a family/link capability (e.g. `link.name`, or a capability enumerating supported streamed NB links).
-3. **Saturated log-likelihood:** keep one kernel and make the other call site use it. The two are `fitting/family_execution.py::batch_saturated_loglikelihood` and `fitting/stream_kernels.py::saturated_loglik_reduction`. Prove reduction-order identity by fingerprint.
-4. **NB theta objective:** keep one jitted NB negative log-likelihood kernel, used by `fitting/efs_theta.py` and `fitting/nb_theta_stream.py` (structural similarity 0.98).
+1. **`_factor_inverse_residual`:** keep one copy, move it to a shared execution utility, and use it from both `execution/stream/reml.py` and `execution/stream/nb_reml.py`.
+2. **`_link_name`:** delete both copies, `execution/stream/nb.py` and `fitting/stream/nb_reml.py`. Use a family/link capability (e.g. `link.name`, or a capability enumerating supported streamed NB links).
+3. **Saturated log-likelihood:** keep one kernel and make the other call site use it. The two are `fitting/family_execution.py::batch_saturated_loglikelihood` and `fitting/stream/kernels.py::saturated_loglik_reduction`. Prove reduction-order identity by fingerprint.
+4. **NB theta objective:** keep one jitted NB negative log-likelihood kernel, used by `fitting/efs_theta.py` and `fitting/stream/nb_theta.py` (structural similarity 0.98).
 5. **`efsudr` update:** the operator EFS controller uses `fitting/efs.py::efs_raw_update` (or a NumPy wrapper over the same kernel), and `_raw_ratio`/`_trial_rho` are deleted.
    - First resolve the `phi*n/q` vs `(n/q)*phi` order against pinned `R/gam.fit4.r::efsudr` (1.9-3).
    - The non-matching route's change is the one documented exception. Its R gates must stay STRICT.
@@ -105,7 +105,7 @@ Each item is its own commit, and the phase ships as one PR.
 
 ## Phase 2: Names and boundary moves (mechanical)
 
-1. **Renames:** `execution/reml.py` → `execution/stream_reml.py` and `execution/nb_reml.py` → `execution/nb_stream_reml.py`. Do the same for any other pair whose name implies a kernel/driver relationship that does not exist; check every pair.
+1. **Renames: done, by a different route.** This item proposed renaming the exact streamed REML drivers so that their names no longer suggested a pair with the dense kernels in `fitting/reml.py`. The move into route sub-packages on 2026-11-20 (design §9, question 5) settled it: the drivers are `execution/stream/reml.py` and `execution/stream/nb_reml.py`, beside their kernels `fitting/stream/reml.py` and `fitting/stream/nb_reml.py`. Check the remaining same-named pairs (`efs.py`, `qr.py` and `regular.py`, `nb_theta.py`, `efs_provider.py` across packages) for a kernel/driver relationship that does not exist.
 2. **Move host code out of `fitting/`:**
    - `NewtonOptimizer`'s host loop moves to `execution/optimizers/newton.py`. Its jitted derivative pieces stay in `fitting/newton.py`, renamed to reflect that they are kernels.
    - `FittingData.from_setup` NumPy preparation moves to `execution/providers/in_memory.py`, or stays as a transfer type, per design §9 Q2.
@@ -121,7 +121,7 @@ Each item is its own commit, and the phase ships as one PR.
 1. **Introduce the interfaces:** `FitProvider`, `ProviderCapabilities`, `FitState`, `CoefficientSolver`, `WorkingSystem` and `OptimizationResult` (design §5.1). Generalise the existing `EFSFitProvider`/`EFSFitRequest`/`EFSControllerContext` rather than adding a parallel set.
 2. **Wrap existing data access as providers,** delegating to today's functions:
    - `in_memory` (dense);
-   - `stream`, regular and NB (`stream.py`, `regular_stream.py`, `nb_stream.py`);
+   - `stream`, regular and NB (`pirls.py`, `regular.py` and `nb.py` in `execution/stream/`);
    - `gaussian_qr` (PR9);
    - `discrete` (PR11);
    - `operator` (PR12/EFS6).
@@ -170,10 +170,10 @@ Each item is its own commit, and the phase ships as one PR.
 3. **Port the inner loops one at a time,** each as its own commit with a fingerprint check:
    - dense `fitting/pirls.py`;
    - `fitting/efs_regular_pirls.py`;
-   - streamed canonical (`execution/stream.py`);
-   - streamed signed (`execution/regular_stream.py`);
-   - streamed NB (`execution/nb_stream.py`);
-   - operator (`execution/operator_fit.py`);
+   - streamed canonical (`execution/stream/pirls.py`);
+   - streamed signed (`execution/stream/regular.py`);
+   - streamed NB (`execution/stream/nb.py`);
+   - operator (`execution/operator/fit.py`);
    - discrete working model (PR11).
 
    Fused `lax.while_loop` kernels stay fused where they are today. The unification is in the step-policy functions they call, not in turning jitted loops into host loops.

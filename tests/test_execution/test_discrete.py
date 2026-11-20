@@ -11,17 +11,17 @@ import pandas as pd
 import pytest
 
 import jaxgam.data.source as source_module
-import jaxgam.execution.discrete as discrete_execution
-import jaxgam.execution.discrete_regular as discrete_regular_execution
+import jaxgam.execution.discrete.gaussian as discrete_execution
+import jaxgam.execution.discrete.regular as discrete_regular_execution
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import ArrayRowSource, DataFrameRowSource
 from jaxgam.families.standard import Gaussian
-from jaxgam.formula.continuous_design import build_continuous_discrete_design
-from jaxgam.formula.continuous_setup import (
+from jaxgam.formula.discrete.continuous_design import build_continuous_discrete_design
+from jaxgam.formula.discrete.continuous_setup import (
     ContinuousDiscreteSetup,
     build_continuous_discrete_setup,
 )
-from jaxgam.formula.discrete_design import (
+from jaxgam.formula.discrete.design import (
     DiscreteDesignControl,
     DiscreteDesignUnavailable,
 )
@@ -671,8 +671,8 @@ def test_row_xwxd_chunk_selection_follows_cost_and_budget() -> None:
     """Narrow blocks use row chunks within the budget; a wide random effect does not."""
     import jax.numpy as jnp
 
-    from jaxgam.execution.discrete import _row_xwxd_chunk
-    from jaxgam.fitting.discrete_ops import (
+    from jaxgam.execution.discrete.gaussian import _row_xwxd_chunk
+    from jaxgam.fitting.discrete.ops import (
         DeviceDiscreteDesign,
         DeviceLookupBlock,
         discrete_row_xwxd_bytes,

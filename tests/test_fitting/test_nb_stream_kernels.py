@@ -12,7 +12,7 @@ import pytest
 
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.fitting.family_execution import FamilyExecutionParameters
-from jaxgam.fitting.nb_stream_kernels import (
+from jaxgam.fitting.stream.nb_kernels import (
     merge_nb_working_summaries,
     nb_positive_observed_retry,
     nb_selected_working_rows,
@@ -234,7 +234,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 from jaxgam.fitting.family_execution import FamilyExecutionParameters
-from jaxgam.fitting.nb_stream_kernels import nb_working_batch
+from jaxgam.fitting.stream.nb_kernels import nb_working_batch
 run=jax.jit(partial(nb_working_batch,link="identity"))
 args=(jnp.asarray([.5,2.]),jnp.asarray([0.,3.]),jnp.ones(2),jnp.zeros(2),jnp.ones(2,dtype=bool))
 results=[]

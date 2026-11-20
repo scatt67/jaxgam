@@ -5,7 +5,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from jaxgam.fitting.preconditioners import apply_preconditioner, prepare_preconditioner
+from jaxgam.fitting.operator.preconditioners import (
+    apply_preconditioner,
+    prepare_preconditioner,
+)
 from tests.tolerances import STRICT
 
 

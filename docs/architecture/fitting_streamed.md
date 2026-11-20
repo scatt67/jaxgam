@@ -16,28 +16,28 @@ and the sources themselves on [the data sources page](data_sources.md).
 | Module | Role |
 |---|---|
 | `jaxgam/api.py` | `GAM._fit_stream`, `GAM._fit_stream_routes` and the module helpers `_fit_stream_fixed_regular`, `_fit_stream_fixed_nb`, `_fit_stream_exact_reml`, `_fit_stream_gaussian_qr`, `_fit_stream_parametric_bypass`, `_check_stream_fixed_family`, `_check_stream_efs_family`, `_preflight_stream_workspace`. |
-| `jaxgam/execution/stream.py` | `fit_streamed_pirls`: fixed-sp PIRLS for families whose Fisher and observed information agree, by summed normal equations (Cholesky) or positive QR; `StreamPIRLSControl`; the shared scanners `_source_batches` and `_fitting_batches`. |
-| `jaxgam/execution/regular_stream.py` | `fit_regular_streamed_pirls`: the `gam.fit3` port for Gaussian, Binomial, Poisson and Gamma with signed (observed-information) QR; `regular_working_scan`; `preflight_regular_stream_workspace`. |
-| `jaxgam/execution/nb_stream.py` | `fit_nb_streamed_pirls`: the `gam.fit4` port for NB, optionally estimating theta inside the loop. |
+| `jaxgam/execution/stream/pirls.py` | `fit_streamed_pirls`: fixed-sp PIRLS for families whose Fisher and observed information agree, by summed normal equations (Cholesky) or positive QR; `StreamPIRLSControl`; the shared scanners `_source_batches` and `_fitting_batches`. |
+| `jaxgam/execution/stream/regular.py` | `fit_regular_streamed_pirls`: the `gam.fit3` port for Gaussian, Binomial, Poisson and Gamma with signed (observed-information) QR; `regular_working_scan`; `preflight_regular_stream_workspace`. |
+| `jaxgam/execution/stream/nb.py` | `fit_nb_streamed_pirls`: the `gam.fit4` port for NB, optionally estimating theta inside the loop. |
 | `jaxgam/execution/qr.py` | CPU packed-reflector QR reducer: `PositiveQRState`, `qr_update`, `reduce_positive_qr`, `solve_augmented_qr`, `structural_rank`. |
-| `jaxgam/execution/signed_qr.py` | `SignedQRState`, `signed_qr_update`, `solve_signed_qr`: the negative-weight correction of mgcv's `pls_fit1` (`src/gdi.c`). |
+| `jaxgam/execution/stream/signed_qr.py` | `SignedQRState`, `signed_qr_update`, `solve_signed_qr`: the negative-weight correction of mgcv's `pls_fit1` (`src/gdi.c`). |
 | `jaxgam/execution/null_coefficient.py` | `project_null_coefficients`: mgcv's `get.null.coef` projection from QR statistics. |
-| `jaxgam/execution/family_initialization.py` | `select_initial_working_state_cpu`: R-style start with up to 20 shrinks toward the null predictor, by replay. |
-| `jaxgam/execution/reml.py` | Exact streamed REML: `evaluate_regular_stream_reml`, `optimize_regular_stream_reml`, the common L-BFGS-B driver `_run_parameterized_stream_reml`, `StreamREMLControl`, the mgcv `newton()` completions and relative test. |
-| `jaxgam/execution/nb_reml.py` | `evaluate_nb_stream_reml`, `optimize_nb_stream_reml`: the same for NB with theta as a joint coordinate. |
-| `jaxgam/execution/nb_theta_stream.py` | `conditional_theta_stream`: conditional theta Newton by replay, used inside streamed NB EFS fits. |
-| `jaxgam/execution/efs_stream.py` | `fit_streamed_efs`: composes startup, provider and the shared EFS controller. |
-| `jaxgam/execution/efs_stream_provider.py` | `RegularStreamEFSProvider`, `NBStreamEFSProvider`: `EFSFitProvider` implementations over a source. |
-| `jaxgam/execution/efs_stream_start.py` | `prepare_stream_efs_start`, `prepare_stream_reml_start`: initial smoothing parameters and null coefficients by two replays. |
-| `jaxgam/fitting/stream_kernels.py` | Per-batch jitted reductions for `fit_streamed_pirls`: `accumulate_working_statistics`, `positive_qr_working_rows`, `trial_deviance`, `saturated_loglik_reduction`, `solve_penalized_system`, `coefficient_stationarity`, `accepts_trial`. |
-| `jaxgam/fitting/regular_stream.py` | `regular_trial_deviance`: the trial kernel of the regular controller. |
-| `jaxgam/fitting/nb_stream_kernels.py` | NB batch working factors: `nb_working_batch`, `nb_positive_observed_retry`, `nb_working_statistics`. |
+| `jaxgam/execution/stream/family_initialization.py` | `select_initial_working_state_cpu`: R-style start with up to 20 shrinks toward the null predictor, by replay. |
+| `jaxgam/execution/stream/reml.py` | Exact streamed REML: `evaluate_regular_stream_reml`, `optimize_regular_stream_reml`, the common L-BFGS-B driver `_run_parameterized_stream_reml`, `StreamREMLControl`, the mgcv `newton()` completions and relative test. |
+| `jaxgam/execution/stream/nb_reml.py` | `evaluate_nb_stream_reml`, `optimize_nb_stream_reml`: the same for NB with theta as a joint coordinate. |
+| `jaxgam/execution/stream/nb_theta.py` | `conditional_theta_stream`: conditional theta Newton by replay, used inside streamed NB EFS fits. |
+| `jaxgam/execution/stream/efs.py` | `fit_streamed_efs`: composes startup, provider and the shared EFS controller. |
+| `jaxgam/execution/stream/efs_provider.py` | `RegularStreamEFSProvider`, `NBStreamEFSProvider`: `EFSFitProvider` implementations over a source. |
+| `jaxgam/execution/stream/efs_start.py` | `prepare_stream_efs_start`, `prepare_stream_reml_start`: initial smoothing parameters and null coefficients by two replays. |
+| `jaxgam/fitting/stream/kernels.py` | Per-batch jitted reductions for `fit_streamed_pirls`: `accumulate_working_statistics`, `positive_qr_working_rows`, `trial_deviance`, `saturated_loglik_reduction`, `solve_penalized_system`, `coefficient_stationarity`, `accepts_trial`. |
+| `jaxgam/fitting/stream/regular.py` | `regular_trial_deviance`: the trial kernel of the regular controller. |
+| `jaxgam/fitting/stream/nb_kernels.py` | NB batch working factors: `nb_working_batch`, `nb_positive_observed_retry`, `nb_working_statistics`. |
 | `jaxgam/fitting/family_execution.py` | Family-generic batch primitives and the lineage objects `FamilyExecutionContext`, `FamilyExecutionLineage`, `FamilyExecutionParameters`. |
 | `jaxgam/fitting/qr.py` | Jitted triangular actions on QR factors (`qr_root_inverse`, `qr_root_transpose_inverse`, `qr_hessian_inverse`). |
 | `jaxgam/fitting/signed_qr.py` | `SignedQRCoefficientFactor`: actions and log-determinant of a signed factor. |
-| `jaxgam/fitting/stream_reml.py` | Batch VJP kernels for the exact REML gradient: `regular_batch_statistics_vjp`, `regular_score_cotangents`. |
-| `jaxgam/fitting/nb_stream_reml.py` | `nb_batch_statistics_vjp`: the NB batch derivative kernel. |
-| `jaxgam/fitting/nb_theta_stream.py` | `nb_conditional_theta_batch`, `nb_conditional_theta_step`: batch terms of the conditional theta objective. |
+| `jaxgam/fitting/stream/reml.py` | Batch VJP kernels for the exact REML gradient: `regular_batch_statistics_vjp`, `regular_score_cotangents`. |
+| `jaxgam/fitting/stream/nb_reml.py` | `nb_batch_statistics_vjp`: the NB batch derivative kernel. |
+| `jaxgam/fitting/stream/nb_theta.py` | `nb_conditional_theta_batch`, `nb_conditional_theta_step`: batch terms of the conditional theta objective. |
 | `jaxgam/fitting/state.py` | Observation-independent fit state: `StreamFitState`, the coefficient-factor classes, `EFSOptimizerDiagnostics`. |
 
 ## How it works
@@ -51,7 +51,7 @@ coefficient-sized statistics (`p` or `p x p`), adds them to running totals and
 calls `jax.block_until_ready` so at most one batch is in flight. The kernels in
 `jaxgam/fitting/` do no file iteration; the drivers in `jaxgam/execution/` own
 iteration, step control and every cross-batch reduction. QR reductions are not
-JAX: `jaxgam/execution/qr.py` and `jaxgam/execution/signed_qr.py` merge row blocks with SciPy
+JAX: `jaxgam/execution/qr.py` and `jaxgam/execution/stream/signed_qr.py` merge row blocks with SciPy
 (`linalg.qr` with pivoting, LAPACK `ormqr`) on the CPU, and the resulting
 coefficient-sized factors are moved to the device for the jitted triangular
 actions in `jaxgam/fitting/qr.py`.
@@ -126,7 +126,7 @@ estimated theta likewise runs `optimize_nb_stream_reml` with `pin_lambda=True`.
 
 ### Scanning, lineage and fingerprints
 
-`_source_batches` in `jaxgam/execution/stream.py` is the one replay loop most
+`_source_batches` in `jaxgam/execution/stream/pirls.py` is the one replay loop most
 drivers share. Before the scan it validates the `FamilyExecutionLineage` and
 compares `source.fingerprint()` with the fingerprint recorded at preparation;
 for each batch it re-validates the lineage, requires a response, rejects padded
@@ -218,7 +218,7 @@ reachable from `FitControl`.
 
 ### Fixed-smoothing PIRLS: the regular and NB controllers
 
-`fit_regular_streamed_pirls` (`jaxgam/execution/regular_stream.py`) ports the
+`fit_regular_streamed_pirls` (`jaxgam/execution/stream/regular.py`) ports the
 `gam.fit3` coefficient loop (`R/gam.fit3.r`) as the dense
 `efs_regular_pirls_loop` does, but by replay:
 
@@ -247,7 +247,7 @@ reachable from `FitControl`.
   `RegularSourceScore` keeps the raw deviance, the solve penalty and the
   incoming and reported scales apart.
 
-`fit_nb_streamed_pirls` (`jaxgam/execution/nb_stream.py`) ports `gam.fit4`
+`fit_nb_streamed_pirls` (`jaxgam/execution/stream/nb.py`) ports `gam.fit4`
 (`R/gam.fit4.r`): observed weights from the NB kernels, a signed QR solve,
 and when that is indefinite a re-scan with positive observed weights
 (`nb_positive_observed_retry`, counted in `positive_observed_recoveries`). When a
@@ -271,7 +271,7 @@ object, and run their own workspace preflight before any scan.
   an identifiable direction; a deficient balanced system needs an explicit
   `identifiable_subspace`, while an ill-conditioned actual factor raises.
   `_mgcv_r_cond` and `structural_rank` follow `pls_fit1`'s condition test.
-- **Signed QR** (`jaxgam/execution/signed_qr.py`). For a system with some
+- **Signed QR** (`jaxgam/execution/stream/signed_qr.py`). For a system with some
   negative weights, `SignedQRState` holds a QR of the absolute-weight rows, a QR
   of the negative-weight rows and the right side `X'Wz`. `solve_signed_qr`
   follows `pls_fit1`: factor the absolute system with the penalty roots, take the
@@ -380,7 +380,7 @@ or a list of trial points.
 
 `evaluate_stream_reml` and `optimize_stream_reml` in the same module are an
 earlier canonical Poisson/Binomial-only version; nothing in `jaxgam/` outside
-`jaxgam/execution/reml.py` calls them, only tests.
+`jaxgam/execution/stream/reml.py` calls them, only tests.
 
 ### Streamed NB theta
 
@@ -392,7 +392,7 @@ Theta is handled two ways on this route:
   written into the family with `put_theta` by `_fit_stream_exact_reml` and
   `_fit_stream_fixed_nb`.
 - **EFS.** `fit_nb_streamed_pirls(estimate_theta=True)` calls
-  `conditional_theta_stream` (`jaxgam/execution/nb_theta_stream.py`) after every
+  `conditional_theta_stream` (`jaxgam/execution/stream/nb_theta.py`) after every
   accepted coefficient step. It runs the one-parameter Newton of mgcv's
   `estimate.theta` (as `gam.fit4` does under EFS) at fixed coefficients; every
   objective and derivative evaluation is a replay that sums
@@ -439,7 +439,7 @@ unchanged. Only the provider differs:
   `pirls_tolerance`, and checks that the returned state belongs to the request
   (rho, scale, and for NB the theta transition history); a mismatch raises
   `RuntimeError`.
-- Statistics come from `efs_factor_statistics` (`jaxgam/fitting/efs_factor.py`),
+- Statistics come from `efs_factor_statistics` (`jaxgam/fitting/stream/efs_factor.py`),
   which computes the same d, t and q as the dense `efs_statistics` but through
   the fit's `fisher_coefficient_factor` actions, because a streamed fit has a QR
   factor, not a dense Cholesky.
@@ -705,7 +705,7 @@ classDiagram
 ```
 
 `PositiveQRState`, `SignedQRState`, `QRFactorSolve` and `SignedQRResult` are
-host NumPy values (`jaxgam/execution/qr.py`, `jaxgam/execution/signed_qr.py`); their arrays are
+host NumPy values (`jaxgam/execution/qr.py`, `jaxgam/execution/stream/signed_qr.py`); their arrays are
 made read-only on construction. `StreamExactOptimizerDiagnostics` is attached to
 exact-REML results, `EFSOptimizerDiagnostics` to streamed EFS results.
 
@@ -720,7 +720,7 @@ exact-REML results, `EFSOptimizerDiagnostics` to streamed EFS results.
 - **Kernels see one batch.** Batch kernels in `jaxgam/fitting/` take one
   materialized batch and return coefficient-sized values; source iteration stays
   in `jaxgam/execution/` so no reverse-mode trace can capture source rows
-  (module docstring of `jaxgam/fitting/stream_reml.py`).
+  (module docstring of `jaxgam/fitting/stream/reml.py`).
 - **Validate before every dispatch.** Call `FamilyExecutionLineage.validate`
   before each jitted call and compare fingerprints before and after each scan
   (`test_scanner_rejects_runtime_source_basis_and_family_mutation`,
@@ -776,8 +776,8 @@ exact-REML results, `EFSOptimizerDiagnostics` to streamed EFS results.
   batches; a source must return only real rows.
 - **Stale docstrings.** Some module docstrings in `jaxgam/execution/` still say
   their code "does not enable public streaming" or is internal until a later PR
-  (`jaxgam/execution/stream.py`, `jaxgam/execution/nb_stream.py`,
-  `jaxgam/execution/regular_stream.py`); the routes are public
+  (`jaxgam/execution/stream/pirls.py`, `jaxgam/execution/stream/nb.py`,
+  `jaxgam/execution/stream/regular.py`); the routes are public
   through `FitControl`.
 
 ## Where to change things
@@ -787,22 +787,22 @@ exact-REML results, `EFSOptimizerDiagnostics` to streamed EFS results.
   requires (see [extension points](families_links_smooths.md)); no driver
   dispatches on family names except the NB checks.
 - To change fixed-`sp` step control, edit `fit_streamed_pirls`
-  (`jaxgam/execution/stream.py`), `fit_regular_streamed_pirls` or
+  (`jaxgam/execution/stream/pirls.py`), `fit_regular_streamed_pirls` or
   `fit_nb_streamed_pirls`; the per-batch arithmetic lives in
-  `jaxgam/fitting/stream_kernels.py`, `jaxgam/fitting/regular_stream.py` and
-  `jaxgam/fitting/nb_stream_kernels.py`.
+  `jaxgam/fitting/stream/kernels.py`, `jaxgam/fitting/stream/regular.py` and
+  `jaxgam/fitting/stream/nb_kernels.py`.
 - To change how a block of rows enters a QR, edit `qr_update` or
   `signed_qr_update`; to change rank or indefiniteness decisions, edit
   `solve_augmented_qr` and `solve_signed_qr`.
 - To change the exact REML gradient, edit `evaluate_regular_stream_reml` and the
-  kernels in `jaxgam/fitting/stream_reml.py` (or `evaluate_nb_stream_reml` and
-  `jaxgam/fitting/nb_stream_reml.py`).
+  kernels in `jaxgam/fitting/stream/reml.py` (or `evaluate_nb_stream_reml` and
+  `jaxgam/fitting/stream/nb_reml.py`).
 - To change optimizer limits or windows, edit `StreamREMLControl`,
   `MAX_SOURCE_STEP_WINDOWS` and `_run_parameterized_stream_reml`; the values the
   public route passes are set in `_fit_stream_exact_reml`, `_fit_stream_fixed_regular`
   and `_fit_stream_fixed_nb` (`jaxgam/api.py`).
 - To change streamed EFS, edit the providers in
-  `jaxgam/execution/efs_stream_provider.py`; the outer policy is shared with the
+  `jaxgam/execution/stream/efs_provider.py`; the outer policy is shared with the
   dense route in `jaxgam/execution/efs.py`.
 - To change a memory estimate, edit the ledger that owns it (table above) and its
   test in `tests/test_execution/`.

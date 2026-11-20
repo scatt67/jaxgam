@@ -8,10 +8,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from jaxgam.execution.gaussian import prepare_frozen_gaussian_qr
+from jaxgam.execution.gaussian_qr.preparation import prepare_frozen_gaussian_qr
 from jaxgam.families.standard import Gaussian
 from jaxgam.fitting.data import FittingData
-from jaxgam.fitting.gaussian import gaussian_qr_reml_score
+from jaxgam.fitting.gaussian_qr.kernel import gaussian_qr_reml_score
 from jaxgam.fitting.newton import NewtonOptimizer
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula

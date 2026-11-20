@@ -37,7 +37,7 @@ This page covers the `jaxgam/data/` package: the `RowSource` protocol that the s
 
 What consumers require of a producer (each check is in the consuming code, not in the protocol):
 
-- **Replay in a stable order.** Every `scan` yields the same rows in the same order. Consumers check this in different ways: `prepare_model` compares the first `row_positions` of two `scan(1)` calls; the streamed Gaussian QR route compares a digest of all `row_positions` with the one taken at setup; the discretized route indexes rows by scan ordinal (a running count over the batches), so its selectors are only correct if the order repeats; the operator route hashes every row of every scan (`_CheckedSource` in `jaxgam/formula/operator_prepare.py`).
+- **Replay in a stable order.** Every `scan` yields the same rows in the same order. Consumers check this in different ways: `prepare_model` compares the first `row_positions` of two `scan(1)` calls; the streamed Gaussian QR route compares a digest of all `row_positions` with the one taken at setup; the discretized route indexes rows by scan ordinal (a running count over the batches), so its selectors are only correct if the order repeats; the operator route hashes every row of every scan (`_CheckedSource` in `jaxgam/formula/operator/prepare.py`).
 - **Exactly `n_rows` rows per scan.** Consumers raise `RuntimeError` when a scan yields more or fewer.
 - **Batches no larger than requested.** `prepare_model` raises `ValueError` and the discretization scans raise `RuntimeError` for a batch longer than `batch_rows`.
 - **No padding.** Every consumer refuses a batch with a false `valid` entry: `NotImplementedError` in setup, discretization and the stream and discrete fits, `ValueError` in operator preparation.
@@ -88,7 +88,7 @@ Who opens a scope:
 
 - `GAM._fit_stream`, around `_fit_stream_routes` (setup and fit).
 - `GAM._fit_discrete`, around `fit_discrete_gaussian` or `fit_discrete_regular` and the construction of the result.
-- `build_continuous_discrete_setup` in `jaxgam/formula/continuous_setup.py`, with `verify_on_exit=False`; called from `_fit_discrete` it joins the outer scope, called on its own it ends with `stage_fingerprint`.
+- `build_continuous_discrete_setup` in `jaxgam/formula/discrete/continuous_setup.py`, with `verify_on_exit=False`; called from `_fit_discrete` it joins the outer scope, called on its own it ends with `stage_fingerprint`.
 
 The operator route opens no scope; `_CheckedSource` digests every row it replays instead.
 
@@ -213,11 +213,11 @@ Only the first row of each group of equal rows is keyed, in order of first occur
 
 A `RangeGridIndex` wraps an `ExactIndexTable` (the unique `values` per column, an `int32` `selector` of length `n_rows`, and `storage`, either `memory` or `memmap`) with the group's factor levels, metric ranges, `points_per_metric`, whether it was `rounded`, and the seed.
 
-Selectors live in memory by default. With `ContinuousDiscretizationControl.selector_memmap_directory`, each group's selector is a `.npy` memmap at `compact-selector-{k}.dat` in that directory. The directory must exist; the file is claimed with `O_CREAT | O_EXCL`, so an existing file raises `FileExistsError` and is not removed. Files are removed if construction fails and by `CompactSetupFrame.cleanup()`, which `_prepared_discrete` in `jaxgam/execution/discrete.py` calls when the fit ends.
+Selectors live in memory by default. With `ContinuousDiscretizationControl.selector_memmap_directory`, each group's selector is a `.npy` memmap at `compact-selector-{k}.dat` in that directory. The directory must exist; the file is claimed with `O_CREAT | O_EXCL`, so an existing file raises `FileExistsError` and is not removed. Files are removed if construction fails and by `CompactSetupFrame.cleanup()`, which `_prepared_discrete` in `jaxgam/execution/discrete/gaussian.py` calls when the fit ends.
 
-`CompactSetupFrame` holds the padded `frame`, the `CompactGroup`s (names, factor names, index, role and `m`), the mapping from variable to group, the selector paths and a byte ledger. `batch_selectors(row_ordinals)` gathers one selector slice per group for a batch, returned as `CompactBatchSelectors`, and raises `MemoryError` if that gather would exceed `max_batch_bytes`. The fit itself reads selectors through `FrozenDiscreteDesign.batch_indices` in `jaxgam/formula/discrete_design.py`, which gathers each distinct index once per batch.
+`CompactSetupFrame` holds the padded `frame`, the `CompactGroup`s (names, factor names, index, role and `m`), the mapping from variable to group, the selector paths and a byte ledger. `batch_selectors(row_ordinals)` gathers one selector slice per group for a batch, returned as `CompactBatchSelectors`, and raises `MemoryError` if that gather would exceed `max_batch_bytes`. The fit itself reads selectors through `FrozenDiscreteDesign.batch_indices` in `jaxgam/formula/discrete/design.py`, which gathers each distinct index once per batch.
 
-`exact_index_columns` in `jaxgam/data/discretize.py` does the same indexing with exact equality and no rounding, and keys every row instead of grouping first. At HEAD it is called only by the exact descriptor builders in `jaxgam/formula/discrete_design.py`, which only tests use.
+`exact_index_columns` in `jaxgam/data/discretize.py` does the same indexing with exact equality and no rounding, and keys every row instead of grouping first. At HEAD it is called only by the exact descriptor builders in `jaxgam/formula/discrete/design.py`, which only tests use.
 
 ### Prediction requests
 
@@ -379,5 +379,5 @@ classDiagram
 - **Change what the fingerprint covers:** `ArrayRowSource._content_fingerprint` (bump the `jaxgam-row-source-v2` tag when the meaning changes).
 - **Open the fingerprint scope on another route:** wrap that route's setup and fit in `single_fit_fingerprints()` in `jaxgam/api.py`, and make its stages compare with `stage_fingerprint`.
 - **Change grid resolution or rounding:** `_points_per_metric`, `range_grid` and `snap_to_range_grid` in `jaxgam/data/continuous_discretize.py`; the R-gated tests there must still pass.
-- **Change how variables are grouped:** `_discover_requests` and `_smooth_requests` in `jaxgam/data/continuous_frame.py`, and `_group_roles` in `jaxgam/formula/continuous_metadata.py`, which must agree.
+- **Change how variables are grouped:** `_discover_requests` and `_smooth_requests` in `jaxgam/data/continuous_frame.py`, and `_group_roles` in `jaxgam/formula/discrete/continuous_metadata.py`, which must agree.
 - **Add a budget limit:** a field on `DiscretizationBudget`, its check before the allocation it bounds, and a reason string that `_unavailable_scope` maps to the right scope.

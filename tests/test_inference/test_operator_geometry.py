@@ -10,7 +10,7 @@ from jaxgam import GAM, FitControl, GAMPredictionResult, OperatorControl
 from jaxgam.data.source import ArrayRowSource, DataFrameRowSource
 from jaxgam.families.standard import Gaussian
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )

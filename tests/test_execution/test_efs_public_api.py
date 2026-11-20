@@ -571,7 +571,7 @@ def test_streamed_estimated_nb_snapshots_selected_theta_without_mutating_caller(
 def test_streamed_efs_public_memory_budget_rejects_before_provider_allocation(
     monkeypatch,
 ) -> None:
-    from jaxgam.execution import efs_stream
+    from jaxgam.execution.stream import efs as efs_stream
 
     def unexpected_create(*_args, **_kwargs):
         raise AssertionError("provider allocated before public memory preflight")

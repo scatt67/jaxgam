@@ -186,13 +186,17 @@ jaxgam/
 │   ├── jax_utils.py            # Array dispatch, device transfer, linear-algebra helpers
 │   ├── platform_guard.py       # Apple Accelerate LAPACK warning
 │   ├── data/                   # Phase 1: row sources, discretization
-│   ├── formula/                # Phase 1: parser, terms, design, row-source setups
+│   ├── formula/                # Phase 1: parser, terms, design, prepared model
+│   │   ├── discrete/           #   setup for the discretized route
+│   │   └── operator/           #   setup for the operator route
 │   ├── smooths/                # Phase 1: tp/ts, cr/cs/cc, te/ti, gp, re, by, constraints
 │   ├── penalties/              # Phase 1: penalty construction
 │   ├── families/               # Gaussian, Binomial, Poisson, Gamma, Negative Binomial
 │   ├── links/                  # Link functions
 │   ├── fitting/                # Phase 2: JAX kernels (PIRLS, REML, ...) and the Newton optimizer
-│   ├── execution/              # Phase 2: host drivers (EFS, Gaussian QR, stream, discrete, operator)
+│   │   └── gaussian_qr/  stream/  discrete/  operator/   # kernels of one route each
+│   ├── execution/              # Phase 2: host drivers; EFS loop and shared reductions at the top
+│   │   └── gaussian_qr/  stream/  discrete/  operator/   # drivers of one route each
 │   ├── inference/              # Phase 3: prediction-only core (GAMPredictor)
 │   ├── summary/                # Phase 3: summary + significance
 │   └── plot/                   # Phase 3: plotting

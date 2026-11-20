@@ -10,14 +10,14 @@ import numpy as np
 import pytest
 
 from jaxgam.control import EFSControl
-from jaxgam.execution import efs_stream_provider
 from jaxgam.execution.efs import _run_efs_known_scale
 from jaxgam.execution.efs_provider import EFSFitRequest
-from jaxgam.execution.efs_stream_provider import (
+from jaxgam.execution.stream import efs_provider as efs_stream_provider
+from jaxgam.execution.stream.efs_provider import (
     NBStreamEFSProvider,
     RegularStreamEFSProvider,
 )
-from jaxgam.execution.nb_stream import fit_nb_streamed_pirls
+from jaxgam.execution.stream.nb import fit_nb_streamed_pirls
 from jaxgam.families.standard import Poisson
 from jaxgam.fitting.family_execution import FamilyExecutionParameters
 from jaxgam.formula.fitting_prepare import qr_penalty_roots

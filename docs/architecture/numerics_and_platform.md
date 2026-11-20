@@ -50,9 +50,9 @@ imported. Importing `jaxgam` loads `jaxgam.fitting` but not
 `jaxgam.execution`, and does not load the pinned provider.
 
 **Float64.** `jax_enable_x64` is set to `True` in `jaxgam/__init__.py`. Four
-fitting modules (`jaxgam/fitting/working_model.py`,
-`jaxgam/fitting/efs_factor.py`, `jaxgam/fitting/discrete_working.py`,
-`jaxgam/fitting/nb_theta_stream.py`) set it again at import.
+fitting modules (`jaxgam/fitting/discrete/working_model.py`,
+`jaxgam/fitting/stream/efs_factor.py`, `jaxgam/fitting/discrete/working.py`,
+`jaxgam/fitting/stream/nb_theta.py`) set it again at import.
 
 **Persistent compilation cache.** By default compiled XLA executables are
 cached in `~/.cache/jaxgam/jax`, and the minimum compile time for caching is
@@ -213,14 +213,14 @@ workspace, then call.
 |---|---|---|---|
 | `cubic_shrinkage_penalty` | DSYEVR, DGEMM | the `cs` eigentransform in `smooth.construct.cs.smooth.spec` (`R/smooth.r`) | `CubicShrinkageSmooth` in `jaxgam/smooths/cubic.py` (setup) |
 | `natural_cubic_system_solve` | DPTSV | `getFS` (`src/mgcv.c`) | `CubicRegressionSmooth._compute_natural_f_and_penalty` (setup) |
-| `source_lanczos` (with `source_trisymeig`) | DSYMV, DDOT, DAXPY, DSTEDC | `Rlanczos` and `mgcv_trisymeig` (`src/mat.c`), called by `slanczos` | `_source_tprs_knot_basis` in `jaxgam/smooths/tprs.py`, `GaussianProcessSmooth.setup`, `jaxgam/formula/operator_radial.py` (setup) |
+| `source_lanczos` (with `source_trisymeig`) | DSYMV, DDOT, DAXPY, DSTEDC | `Rlanczos` and `mgcv_trisymeig` (`src/mat.c`), called by `slanczos` | `_source_tprs_knot_basis` in `jaxgam/smooths/tprs.py`, `GaussianProcessSmooth.setup`, `jaxgam/formula/operator/radial.py` (setup) |
 | `source_project_rows` | DGEMV per row | `predict_tprs` (`src/tprs.c`) | `TPRSSmooth._project_design_rows` (setup and prediction) |
 | `source_r_matprod`, `source_matprod` | DGEMV or DGEMM | R's `%*%` | `GaussianProcessSmooth._build_design`; tensor margins in `jaxgam/smooths/tensor.py` |
 | `source_svd` | DGESDD | R's `svd` | tensor-margin reparameterization in `jaxgam/smooths/tensor.py` |
-| `SourceConstraintQR` | DNRM2, DSCAL, DDOT, DAXPY | `qr(t(C))` and `qr.qty` for one constraint column | tensor margins; `jaxgam/formula/operator_modest.py` |
+| `SourceConstraintQR` | DNRM2, DSCAL, DDOT, DAXPY | `qr(t(C))` and `qr.qty` for one constraint column | tensor margins; `jaxgam/formula/operator/modest.py` |
 | `source_pivoted_qr` | DGEQP3 | `mgcv_qr` as used by `gdiPK` (`src/gdi.c`) | `jaxgam/formula/rank_coordinates.py`, whose map builders are called only from tests |
-| `source_pivoted_cholesky` | DPSTRF | R's `chol(pivot=TRUE)` in `Sl.fitChol` (`R/fast-REML.r`) | `factor_working_model` in `jaxgam/execution/working_model.py` (during the discretized fit) |
-| `_source_symmetric_eigen`, `source_symmetric_eigh`, `source_symmetric_max_eigenvalue` (in `jaxgam/smooths/source_penalty_coordinates.py`) | DSYEVR | R's `eigen` on penalties | `stable_reparam` in `jaxgam/penalties/stable_reparam.py` (setup, and on the host between compiled dense REML evaluations through `jaxgam/fitting/stable_log_det.py`); `_symmetric_eigh` in `jaxgam/formula/fitting_prepare.py`; `build_working_penalty_blocks` in `jaxgam/formula/working_penalties.py`; tensor penalty normalization |
+| `source_pivoted_cholesky` | DPSTRF | R's `chol(pivot=TRUE)` in `Sl.fitChol` (`R/fast-REML.r`) | `factor_working_model` in `jaxgam/execution/discrete/working_model.py` (during the discretized fit) |
+| `_source_symmetric_eigen`, `source_symmetric_eigh`, `source_symmetric_max_eigenvalue` (in `jaxgam/smooths/source_penalty_coordinates.py`) | DSYEVR | R's `eigen` on penalties | `stable_reparam` in `jaxgam/penalties/stable_reparam.py` (setup, and on the host between compiled dense REML evaluations through `jaxgam/fitting/stable_log_det.py`); `_symmetric_eigh` in `jaxgam/formula/fitting_prepare.py`; `build_working_penalty_blocks` in `jaxgam/formula/discrete/working_penalties.py`; tensor penalty normalization |
 
 `source_frobenius_norm` is not a provider call: it reproduces
 `gdi.c::frobenius_norm` as one column-major running sum in NumPy.
@@ -261,7 +261,7 @@ NumPy's own `exp`/`log`/`power` may dispatch to SIMD implementations (AVX-512
 on x86_64) whose last bits differ from libm, which is what R calls. `r_pow`
 also reproduces `R_pow`'s special cases. These are used across setup and the
 host side of the fit (for example `jaxgam/penalties/stable_reparam.py`,
-`jaxgam/execution/working_model.py`, `jaxgam/execution/operator.py`).
+`jaxgam/execution/discrete/working_model.py`, `jaxgam/execution/operator/system.py`).
 
 `jaxgam/smooths/source_penalty_coordinates.py` builds R's sum-to-zero
 centering reflector from column means accumulated in `np.longdouble` in row
@@ -277,7 +277,7 @@ Inside JAX kernels, `_materialize_source_operation` in `jaxgam/jax_utils.py`
 applies `nextafter(x, x)` (an exact identity with an identity derivative) to
 stop XLA from contracting arithmetic across a source vector-operation
 boundary. It is used in `jaxgam/links/links.py`,
-`jaxgam/fitting/family_execution.py` and `jaxgam/fitting/nb_stream_kernels.py`.
+`jaxgam/fitting/family_execution.py` and `jaxgam/fitting/stream/nb_kernels.py`.
 
 ### `jaxgam/jax_utils.py`
 

@@ -15,7 +15,7 @@ from jaxgam.data.discretize import (
 )
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.discrete_design import (
+from jaxgam.formula.discrete.design import (
     DiscreteDesignControl,
     DiscreteDesignLineage,
     DiscreteDesignUnavailable,

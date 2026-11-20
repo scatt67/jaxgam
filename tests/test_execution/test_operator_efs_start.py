@@ -8,10 +8,10 @@ from jaxgam.api import GAM
 from jaxgam.control import EFSControl, FitControl, OperatorControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.efs import efs_initial_log_lambda
-from jaxgam.execution.operator_efs_start import prepare_indexed_operator_efs_start
+from jaxgam.execution.operator.efs_start import prepare_indexed_operator_efs_start
 from jaxgam.families.standard import Gaussian, Poisson
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )
@@ -331,7 +331,7 @@ def _indexed_poisson_frame(levels: int, rows: int, seed: int) -> pd.DataFrame:
 
 
 def test_public_operator_efs_labels_admitted_bound_beyond_p512():
-    from jaxgam.execution.operator_efs_controller import (
+    from jaxgam.execution.operator.efs_controller import (
         CALIBRATED_OPERATOR_EFS_DOMAIN as domain,
     )
 
@@ -355,7 +355,7 @@ def test_public_operator_efs_labels_admitted_bound_beyond_p512():
 
 
 def test_public_operator_efs_rejects_levels_beyond_calibration_before_efs():
-    from jaxgam.execution.operator_efs_controller import (
+    from jaxgam.execution.operator.efs_controller import (
         CALIBRATED_OPERATOR_EFS_DOMAIN as domain,
     )
 
@@ -397,7 +397,7 @@ def test_public_operator_efs_rejects_levels_beyond_calibration_before_efs():
 
 
 def test_public_operator_efs_rejects_batch_rows_above_calibration_before_replay():
-    from jaxgam.execution.operator_efs_controller import (
+    from jaxgam.execution.operator.efs_controller import (
         CALIBRATED_OPERATOR_EFS_DOMAIN as domain,
     )
 
@@ -427,10 +427,10 @@ def test_public_operator_efs_rejects_batch_rows_above_calibration_before_replay(
 @pytest.mark.parametrize("edge", ["levels_below", "rows_above", "modest_above"])
 def test_public_operator_efs_rejects_shapes_outside_calibration_before_efs(edge):
     """Every admission limit rejects after preparation, before any EFS refit."""
-    from jaxgam.execution.operator_efs_controller import (
+    from jaxgam.execution.operator.efs_controller import (
         CALIBRATED_OPERATOR_EFS_DOMAIN as domain,
     )
-    from jaxgam.execution.operator_efs_controller import (
+    from jaxgam.execution.operator.efs_controller import (
         CALIBRATED_OPERATOR_EFS_MAX_MODEST,
     )
 
@@ -485,7 +485,7 @@ def test_public_operator_efs_rejects_shapes_outside_calibration_before_efs(edge)
 
 def test_public_operator_efs_without_admitted_bound_is_not_converged(monkeypatch):
     """An unbounded score comparison stops truthfully on the public result."""
-    import jaxgam.execution.operator_efs_controller as controller
+    import jaxgam.execution.operator.efs_controller as controller
 
     monkeypatch.setattr(
         controller,

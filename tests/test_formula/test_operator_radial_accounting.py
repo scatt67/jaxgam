@@ -17,7 +17,7 @@ import pytest
 
 from jaxgam import GAM, FitControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )

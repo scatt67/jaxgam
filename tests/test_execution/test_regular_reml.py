@@ -11,14 +11,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import jaxgam.execution.reml as reml_execution
+import jaxgam.execution.stream.reml as reml_execution
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.reml import (
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
+from jaxgam.execution.stream.reml import (
     StreamREMLControl,
     evaluate_regular_stream_reml,
     optimize_regular_stream_reml,
 )
-from jaxgam.execution.stream import StreamPIRLSControl
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
@@ -1746,7 +1746,10 @@ def test_other_lbfgsb_exits_keep_their_meaning(monkeypatch, message, status) -> 
 
 def test_mgcv_relative_test_forms_score_scale_as_newton_does() -> None:
     """score.scale = |log(scale.est)| + |score|; 5*conv.tol on the gradient."""
-    from jaxgam.execution.reml import MGCV_NEWTON_CONV_TOL, mgcv_relative_convergence
+    from jaxgam.execution.stream.reml import (
+        MGCV_NEWTON_CONV_TOL,
+        mgcv_relative_convergence,
+    )
 
     assert MGCV_NEWTON_CONV_TOL == 1e-6
     estimated = mgcv_relative_convergence(

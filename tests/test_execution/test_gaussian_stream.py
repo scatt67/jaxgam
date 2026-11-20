@@ -12,23 +12,23 @@ import pandas as pd
 import pytest
 
 import jaxgam.api as api_module
-import jaxgam.execution.gaussian_optimizer as gaussian_optimizer_module
+import jaxgam.execution.gaussian_qr.optimizer as gaussian_optimizer_module
 import jaxgam.fitting.newton as newton_module
 from jaxgam import GAM, FitControl
 from jaxgam.api import _preflight_stream_workspace
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.gaussian import (
-    estimate_streamed_gaussian_qr_workspace,
-    preflight_streamed_gaussian_qr_workspace,
-)
-from jaxgam.execution.gaussian_optimizer import (
+from jaxgam.execution.gaussian_qr.optimizer import (
     build_stream_gaussian_qr_provider,
     optimize_gaussian_qr_lbfgs,
+)
+from jaxgam.execution.gaussian_qr.preparation import (
+    estimate_streamed_gaussian_qr_workspace,
+    preflight_streamed_gaussian_qr_workspace,
 )
 from jaxgam.families.standard import Gaussian
 from jaxgam.fitting.data import PreparedFittingMetadata
 from jaxgam.fitting.newton import newton_optimize
-from jaxgam.fitting.stream_kernels import coefficient_stationarity
+from jaxgam.fitting.stream.kernels import coefficient_stationarity
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.prepare import prepare_model

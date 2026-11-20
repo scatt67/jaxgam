@@ -11,13 +11,13 @@ import pandas as pd
 import pytest
 
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.working_model import (
+from jaxgam.execution.discrete.working_model import (
     evaluate_gaussian_working_model_proposal,
     factor_working_model,
     source_exponentials,
 )
 from jaxgam.fitting import penalty_ops
-from jaxgam.fitting.working_model import (
+from jaxgam.fitting.discrete.working_model import (
     WorkingModelCriterionMetadata,
     WorkingModelFactor,
     _double_double_sum,
@@ -30,12 +30,12 @@ from jaxgam.fitting.working_model import (
     source_sum,
     working_model_factor_inputs,
 )
-from jaxgam.formula.continuous_setup import build_continuous_discrete_setup
-from jaxgam.formula.parser import parse_formula
-from jaxgam.formula.working_penalties import (
+from jaxgam.formula.discrete.continuous_setup import build_continuous_discrete_setup
+from jaxgam.formula.discrete.working_penalties import (
     build_working_penalty_blocks,
     source_root_product,
 )
+from jaxgam.formula.parser import parse_formula
 from jaxgam.penalties.structure import (
     IdentityPenalty,
     IdentityTransform,
@@ -717,7 +717,7 @@ def test_source_scaled_triangular_solve_and_ift_contractions_are_jittable():
     import scipy.linalg as sla
 
     from jaxgam.fitting.data import _to_jax_structure
-    from jaxgam.fitting.working_model import (
+    from jaxgam.fitting.discrete.working_model import (
         _source_cholesky_solve,
         _source_hessian_determinant_derivatives,
         _source_ift_chol,
@@ -867,7 +867,7 @@ def test_source_penalty_trace_contractions_match_range_algebra(compact_working_m
 
 @pytest.mark.platform_sensitive
 def test_source_scaled_solve_rank_padding_preserves_dropped_coordinates():
-    from jaxgam.fitting.working_model import _source_cholesky_solve
+    from jaxgam.fitting.discrete.working_model import _source_cholesky_solve
 
     # Source pivots put the zero direction last. Its residual factor storage
     # must not be interpreted as another invertible coefficient direction.
@@ -882,7 +882,7 @@ def test_source_scaled_solve_rank_padding_preserves_dropped_coordinates():
 @pytest.mark.platform_sensitive
 def test_source_penalty_addition_follows_sl_adds_order():
     from jaxgam.fitting.data import _to_jax_structure
-    from jaxgam.fitting.working_model import _source_add_penalties
+    from jaxgam.fitting.discrete.working_model import _source_add_penalties
     from jaxgam.penalties.structure import DenseLocalPenalty
 
     generator = np.random.default_rng(1729)
@@ -1201,7 +1201,7 @@ def test_blocked_triangular_inverse_and_solve_match_direct_substitution(n):
     """
     import scipy.linalg as sla
 
-    from jaxgam.fitting.working_model import (
+    from jaxgam.fitting.discrete.working_model import (
         _source_cholesky_inverse,
         _source_cholesky_solve,
         _triangular_levels,
@@ -1279,7 +1279,7 @@ def test_blocked_triangular_inverse_and_solve_match_direct_substitution(n):
 @pytest.mark.parametrize("dropped", [0, 3])
 def test_working_model_hessian_inverse_matches_qr_fisher_factor(dropped):
     """The selected covariance's chol2inv equals the compact QR factor inverse."""
-    from jaxgam.fitting.working_model import working_model_hessian_inverse
+    from jaxgam.fitting.discrete.working_model import working_model_hessian_inverse
     from jaxgam.inference.predictor import PivotedQRFisherFactor
     from jaxgam.smooths.source_lapack import source_pivoted_cholesky
 
