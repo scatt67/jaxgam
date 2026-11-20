@@ -7,6 +7,7 @@ Provides:
 - Minimal committed checkout for isolated benchmark-harness children
 """
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -17,6 +18,7 @@ import pytest
 
 from tests.helpers import SEED, N, _generate_family_data
 from tests.r_bridge import RBridge
+from tests.sharding import SHARD_ENV, parse_shard
 
 # ---------------------------------------------------------------------------
 # Legacy simple_*_data fixtures (unchanged)
@@ -313,16 +315,35 @@ def family_data(request):
     return family_name, _generate_family_data(family_name, n=n)
 
 
-def pytest_report_header(config):
-    """Print the runner's CPU and kernel identity for platform-sensitive runs."""
-    if "platform_sensitive" not in (config.option.markexpr or ""):
-        return None
-    from tests.helpers import platform_report_lines
+def pytest_collection_modifyitems(config, items):
+    """Keep only this shard's tests when ``JAXGAM_TEST_SHARD=i/N`` is set.
 
-    return [
-        "platform-sensitive run:",
-        *(f"  {line}" for line in platform_report_lines()),
-    ]
+    CI runs the suite as ``N`` such shards on parallel runners
+    (``make test-cov-shard-ci``); together they run every test exactly once.
+    """
+    shard = parse_shard(os.environ.get(SHARD_ENV))
+    if shard is None:
+        return
+    kept, dropped = [], []
+    for item in items:
+        (kept if shard.owns(item.nodeid) else dropped).append(item)
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+    items[:] = kept
+
+
+def pytest_report_header(config):
+    """Print the shard, and the CPU and kernel identity for platform-sensitive runs."""
+    lines = []
+    shard = parse_shard(os.environ.get(SHARD_ENV))
+    if shard is not None:
+        lines.append(f"shard {shard.index} of {shard.count} ({SHARD_ENV})")
+    if "platform_sensitive" in (config.option.markexpr or ""):
+        from tests.helpers import platform_report_lines
+
+        lines.append("platform-sensitive run:")
+        lines.extend(f"  {line}" for line in platform_report_lines())
+    return lines or None
 
 
 def pytest_terminal_summary(terminalreporter):

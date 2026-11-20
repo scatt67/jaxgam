@@ -156,6 +156,30 @@ test-cov-ci: ## run CI coverage using an already-built Docker image
 		uv run pytest --tb=short --cov=jaxgam --cov-branch \
 		--cov-report=xml:/coverage/coverage.xml
 
+# CI runs the suite as TEST_SHARDS shards on parallel runners. A test's shard
+# is a fixed function of its node id (tests/sharding.py), so the shards run
+# every test exactly once. Each shard only records coverage data; the 80%
+# threshold applies to the shards combined (coverage-combine-ci).
+TEST_SHARD ?= 1
+TEST_SHARDS ?= 8
+
+.PHONY: test-cov-shard-ci
+test-cov-shard-ci: ## run one shard of the suite, recording coverage data, in a built image: make test-cov-shard-ci TEST_SHARD=3 TEST_SHARDS=8
+	mkdir -p coverage
+	docker run --rm -v $(CURDIR)/coverage:/coverage \
+		-e JAXGAM_TEST_SHARD=$(TEST_SHARD)/$(TEST_SHARDS) \
+		-e COVERAGE_FILE=/coverage/coverage-data.$(TEST_SHARD) \
+		$(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest --tb=short --durations=25 --cov=jaxgam --cov-branch \
+		--cov-report= --cov-fail-under=0
+
+.PHONY: coverage-combine-ci
+coverage-combine-ci: ## combine the shards' coverage data in a built image, write coverage/coverage.xml and enforce the threshold
+	docker run --rm -v $(CURDIR)/coverage:/coverage $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		sh -c 'uv run coverage combine /coverage/coverage-data.* \
+			&& uv run coverage xml -o /coverage/coverage.xml \
+			&& uv run coverage report --skip-covered --skip-empty'
+
 .PHONY: test-gaussian-ci
 test-gaussian-ci: ## run focused Gaussian CI diagnostics using a built image
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
