@@ -21,7 +21,6 @@ Tolerance rationale:
   converges to a slightly different lambda even for Gaussian; only the fit
   deviance is compared there.
 
-Design doc reference: Section 8.2 (Outer Newton with Damped Hessian)
 R source reference: fast-REML.r lines 1740-1875
 """
 

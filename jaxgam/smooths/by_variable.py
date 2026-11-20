@@ -12,7 +12,6 @@ behavior depends on whether ``z`` is a factor (categorical) or numeric:
 
 This module is Phase 1 (NumPy only, no JAX imports).
 
-Design doc reference: docs/design.md Section 5.7
 R source reference: R/smooth.r smoothCon() by-variable handling
 """
 

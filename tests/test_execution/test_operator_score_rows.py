@@ -5,18 +5,18 @@ import pandas as pd
 import pytest
 
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.operator import FrozenScanSystem
-from jaxgam.execution.operator_fit import FrozenOperatorWorkingState
-from jaxgam.execution.operator_logdet import FrozenOperatorLogDet, OperatorLogDetControl
-from jaxgam.execution.operator_penalty_determinant import (
+from jaxgam.execution.operator.fit import FrozenOperatorWorkingState
+from jaxgam.execution.operator.logdet import FrozenOperatorLogDet, OperatorLogDetControl
+from jaxgam.execution.operator.penalty_determinant import (
     LocalOperatorPenaltyDeterminant,
 )
-from jaxgam.execution.operator_score import assemble_operator_score
-from jaxgam.execution.operator_score_rows import MatchedOperatorScoreReducer
+from jaxgam.execution.operator.score import assemble_operator_score
+from jaxgam.execution.operator.score_rows import MatchedOperatorScoreReducer
+from jaxgam.execution.operator.system import FrozenScanSystem
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )

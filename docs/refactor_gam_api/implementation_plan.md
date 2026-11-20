@@ -1,5 +1,16 @@
 # GAM API Refactor: Implementation Plan
 
+> **Historical record.** This document was written while this piece of work
+> was being designed and built, and is kept as a record of it. It is not
+> maintained: the file names, line numbers, counts and "current state"
+> descriptions in it are those of the repository at that time, and it may
+> refer to documents that were later removed from the repository (for
+> example `docs/design.md` and `docs/R_SOURCE_MAP.md`, which remain in the
+> git history). For how the code is organized today see the
+> [architecture pages](../architecture/index.md); for how to use the package
+> see the [user guide](../guide/choosing_a_route.md) and the
+> [API reference](../api.md).
+
 ## Overview
 
 Split `jaxgam/api.py` into a specification class (`GAM`) and an immutable results class (`GAMResults`), extract post-estimation computation into its own module, and provide backward-compatible deprecation forwarding.

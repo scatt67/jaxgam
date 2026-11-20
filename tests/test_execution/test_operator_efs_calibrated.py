@@ -12,7 +12,7 @@ from scipy.special import gammaln, xlogy
 from jaxgam.control import EFSControl, OperatorControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.efs import dense_efs_known_scale, dense_efs_unknown_scale
-from jaxgam.execution.operator_efs_controller import (
+from jaxgam.execution.operator.efs_controller import (
     CALIBRATED_OPERATOR_EFS_DOMAIN,
     OperatorEFSCalibratedDomain,
     SourceOperatorEFSFitProvider,
@@ -23,11 +23,11 @@ from jaxgam.execution.operator_efs_controller import (
     run_operator_efs_gaussian_scale,
     run_operator_efs_known_scale,
 )
-from jaxgam.execution.operator_logdet import OperatorLogDetControl
+from jaxgam.execution.operator.logdet import OperatorLogDetControl
 from jaxgam.families.standard import Gaussian, Poisson
 from jaxgam.fitting.data import FittingData
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )
@@ -380,8 +380,9 @@ _METHODS = {
 
 
 def test_calibrated_domain_is_the_documented_v2_record():
-    # docs/scale_jaxgam/efs6_operator_calibration.md records the measured
-    # distributions behind each limit; change both together.
+    # These limits were measured with
+    # scripts/benchmark_operator_efs_calibration.py; re-measure before
+    # changing them.
     assert (
         OperatorEFSCalibratedDomain(
             minimum_levels=257,

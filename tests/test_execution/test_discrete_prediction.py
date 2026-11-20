@@ -11,9 +11,9 @@ import pytest
 
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import ArrayRowSource, DataFrameRowSource
-from jaxgam.formula.continuous_design import build_continuous_discrete_design
-from jaxgam.formula.continuous_setup import build_continuous_discrete_setup
-from jaxgam.formula.discrete_design import (
+from jaxgam.formula.discrete.continuous_design import build_continuous_discrete_design
+from jaxgam.formula.discrete.continuous_setup import build_continuous_discrete_setup
+from jaxgam.formula.discrete.design import (
     DiscreteDesignControl,
     DiscreteDesignUnavailable,
 )

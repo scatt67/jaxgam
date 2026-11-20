@@ -31,12 +31,15 @@ import pytest
 
 from jaxgam import GAM
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution import regular_working_model as regular
-from jaxgam.execution.discrete_regular import (
+from jaxgam.execution.discrete import regular_working_model as regular
+from jaxgam.execution.discrete.regular import (
     fit_discrete_regular,
     regular_working_components,
 )
-from jaxgam.execution.working_theta import ThetaObjective, source_estimate_theta
+from jaxgam.execution.discrete.working_theta import (
+    ThetaObjective,
+    source_estimate_theta,
+)
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import pirls_loop

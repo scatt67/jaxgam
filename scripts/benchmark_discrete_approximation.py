@@ -629,7 +629,7 @@ def compact_level(
     """
     from jaxgam.data.discretize import DiscretizationBudget
     from jaxgam.data.source import DataFrameRowSource
-    from jaxgam.formula.continuous_setup import build_continuous_discrete_setup
+    from jaxgam.formula.discrete.continuous_setup import build_continuous_discrete_setup
     from jaxgam.formula.parser import parse_formula
 
     setup = build_continuous_discrete_setup(

@@ -9,8 +9,9 @@ import numpy as np
 import pytest
 
 from jaxgam.control import EFSControl
-from jaxgam.execution import efs_stream, efs_stream_provider
-from jaxgam.execution.efs_stream import fit_streamed_efs
+from jaxgam.execution.stream import efs as efs_stream
+from jaxgam.execution.stream import efs_provider as efs_stream_provider
+from jaxgam.execution.stream.efs import fit_streamed_efs
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from tests.test_execution.test_efs_stream_start import _regular
 from tests.test_execution.test_nb_stream import _fixture

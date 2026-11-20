@@ -1732,7 +1732,7 @@ def _measured_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
         source_scans_before = source.scan_calls
         source_bytes_before = source.batch_bytes
         if case.execution in _DISCRETE_EXECUTIONS:
-            from jaxgam.execution.discrete import _prepared_discrete
+            from jaxgam.execution.discrete.gaussian import _prepared_discrete
 
             # The discrete route's own Phase-1 setup: compact frame, frozen
             # basis, fitted-grid record and indexed design.
@@ -1765,7 +1765,7 @@ def _measured_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
             fingerprint_kind = "discrete_compact_basis_fingerprint"
             rank_deficit = None
         elif case.execution in _OPERATOR_EXECUTIONS:
-            from jaxgam.formula.operator_prepare import (
+            from jaxgam.formula.operator.prepare import (
                 OperatorPreparationControl,
                 prepare_operator_model,
             )

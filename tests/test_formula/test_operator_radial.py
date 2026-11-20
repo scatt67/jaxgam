@@ -14,9 +14,9 @@ import pytest
 from scipy import linalg
 
 from jaxgam.data.source import ArrayRowSource, DataFrameRowSource
-from jaxgam.formula import operator_radial
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator import radial as operator_radial
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     _CheckedSource,
     prepare_operator_model,

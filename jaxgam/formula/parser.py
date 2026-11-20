@@ -3,8 +3,6 @@
 Parses formulas like ``"y ~ s(x1) + s(x2, k=20) + x3"`` into a
 structured ``FormulaSpec`` using Python's ``ast`` module (no regex).
 
-Design doc reference: Section 13.1
-
 Supported patterns
 ------------------
 - ``y ~ s(x1)`` -- basic smooth
@@ -302,13 +300,12 @@ def _parse_smooth_call(func_name: str, node: ast.Call) -> SmoothSpec:
         elif key == "fx":
             # fx=True (fixed-df, unpenalized regression spline) is a deferred
             # feature: silently fitting a penalized smooth instead would be a
-            # wrong result, so follow CLAUDE.md's deferred-feature policy.
+            # wrong result, so it is refused as an unsupported feature.
             if _eval_kwarg_value(kw.value, key, func_name):
                 raise NotImplementedError(
                     "fx=True (fixed-df unpenalized regression spline) is not "
-                    "supported in v1.0. mgcv fixes the smoothing parameter and "
-                    "uses an unpenalized basis (EDF = basis dim). Planned for "
-                    "v1.1. See docs/design.md Section 5.2."
+                    "supported. mgcv fixes the smoothing parameter and uses "
+                    "an unpenalized basis (EDF = basis dim)."
                 )
             # fx=False is the default; accept and ignore it.
         elif key == "sp":
@@ -317,11 +314,10 @@ def _parse_smooth_call(func_name: str, node: ast.Call) -> SmoothSpec:
             # per-term form is unsupported (would otherwise be silently dropped).
             if _eval_kwarg_value(kw.value, key, func_name) is not None:
                 raise NotImplementedError(
-                    "Per-term sp= inside s()/te()/ti() is not supported in "
-                    "v1.0. Use the model-level GAM(formula, sp=[...]) argument "
+                    "Per-term sp= inside s()/te()/ti() is not supported. "
+                    "Use the model-level GAM(formula, sp=[...]) argument "
                     "to fix all smoothing parameters, or omit sp to estimate "
-                    "them by REML. Planned for v1.1. See docs/design.md "
-                    "Section 4.3."
+                    "them by REML."
                 )
             # sp=None is the R default; accept and ignore it.
         elif key == "id":

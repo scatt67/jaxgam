@@ -15,10 +15,10 @@ import pandas as pd
 import pytest
 
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.nb_stream import fit_nb_streamed_pirls, nb_working_scan
-from jaxgam.execution.regular_stream import preflight_regular_stream_workspace
-from jaxgam.execution.signed_qr import solve_signed_qr
-from jaxgam.execution.stream import StreamPIRLSControl
+from jaxgam.execution.stream.nb import fit_nb_streamed_pirls, nb_working_scan
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
+from jaxgam.execution.stream.regular import preflight_regular_stream_workspace
+from jaxgam.execution.stream.signed_qr import solve_signed_qr
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Gamma
 from jaxgam.fitting.family_execution import (
@@ -284,7 +284,7 @@ def test_mixed_count_score_prefix_budget_precedes_working_and_score_dispatch(
     def forbid_scan(*_args, **_kwargs):
         raise AssertionError("working system dispatched before prefix preflight")
 
-    monkeypatch.setattr("jaxgam.execution.nb_stream.nb_working_scan", forbid_scan)
+    monkeypatch.setattr("jaxgam.execution.stream.nb.nb_working_scan", forbid_scan)
     with pytest.raises(MemoryError, match="fixed/trial score count-prefix"):
         fit_nb_streamed_pirls(
             stream,
@@ -398,7 +398,7 @@ def test_exact_zero_residual_reporting_keeps_source_objective_separate():
 
 @pytest.mark.parametrize("raw_deviance", [-1.0, np.nan])
 def test_invalid_raw_deviance_cannot_become_valid_fit(monkeypatch, raw_deviance):
-    import jaxgam.execution.nb_stream as controller
+    import jaxgam.execution.stream.nb as controller
 
     stream, family = _parametric_fixture("log", np.full(36, 2.0))
     original = controller._working
@@ -487,8 +487,8 @@ from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.formula.prepare import prepare_model
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.design_provider import StreamDesign
-from jaxgam.execution.nb_stream import fit_nb_streamed_pirls
-from jaxgam.execution.stream import StreamPIRLSControl
+from jaxgam.execution.stream.nb import fit_nb_streamed_pirls
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
 def arrays(value):
     if isinstance(value,jax.Array):
         return [np.asarray(value)]

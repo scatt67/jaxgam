@@ -8,8 +8,8 @@ import pytest
 
 from jaxgam.control import FitControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.regular_stream import fit_regular_streamed_pirls
-from jaxgam.execution.stream import StreamPIRLSControl
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
+from jaxgam.execution.stream.regular import fit_regular_streamed_pirls
 from jaxgam.families.standard import Binomial, Gamma
 from jaxgam.fitting.data import PreparedFittingMetadata
 from jaxgam.fitting.family_execution import (

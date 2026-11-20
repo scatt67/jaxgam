@@ -4,8 +4,8 @@ Importing this package has global side effects:
 
 * ``jax.config.update("jax_enable_x64", True)`` — enables float64 in JAX.
 * A persistent compilation cache directory is configured (unless
-  ``JAXGAM_NO_COMPILATION_CACHE=1`` or ``JAX_COMPILATION_CACHE_DIR`` is
-  already set).
+  ``JAXGAM_NO_COMPILATION_CACHE`` is set to any non-empty value, or
+  ``JAX_COMPILATION_CACHE_DIR`` is already set).
 * On Apple silicon, a ``RuntimeWarning`` when NumPy or SciPy use Apple
   Accelerate (see ``jaxgam.platform_guard``; silence with
   ``JAXGAM_ALLOW_ACCELERATE=1``).
@@ -35,11 +35,11 @@ jax.config.update("jax_enable_x64", True)
 # Tracing (~270ms) still runs each cold start, but this cuts total first-fit
 # time from ~1s to ~300ms.
 #
-# Override: set JAX_COMPILATION_CACHE_DIR env var, or call
-#   jax.config.update("jax_compilation_cache_dir", "/your/path")
-# before importing jaxgam.
+# Override: set the JAX_COMPILATION_CACHE_DIR environment variable before
+# importing jaxgam. A jax.config.update("jax_compilation_cache_dir", ...)
+# call made before the import is overwritten by the default below.
 #
-# Disable: set JAXGAM_NO_COMPILATION_CACHE=1.
+# Disable: set JAXGAM_NO_COMPILATION_CACHE to any non-empty value.
 if not os.environ.get("JAXGAM_NO_COMPILATION_CACHE"):
     _cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR")
     if not _cache_dir:

@@ -14,14 +14,14 @@ import pytest
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.discretize import DiscretizationBudget
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.formula.continuous_metadata import (
+from jaxgam.formula.discrete.continuous_metadata import (
     ContinuousDiscretizationMetadata,
     DiscreteTermMetadata,
     DiscretizationGroupMetadata,
     build_discretization_metadata,
     build_request_compression,
 )
-from jaxgam.formula.continuous_setup import (
+from jaxgam.formula.discrete.continuous_setup import (
     ContinuousDiscreteSetup,
     build_continuous_discrete_setup,
 )
@@ -400,7 +400,7 @@ for name, path in (
     package = types.ModuleType(name)
     package.__path__ = [str(path)]
     sys.modules[name] = package
-from jaxgam.formula.continuous_metadata import build_discretization_metadata
+from jaxgam.formula.discrete.continuous_metadata import build_discretization_metadata
 assert callable(build_discretization_metadata)
 assert not any(name == "jax" or name.startswith("jax.") for name in sys.modules)
 """

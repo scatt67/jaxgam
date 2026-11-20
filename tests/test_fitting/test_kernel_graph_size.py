@@ -17,13 +17,13 @@ import jax
 import numpy as np
 import pytest
 
-from jaxgam.execution.working_model import _factor_shapes
-from jaxgam.fitting.discrete_ops import (
+from jaxgam.execution.discrete.working_model import _factor_shapes
+from jaxgam.fitting.discrete.ops import (
     DeviceDiscreteDesign,
     DeviceLookupBlock,
     discrete_xwxd,
 )
-from jaxgam.fitting.working_model import (
+from jaxgam.fitting.discrete.working_model import (
     WorkingModelCriterionMetadata,
     _source_hessian_determinant_derivatives,
     gaussian_working_model_proposal,

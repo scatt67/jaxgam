@@ -11,13 +11,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import jaxgam.execution.discrete_regular as discrete_regular
+import jaxgam.execution.discrete.regular as discrete_regular
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution import regular_working_model as regular
+from jaxgam.execution.discrete import regular_working_model as regular
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
-from jaxgam.fitting.working_model import GaussianWorkingModelProposal
+from jaxgam.fitting.discrete.working_model import GaussianWorkingModelProposal
 from tests.helpers import _AssertCollector, check_that
 from tests.tolerances import STRICT
 

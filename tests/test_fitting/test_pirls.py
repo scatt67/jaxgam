@@ -7,8 +7,6 @@ Tests cover:
 - Offset handling
 - Penalized (ridge) shrinkage
 - R comparison via RBridge against mgcv::gam(sp=...)
-
-Design doc reference: Section 7.2
 """
 
 from __future__ import annotations

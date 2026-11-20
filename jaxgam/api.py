@@ -5,14 +5,19 @@ Provides the ``GAM`` class (sklearn-style API) that wires together:
 - Phase 2: ``FittingData.from_setup()`` → ``newton_optimize()`` / ``pirls_loop()``
 - Phase 3: ``GAMResults._from_fit()`` materializes the selected result type
 
-``GAM.fit()`` returns a full ``GAMResults`` by default or a lean
-``GAMInferenceResult`` when requested.
+``GAM.fit()`` returns a full ``GAMResults`` by default, a lean
+``GAMInferenceResult`` or a prediction-only ``GAMPredictionResult`` when
+requested. The pipeline above is the default dense route; the streamed,
+discretized and operator routes selected by ``FitControl.execution`` run
+their setup and fit through ``jaxgam.execution`` and return prediction
+results.
 
 Design doc reference: docs/refactor_gam_api/design.md §3.3
 """
 
 from __future__ import annotations
 
+import numbers
 import warnings
 from dataclasses import replace
 from typing import TYPE_CHECKING, Literal, overload
@@ -63,8 +68,8 @@ class GAM:
     """Generalized Additive Model specification.
 
     This class holds model specification parameters and orchestrates the
-    fit pipeline. Calling ``fit()`` returns a frozen full or lean result,
-    selected by the keyword-only ``result`` argument.
+    fit pipeline. Calling ``fit()`` returns a frozen full, inference or
+    prediction result, selected by the keyword-only ``result`` argument.
 
     Parameters
     ----------
@@ -72,20 +77,29 @@ class GAM:
         Model formula in R-style Wilkinson notation, e.g. ``"y ~ s(x)"``.
     family : str or ExponentialFamily
         Distribution family. One of ``'gaussian'``, ``'binomial'``,
-        ``'poisson'``, ``'gamma'``, or an ``ExponentialFamily`` instance.
+        ``'poisson'``, ``'gamma'``, ``'nb'``, or a family instance. Pass an
+        instance to choose a non-default link, for example
+        ``Gamma(link="log")``, or to fix the negative-binomial theta.
     method : str
-        Smoothing parameter estimation method. Only ``'REML'`` is supported
-        in v1.0; ``'ML'`` raises ``NotImplementedError`` (see notes below).
+        Smoothing parameter estimation method. Only ``'REML'`` is supported;
+        ``'ML'`` raises ``NotImplementedError``.
     sp : np.ndarray or list, optional
-        Fixed smoothing parameters. If provided, skips Newton optimization.
-    device : str, optional
-        Target device: ``'cpu'``, ``'gpu'``, or ``None`` (auto-detect).
-        GPU requires ``jax[cuda12]`` (NVIDIA) or ``jax-metal`` (Apple).
+        Fixed smoothing parameters. If provided, smoothing parameter
+        selection is skipped.
+    control : FitControl, optional
+        Execution route and resource policy: which route fits the model
+        (``execution='dense'``, ``'stream'``, ``'discrete'`` or
+        ``'operator'``), batch size, memory budgets and prediction
+        uncertainty. Defaults to ``FitControl()``, the in-memory dense fit.
     **kwargs
         Additional arguments. ``optimizer`` accepts ``"newton"`` (default)
-        or the dense ``"efs"`` route. The remaining accepted scope-guard keys
-        are ``device``, ``backend``, ``select``, ``gamma``, and ``knots``;
-        other keywords raise ``TypeError``.
+        or ``"efs"`` (extended Fellner-Schall, on the dense, streamed and
+        operator routes). ``device`` selects the target device: ``'cpu'``,
+        ``'gpu'``, or ``None`` (auto-detect); GPU requires ``jax[cuda12]``
+        (NVIDIA) or ``jax-metal`` (Apple), the operator route runs on CPU
+        only, and the test suite does not run on a GPU. The remaining
+        accepted scope-guard keys are ``backend``, ``select``, ``gamma``,
+        and ``knots``; other keywords raise ``TypeError``.
 
     Examples
     --------
@@ -161,32 +175,30 @@ class GAM:
 
         Parameters
         ----------
-        data : pandas.DataFrame or dict
-            Data frame containing the variables in the formula. A replayable
-            ``RowSource`` is accepted with ``execution='stream'``,
-            ``execution='operator'`` or the explicitly configured
-            ``execution='discrete'`` route. The operator route requires
-            ``linear_solver='pcg'`` and prediction-only retention. It accepts
-            explicit fixed ``sp`` or calibrated indexed Poisson EFS.
+        data : pandas.DataFrame, dict or RowSource
+            A DataFrame (or dict of columns) holding the variables in the
+            formula, for the default dense route. The streamed, discretized
+            and operator routes (``FitControl.execution``) take a replayable
+            ``RowSource`` from ``jaxgam.data`` instead and refuse a DataFrame.
         weights : np.ndarray, optional
-            Prior weights, shape ``(n,)``.
+            Prior weights, shape ``(n,)``. Dense route only: a ``RowSource``
+            carries its own weights.
         offset : np.ndarray, optional
-            Offset vector, shape ``(n,)``.
+            Offset vector, shape ``(n,)``. Dense route only: a ``RowSource``
+            carries its own offset.
         result : {"full", "inference", "prediction"}
             Result materialization mode. ``"full"`` retains training-backed
             diagnostics; ``"inference"`` returns a lean result that is already
-            directly usable for new-data prediction. No ``to_predictor()`` call
-            is required unless a narrower prediction-only handoff is desired.
+            directly usable for new-data prediction (no ``to_predictor()``
+            call is required unless a narrower prediction-only handoff is
+            desired); ``"prediction"`` returns a result that only predicts on
+            new data and keeps no training rows. The streamed, discretized
+            and operator routes support ``"prediction"`` only.
 
         Returns
         -------
-        GAMResults or GAMInferenceResult
-            Frozen full-diagnostic or lean-inference result. Streamed fitting
-            returns ``result='prediction'`` and supports fixed smoothing
-            parameters across the family execution contracts or EFS with QR.
-            Discrete fitting accepts fixed ``sp`` or
-            ``smoothing_strategy='working_model_reml'`` and also returns
-            ``result='prediction'``.
+        GAMResults, GAMInferenceResult or GAMPredictionResult
+            The frozen result selected by ``result``.
 
         Design doc reference: docs/refactor_gam_api/design.md §3.3
         """
@@ -246,7 +258,7 @@ class GAM:
                     "Gaussian QR compression requires Newton smoothing selection."
                 )
             else:
-                from jaxgam.execution.gaussian_optimizer import (
+                from jaxgam.execution.gaussian_qr.optimizer import (
                     GaussianQRIneligible,
                     build_dense_gaussian_qr_provider,
                 )
@@ -297,7 +309,7 @@ class GAM:
                 ):
                     raise ValueError(
                         "Estimated NB identity/sqrt EFS has no valid default "
-                        "zero-coefficient recovery anchor for this offset; pinned "
+                        "zero-coefficient recovery anchor for this offset; "
                         "mgcv rejects the same input. Supply an offset whose "
                         "zero-coefficient means are positive."
                     )
@@ -328,7 +340,7 @@ class GAM:
         else:
             use_lbfgs = False
             if score_provider is not None:
-                from jaxgam.execution.gaussian_optimizer import (
+                from jaxgam.execution.gaussian_qr.optimizer import (
                     optimize_gaussian_qr_lbfgs,
                     use_gaussian_qr_lbfgs,
                 )
@@ -384,8 +396,8 @@ class GAM:
         """Run CPU operator fitting with compact prediction retention."""
         import numbers
 
-        from jaxgam.execution.operator_fit import fit_operator_fixed_sp
-        from jaxgam.formula.operator_prepare import (
+        from jaxgam.execution.operator.fit import fit_operator_fixed_sp
+        from jaxgam.formula.operator.prepare import (
             OperatorPreparationControl,
             prepare_operator_model,
         )
@@ -442,7 +454,7 @@ class GAM:
             spec,
             data,
             control=OperatorPreparationControl(
-                self.control.batch_rows,
+                _operator_fit_batch_rows(self.control, data),
                 self.control.memory_budget_bytes,
                 self.control.operator.max_modest_coefficients,
             ),
@@ -470,18 +482,18 @@ class GAM:
         self, source: RowSource, family: ExponentialFamily
     ) -> GAMPredictionResult:
         """Materialize calibrated indexed and modest-indexed Poisson EFS fits."""
-        from jaxgam.execution.operator_efs_controller import (
+        from jaxgam.execution.operator.efs_controller import (
             CALIBRATED_OPERATOR_EFS_DOMAIN,
             CALIBRATED_OPERATOR_EFS_MAX_MODEST,
             SourceOperatorEFSFitProvider,
             run_operator_efs_known_scale,
         )
-        from jaxgam.execution.operator_efs_start import (
+        from jaxgam.execution.operator.efs_start import (
             prepare_indexed_operator_efs_start,
         )
-        from jaxgam.execution.operator_logdet import OperatorLogDetControl
+        from jaxgam.execution.operator.logdet import OperatorLogDetControl
         from jaxgam.families.standard import Poisson
-        from jaxgam.formula.operator_prepare import (
+        from jaxgam.formula.operator.prepare import (
             OperatorPreparationControl,
             prepare_operator_model,
         )
@@ -507,7 +519,7 @@ class GAM:
             spec,
             source,
             control=OperatorPreparationControl(
-                self.control.batch_rows,
+                _operator_fit_batch_rows(self.control, source),
                 preparation_budget,
                 self.control.operator.max_modest_coefficients,
             ),
@@ -667,7 +679,7 @@ class GAM:
         execution_fallback_reason: str | None,
     ) -> GAMPredictionResult:
         """Prepare a validated streamed fit and dispatch it to its route."""
-        from jaxgam.execution.stream import StreamPIRLSControl, fit_streamed_pirls
+        from jaxgam.execution.stream.pirls import StreamPIRLSControl, fit_streamed_pirls
 
         spec = parse_formula(self.formula)
         prepared = prepare_model(
@@ -680,7 +692,7 @@ class GAM:
         stream = StreamDesign(prepared, data)
         gaussian_qr_workspace = None
         if gaussian_qr_candidate:
-            from jaxgam.execution.gaussian import (
+            from jaxgam.execution.gaussian_qr.preparation import (
                 preflight_streamed_gaussian_qr_workspace,
             )
 
@@ -712,7 +724,7 @@ class GAM:
                     ),
                     execution_fallback_reason,
                 )
-            from jaxgam.execution.efs_stream import fit_streamed_efs
+            from jaxgam.execution.stream.efs import fit_streamed_efs
 
             execution = fit_streamed_efs(
                 stream,
@@ -739,10 +751,10 @@ class GAM:
             )
         metadata = None
         if gaussian_qr_workspace is not None:
-            from jaxgam.execution.gaussian import GaussianQRIneligible
-            from jaxgam.execution.gaussian_optimizer import (
+            from jaxgam.execution.gaussian_qr.optimizer import (
                 build_stream_gaussian_qr_provider,
             )
+            from jaxgam.execution.gaussian_qr.preparation import GaussianQRIneligible
 
             metadata = PreparedFittingMetadata.from_prepared(
                 prepared, family, jax_device
@@ -892,8 +904,8 @@ class GAM:
         ``smoothing_strategy='working_model_reml'``; the dense
         ``optimizer='efs'`` selection is not a discrete strategy.
         """
-        from jaxgam.execution.discrete import fit_discrete_gaussian
-        from jaxgam.execution.discrete_regular import fit_discrete_regular
+        from jaxgam.execution.discrete.gaussian import fit_discrete_gaussian
+        from jaxgam.execution.discrete.regular import fit_discrete_regular
         from jaxgam.families.standard import Gaussian
 
         if not isinstance(data, RowSource):
@@ -1032,7 +1044,7 @@ def _fit_stream_gaussian_qr(
         if fixed
         else metadata.log_lambda_init
     )
-    from jaxgam.execution.gaussian_optimizer import (
+    from jaxgam.execution.gaussian_qr.optimizer import (
         optimize_gaussian_qr_lbfgs,
         use_gaussian_qr_lbfgs,
     )
@@ -1123,7 +1135,7 @@ def _check_stream_fixed_family(family: ExponentialFamily, linear_solver: str) ->
             "second_derivative implementation."
         )
     if isinstance(family, NegativeBinomial):
-        from jaxgam.execution.nb_stream import _link_name
+        from jaxgam.execution.stream.nb import _link_name
 
         _link_name(family)
         if linear_solver != "qr":
@@ -1187,9 +1199,9 @@ def _fit_stream_fixed_regular(
     device: jax.Device | None,
     supplied_sp: np.ndarray | list | float | None = None,
 ) -> GAMPredictionResult:
-    from jaxgam.execution.regular_stream import fit_regular_streamed_pirls
-    from jaxgam.execution.reml import optimize_regular_stream_reml
-    from jaxgam.execution.stream import StreamPIRLSControl
+    from jaxgam.execution.stream.pirls import StreamPIRLSControl
+    from jaxgam.execution.stream.regular import fit_regular_streamed_pirls
+    from jaxgam.execution.stream.reml import optimize_regular_stream_reml
 
     coefficient_control = StreamPIRLSControl(
         batch_rows=control.batch_rows,
@@ -1263,10 +1275,10 @@ def _fit_stream_fixed_nb(
     device: jax.Device | None,
     supplied_sp: np.ndarray | list | float | None = None,
 ) -> GAMPredictionResult:
-    from jaxgam.execution.nb_reml import optimize_nb_stream_reml
-    from jaxgam.execution.nb_stream import fit_nb_streamed_pirls
-    from jaxgam.execution.reml import StreamREMLControl
-    from jaxgam.execution.stream import StreamPIRLSControl
+    from jaxgam.execution.stream.nb import fit_nb_streamed_pirls
+    from jaxgam.execution.stream.nb_reml import optimize_nb_stream_reml
+    from jaxgam.execution.stream.pirls import StreamPIRLSControl
+    from jaxgam.execution.stream.reml import StreamREMLControl
 
     coefficient_control = StreamPIRLSControl(
         batch_rows=control.batch_rows, solver_policy="qr", tol=1e-11
@@ -1349,13 +1361,13 @@ def _fit_stream_exact_reml(
     device: jax.Device | None,
 ) -> GAMPredictionResult:
     """Expose one accepted exact source trial through the public result seam."""
-    from jaxgam.execution.efs_stream_start import prepare_stream_reml_start
-    from jaxgam.execution.nb_reml import optimize_nb_stream_reml
-    from jaxgam.execution.reml import (
+    from jaxgam.execution.stream.efs_start import prepare_stream_reml_start
+    from jaxgam.execution.stream.nb_reml import optimize_nb_stream_reml
+    from jaxgam.execution.stream.pirls import StreamPIRLSControl
+    from jaxgam.execution.stream.reml import (
         StreamREMLControl,
         optimize_regular_stream_reml,
     )
-    from jaxgam.execution.stream import StreamPIRLSControl
     from jaxgam.families.negative_binomial import NegativeBinomial
 
     n_lambda = metadata.n_penalties
@@ -1531,9 +1543,9 @@ def _fit_stream_parametric_bypass(
     device: jax.Device | None,
 ) -> GAMPredictionResult:
     """Preserve the ordinary no-penalty fit before streamed EFS dispatch."""
-    from jaxgam.execution.nb_stream import fit_nb_streamed_pirls
-    from jaxgam.execution.regular_stream import fit_regular_streamed_pirls
-    from jaxgam.execution.stream import StreamPIRLSControl
+    from jaxgam.execution.stream.nb import fit_nb_streamed_pirls
+    from jaxgam.execution.stream.pirls import StreamPIRLSControl
+    from jaxgam.execution.stream.regular import fit_regular_streamed_pirls
     from jaxgam.families.negative_binomial import NegativeBinomial
     from jaxgam.fitting.family_execution import (
         FamilyExecutionLineage,
@@ -1582,7 +1594,7 @@ def _fit_stream_parametric_bypass(
             # second coefficient fit or EFS outer loop is needed. The
             # saturated likelihood is scale-dependent and needs one bounded
             # replay at that selected scale.
-            from jaxgam.execution.stream import _source_batches
+            from jaxgam.execution.stream.pirls import _source_batches
 
             lineage = FamilyExecutionLineage.from_prepared(prepared, family)
             reported_scale = float(np.asarray(state.scale))
@@ -1664,7 +1676,7 @@ def _preflight_stream_workspace(
         raise MemoryError(
             f"Known streamed{solver_label} PIRLS workspace requires "
             f"{required} bytes, exceeding FitControl.memory_budget_bytes="
-            f"{memory_budget_bytes}. Phase-1 setup scans are budgeted separately."
+            f"{memory_budget_bytes}. Setup scans are budgeted separately."
         )
     return required
 
@@ -1701,13 +1713,32 @@ _ACCEPTED_KWARGS = frozenset(
 )
 
 
+def _operator_fit_batch_rows(control: FitControl, source: RowSource) -> int:
+    """Rows per scan of an operator fit: never more than the source holds.
+
+    The operator kernels work on batches padded to this size, and the
+    preparation and fit budgets are charged for it, so asking for more rows
+    than the source has would only allocate and budget padding. A scan of a
+    source with fewer rows than ``batch_rows`` yields the same single batch
+    either way. Prediction keeps ``FitControl.batch_rows``.
+    """
+    n_rows = source.n_rows
+    if (
+        isinstance(n_rows, bool)
+        or not isinstance(n_rows, numbers.Integral)
+        or n_rows < 1
+    ):
+        return control.batch_rows  # preparation reports the invalid source
+    return min(control.batch_rows, int(n_rows))
+
+
 def _check_scope_guards(method: str, kwargs: dict) -> None:
-    """Validate v1.0 scope guards."""
+    """Validate scope guards."""
     unknown = set(kwargs) - _ACCEPTED_KWARGS
     if unknown:
         raise TypeError(
             f"GAM() got unexpected keyword argument(s) {sorted(unknown)}. "
-            f"Accepted arguments: formula, family, method, sp, "
+            f"Accepted arguments: formula, family, method, sp, control, "
             f"{', '.join(sorted(_ACCEPTED_KWARGS))}."
         )
 
@@ -1718,20 +1749,18 @@ def _check_scope_guards(method: str, kwargs: dict) -> None:
             "penalty range-space projection of log|X'WX+S| (the C routine "
             "MLpenalty1 in gdi.c), which differs from REML's full-space "
             "determinant. Only method='REML' is available; ML is deferred "
-            "until the range-space determinant is implemented. "
-            "See docs/design.md Section 4.4."
+            "until the range-space determinant is implemented."
         )
     if method_upper != "REML":
         raise ValueError(
             f"method must be 'REML', got {method!r}. "
-            "ML is not available (see above); GCV/UBRE is planned for v1.1."
+            "ML, GCV and UBRE are not available."
         )
 
     backend = kwargs.get("backend")
     if backend is not None and backend != "jax":
         raise NotImplementedError(
-            f"backend={backend!r} is not supported in v1.0. "
-            "Only 'jax' backend is available. See docs/design.md Section 10."
+            f"backend={backend!r} is not supported. Only 'jax' backend is available."
         )
 
     device = kwargs.get("device")
@@ -1750,22 +1779,17 @@ def _check_scope_guards(method: str, kwargs: dict) -> None:
             )
 
     if kwargs.get("select", False):
-        raise NotImplementedError(
-            "select=True (shrinkage smoothing) is planned for v1.1. "
-            "See docs/design.md Section 4.6."
-        )
+        raise NotImplementedError("select=True (shrinkage smoothing) is not supported.")
 
     gamma = kwargs.get("gamma", 1.0)
     if gamma != 1.0:
         raise NotImplementedError(
-            f"gamma={gamma} is not supported in v1.0. "
+            f"gamma={gamma} is not supported. "
             "Only gamma=1.0 (standard REML) is available."
         )
 
     if kwargs.get("knots") is not None:
-        raise NotImplementedError(
-            "User-specified knots are planned for v1.1. See docs/design.md Section 5.2."
-        )
+        raise NotImplementedError("User-specified knots are not supported.")
 
 
 def _fixed_log_smoothing_parameters(sp: np.ndarray | list, n_penalties: int):
@@ -1859,7 +1883,7 @@ def _fit_fixed_sp(
     log_lambda = _fixed_log_smoothing_parameters(sp, fd.n_penalties)
 
     if score_provider is not None:
-        from jaxgam.execution.gaussian_optimizer import (
+        from jaxgam.execution.gaussian_qr.optimizer import (
             optimize_gaussian_qr_lbfgs,
             use_gaussian_qr_lbfgs,
         )

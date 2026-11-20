@@ -8,7 +8,6 @@ construction via row-wise Kronecker products of marginal bases.
 
 This module is Phase 1 (NumPy only, no JAX imports).
 
-Design doc reference: docs/design.md Section 5.5
 R source reference: R/smooth.r smooth.construct.tensor.smooth.spec()
 """
 
@@ -226,8 +225,7 @@ class TensorProductSmooth(Smooth):
                 else:
                     raise ValueError(
                         "te()/ti() per-margin m entries must be integers; nested "
-                        "per-margin vectors (Duchon splines) are not supported in "
-                        "v1.0."
+                        "per-margin vectors (Duchon splines) are not supported."
                     )
             return out
         raise ValueError(

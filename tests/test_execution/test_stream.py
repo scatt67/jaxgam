@@ -13,8 +13,8 @@ import pytest
 
 from jaxgam.control import FitControl
 from jaxgam.data.source import DataFrameRowSource, RowBatch
-from jaxgam.execution import stream as stream_execution
-from jaxgam.execution.stream import StreamPIRLSControl, fit_streamed_pirls
+from jaxgam.execution.stream import pirls as stream_execution
+from jaxgam.execution.stream.pirls import StreamPIRLSControl, fit_streamed_pirls
 from jaxgam.families.base import REAL, ExponentialFamily
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting import penalty_ops
@@ -30,7 +30,7 @@ from jaxgam.fitting.state import (
     PivotedQRCoefficientFactor,
     StreamFitState,
 )
-from jaxgam.fitting.stream_kernels import (
+from jaxgam.fitting.stream.kernels import (
     accumulate_working_statistics,
     empty_statistics,
     positive_qr_working_rows,

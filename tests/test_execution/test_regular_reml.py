@@ -11,14 +11,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import jaxgam.execution.reml as reml_execution
+import jaxgam.execution.stream.reml as reml_execution
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.reml import (
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
+from jaxgam.execution.stream.reml import (
     StreamREMLControl,
     evaluate_regular_stream_reml,
     optimize_regular_stream_reml,
 )
-from jaxgam.execution.stream import StreamPIRLSControl
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
@@ -1711,7 +1711,7 @@ def test_function_reduction_exit_within_mgcv_relative_test_converges(
     assert result.converged
     assert result.projected_gradient_inf == 2.0 * ((12.0 + 1e-4) - 12.0)
     assert result.projected_gradient_inf > StreamREMLControl().gtol
-    assert "converged by pinned mgcv newton()'s relative test" in result.message
+    assert "converged by mgcv newton()'s relative test" in result.message
     assert "<= 5*conv.tol*score.scale 5.000e-03" in result.message
     assert result.message.startswith(_FUNCTION_REDUCTION_EXIT)
 
@@ -1746,7 +1746,10 @@ def test_other_lbfgsb_exits_keep_their_meaning(monkeypatch, message, status) -> 
 
 def test_mgcv_relative_test_forms_score_scale_as_newton_does() -> None:
     """score.scale = |log(scale.est)| + |score|; 5*conv.tol on the gradient."""
-    from jaxgam.execution.reml import MGCV_NEWTON_CONV_TOL, mgcv_relative_convergence
+    from jaxgam.execution.stream.reml import (
+        MGCV_NEWTON_CONV_TOL,
+        mgcv_relative_convergence,
+    )
 
     assert MGCV_NEWTON_CONV_TOL == 1e-6
     estimated = mgcv_relative_convergence(
@@ -1828,9 +1831,7 @@ def test_public_exact_stream_poisson_ten_smooths_converges_across_windows() -> N
         assert fit.convergence_info.startswith(
             "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH"
         )
-        assert "converged by pinned mgcv newton()'s relative test" in (
-            fit.convergence_info
-        )
+        assert "converged by mgcv newton()'s relative test" in (fit.convergence_info)
     assert "source step window(s)" in fit.convergence_info
     windows = int(fit.convergence_info.split("; ")[1].split(" ")[0])
     assert windows > 1

@@ -4,7 +4,7 @@
 
 **When:** start only after the current body of work is complete (see Entry criteria). This series must be the only active work on the stack, so that every step composes once.
 
-**Shape:** a sequence of stacked PRs above the then-current stack top, one logical unification each. Each PR proves bit-identical numerics. Nothing is merged without the user.
+**Shape:** a sequence of PRs, one logical unification each, starting from `main` (the stacked PRs this plan was written against were merged into `main` as one squash commit, #87). Each PR proves bit-identical numerics. Nothing is merged without the user.
 
 ---
 
@@ -16,6 +16,8 @@ All of the following must hold before Phase 0 starts:
 2. The scaling plan's §8 performance and numerical acceptance gates are met and recorded.
 3. `verify_active_stack.py` (or its successor) passes: every head, base edge and native-stack position is verified.
 4. No other implementation branch is in flight.
+
+**Status (2026-11-20):** criteria 1 and 2 are met: that work was consolidated and merged into `main` as pull request #87 (commit `e919938`) with CI green, after the acceptance measurements were taken. Criterion 3 belonged to the stacked-PR workflow and no longer applies; the equivalent check is that Phase 0 starts from `main`. Criterion 4 must be checked again when Phase 0 starts.
 
 ---
 
@@ -66,8 +68,8 @@ Tests cover the harness itself: deterministic output, provenance refusal and dif
 ### 0.2 Architecture test, report-only
 
 Add `tests/test_architecture.py`, with an AST import scan and a scan for `isinstance` checks against concrete family classes.
-- **Enforced now:** `fitting/` never imports `execution/`, host `scipy`, `sqlite3` or file I/O; Phase-1 packages have no JAX. These already hold.
-- **Recorded as an explicit allowlist:** the current host-loop exceptions (`fitting/newton.py::NewtonOptimizer`, `fitting/data.py` preparation) and the current family `isinstance` sites (36–43 per line in October 2026). Later phases shrink the allowlist to empty.
+- **Enforced now:** `fitting/` never imports `execution/`, host `scipy`, `sqlite3` or file I/O; Phase-1 packages have no JAX. These hold on `main` with one exception to allowlist and then remove in Phase 2: `fitting/data.py::_structural_penalty_roots` imports `execution/qr.py` inside the function.
+- **Recorded as an explicit allowlist:** the current host-loop exceptions (`fitting/newton.py::NewtonOptimizer`, `fitting/data.py` preparation) and the current family `isinstance` sites (36–43 per line in October 2026; 46 on `main` after the merge). Later phases shrink the allowlist to empty.
 
 ### 0.3 Duplicate-code check, report-only
 
@@ -88,10 +90,10 @@ Re-run the design §2 inventory on the final composed stack and update `design.m
 
 Each item is its own commit, and the phase ships as one PR.
 
-1. **`_factor_inverse_residual`:** keep one copy, move it to a shared execution utility, and use it from both `reml.py` and `nb_reml.py`.
-2. **`_link_name`:** delete both copies, `execution/nb_stream.py` and `fitting/nb_stream_reml.py`. Use a family/link capability (e.g. `link.name`, or a capability enumerating supported streamed NB links).
-3. **Saturated log-likelihood:** keep one kernel and make the other call site use it. The two are `fitting/family_execution.py::batch_saturated_loglikelihood` and `fitting/stream_kernels.py::saturated_loglik_reduction`. Prove reduction-order identity by fingerprint.
-4. **NB theta objective:** keep one jitted NB negative log-likelihood kernel, used by `fitting/efs_theta.py` and `fitting/nb_theta_stream.py` (structural similarity 0.98).
+1. **`_factor_inverse_residual`:** keep one copy, move it to a shared execution utility, and use it from both `execution/stream/reml.py` and `execution/stream/nb_reml.py`.
+2. **`_link_name`:** delete both copies, `execution/stream/nb.py` and `fitting/stream/nb_reml.py`. Use a family/link capability (e.g. `link.name`, or a capability enumerating supported streamed NB links).
+3. **Saturated log-likelihood:** keep one kernel and make the other call site use it. The two are `fitting/family_execution.py::batch_saturated_loglikelihood` and `fitting/stream/kernels.py::saturated_loglik_reduction`. Prove reduction-order identity by fingerprint.
+4. **NB theta objective:** keep one jitted NB negative log-likelihood kernel, used by `fitting/efs_theta.py` and `fitting/stream/nb_theta.py` (structural similarity 0.98).
 5. **`efsudr` update:** the operator EFS controller uses `fitting/efs.py::efs_raw_update` (or a NumPy wrapper over the same kernel), and `_raw_ratio`/`_trial_rho` are deleted.
    - First resolve the `phi*n/q` vs `(n/q)*phi` order against pinned `R/gam.fit4.r::efsudr` (1.9-3).
    - The non-matching route's change is the one documented exception. Its R gates must stay STRICT.
@@ -103,7 +105,7 @@ Each item is its own commit, and the phase ships as one PR.
 
 ## Phase 2: Names and boundary moves (mechanical)
 
-1. **Renames:** `execution/reml.py` → `execution/stream_reml.py` and `execution/nb_reml.py` → `execution/nb_stream_reml.py`. Do the same for any other pair whose name implies a kernel/driver relationship that does not exist; check every pair.
+1. **Renames: done, by a different route.** This item proposed renaming the exact streamed REML drivers so that their names no longer suggested a pair with the dense kernels in `fitting/reml.py`. The move into route sub-packages on 2026-11-20 (design §9, question 5) settled it: the drivers are `execution/stream/reml.py` and `execution/stream/nb_reml.py`, beside their kernels `fitting/stream/reml.py` and `fitting/stream/nb_reml.py`. Check the remaining same-named pairs (`efs.py`, `qr.py` and `regular.py`, `nb_theta.py`, `efs_provider.py` across packages) for a kernel/driver relationship that does not exist.
 2. **Move host code out of `fitting/`:**
    - `NewtonOptimizer`'s host loop moves to `execution/optimizers/newton.py`. Its jitted derivative pieces stay in `fitting/newton.py`, renamed to reflect that they are kernels.
    - `FittingData.from_setup` NumPy preparation moves to `execution/providers/in_memory.py`, or stays as a transfer type, per design §9 Q2.
@@ -119,7 +121,7 @@ Each item is its own commit, and the phase ships as one PR.
 1. **Introduce the interfaces:** `FitProvider`, `ProviderCapabilities`, `FitState`, `CoefficientSolver`, `WorkingSystem` and `OptimizationResult` (design §5.1). Generalise the existing `EFSFitProvider`/`EFSFitRequest`/`EFSControllerContext` rather than adding a parallel set.
 2. **Wrap existing data access as providers,** delegating to today's functions:
    - `in_memory` (dense);
-   - `stream`, regular and NB (`stream.py`, `regular_stream.py`, `nb_stream.py`);
+   - `stream`, regular and NB (`pirls.py`, `regular.py` and `nb.py` in `execution/stream/`);
    - `gaussian_qr` (PR9);
    - `discrete` (PR11);
    - `operator` (PR12/EFS6).
@@ -168,10 +170,10 @@ Each item is its own commit, and the phase ships as one PR.
 3. **Port the inner loops one at a time,** each as its own commit with a fingerprint check:
    - dense `fitting/pirls.py`;
    - `fitting/efs_regular_pirls.py`;
-   - streamed canonical (`execution/stream.py`);
-   - streamed signed (`execution/regular_stream.py`);
-   - streamed NB (`execution/nb_stream.py`);
-   - operator (`execution/operator_fit.py`);
+   - streamed canonical (`execution/stream/pirls.py`);
+   - streamed signed (`execution/stream/regular.py`);
+   - streamed NB (`execution/stream/nb.py`);
+   - operator (`execution/operator/fit.py`);
    - discrete working model (PR11).
 
    Fused `lax.while_loop` kernels stay fused where they are today. The unification is in the step-policy functions they call, not in turning jitted loops into host loops.
@@ -216,7 +218,7 @@ Each item is its own commit, and the phase ships as one PR.
 ## Phase 9: Lock in
 
 1. **Blocking guardrails.** Switch the duplicate-code check to blocking. Shrink the architecture-test allowlists to empty, or to a reviewed and justified minimum.
-2. **Docs.** Update `docs/design.md` §10 (execution routing) and `docs/api.md` where internals are described. Add the review checklist from design §7.
+2. **Docs.** Update the architecture pages under `docs/architecture/` and `docs/api.md` where internals are described. Add the review checklist from design §7.
 3. **AGENTS.md.** Propose wording to the user covering the layers, the dependency rule and "extend via `FitProvider`/solver/strategy, never by copying a controller or PIRLS loop". The user applies it.
 4. **Final report.** Before/after line counts per package, duplicate-scan results, compile counts and benchmark timings.
 

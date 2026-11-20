@@ -155,3 +155,103 @@ def test_operator_execution_requires_its_own_solver(linear_solver) -> None:
         GAM(_FORMULA, sp=[0.8], control=control).fit(
             DataFrameRowSource(frame, response="y"), result="prediction"
         )
+
+
+def _small_operator_frame(n: int = 300) -> pd.DataFrame:
+    rng = np.random.default_rng(20261120)
+    x = rng.uniform(0.0, 1.0, n)
+    group = rng.integers(0, 20, n)
+    return pd.DataFrame(
+        {
+            "x": x,
+            "g": pd.Categorical(group, categories=range(20)),
+            "y": rng.poisson(np.exp(0.2 + np.sin(6.0 * x))).astype(float),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "formula",
+    ["y ~ s(x) + s(g, bs='re')", "y ~ s(x, bs='gp') + s(g, bs='re')"],
+)
+def test_operator_fit_plans_for_the_rows_the_source_has(formula) -> None:
+    """A small source fits at the default ``batch_rows`` and default budget.
+
+    The operator kernels work on batches padded to the scan size, so a fit
+    that planned for the default 65,536 rows exceeded the default budget on a
+    300-row source with a thin plate or Gaussian process smooth. The fit now
+    scans, pads and budgets for at most the rows the source holds, which is
+    the same single batch, so asking for more rows changes nothing.
+    """
+    frame = _small_operator_frame()
+    source = DataFrameRowSource(frame, response="y")
+
+    def fit(batch_rows: int):
+        control = FitControl(
+            execution="operator", linear_solver="pcg", batch_rows=batch_rows
+        )
+        return GAM(formula, family="poisson", sp=[1.0, 1.0], control=control).fit(
+            source, result="prediction"
+        )
+
+    default = fit(FitControl().batch_rows)
+    exact = fit(len(frame))
+    collector = _AssertCollector()
+    collector.check("converged", lambda: check_converged(default, exact))
+    collector.check(
+        "same coefficients as a scan size equal to the row count",
+        lambda: np.testing.assert_array_equal(default.coefficients, exact.coefficients),
+    )
+    collector.check(
+        "same preparation bound as a scan size equal to the row count",
+        lambda: check_equal(
+            default.operator_diagnostics.preparation_peak_bound_bytes,
+            exact.operator_diagnostics.preparation_peak_bound_bytes,
+        ),
+    )
+    # Prediction keeps the batch size the caller asked for: a request larger
+    # than the training data is served in one call.
+    larger = pd.concat([frame] * 3, ignore_index=True)
+    collector.check(
+        "prediction is not limited to the training row count",
+        lambda: np.testing.assert_array_equal(
+            default.predict(larger)[: len(frame)], default.predict(frame)
+        ),
+    )
+    collector.raise_if_any(formula)
+
+
+def check_converged(*fits) -> None:
+    assert all(fit.converged for fit in fits)
+
+
+def check_equal(left, right) -> None:
+    assert left == right
+
+
+class _CountSource:
+    def __init__(self, n_rows) -> None:
+        self.n_rows = n_rows
+
+
+@pytest.mark.parametrize(
+    ("n_rows", "expected"),
+    [
+        (300, 300),
+        (np.int64(300), 300),
+        (4096, 4096),
+        (10**9, 4096),
+        # Not a row count: the preparation reports it, so nothing is clamped.
+        (0, 4096),
+        (True, 4096),
+        (300.0, 4096),
+    ],
+)
+def test_operator_fit_batch_rows_is_the_smaller_of_request_and_source(
+    n_rows, expected
+) -> None:
+    from jaxgam.api import _operator_fit_batch_rows
+
+    rows = _operator_fit_batch_rows(FitControl(batch_rows=4096), _CountSource(n_rows))
+    assert rows == expected
+    assert type(rows) is int

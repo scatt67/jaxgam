@@ -22,7 +22,6 @@ Key rewrites (going beyond R's mgcv ``nb()`` which uses raw arithmetic):
 These are exact algebraic identities (not approximations) and are
 unconditionally at least as accurate as the original formulas.
 
-Design doc reference: Section 7.2-7.4
 R source reference: efam.r lines 161-310 (nb() extended family)
 """
 

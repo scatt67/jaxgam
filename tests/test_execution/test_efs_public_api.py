@@ -369,7 +369,7 @@ def test_fixed_nb_nonlog_public_efs_is_supported(link: str) -> None:
 def test_estimated_nb_nonlog_public_efs_rejects_pinned_default_start_boundary(
     link: str,
 ) -> None:
-    with pytest.raises(ValueError, match="pinned mgcv rejects the same input"):
+    with pytest.raises(ValueError, match="mgcv rejects the same input"):
         GAM(
             "y ~ s(x, bs='cr', k=5)",
             family=NegativeBinomial(theta=0.8, link=link),
@@ -571,7 +571,7 @@ def test_streamed_estimated_nb_snapshots_selected_theta_without_mutating_caller(
 def test_streamed_efs_public_memory_budget_rejects_before_provider_allocation(
     monkeypatch,
 ) -> None:
-    from jaxgam.execution import efs_stream
+    from jaxgam.execution.stream import efs as efs_stream
 
     def unexpected_create(*_args, **_kwargs):
         raise AssertionError("provider allocated before public memory preflight")
@@ -583,7 +583,7 @@ def test_streamed_efs_public_memory_budget_rejects_before_provider_allocation(
     # The public budget now reaches Phase-1 setup first, and any budget that
     # admits one setup row exceeds this model's EFS startup retention. That
     # guard's own contract is owned by test_efs_stream.py's direct preflight.
-    with pytest.raises(MemoryError, match="Phase-1 streamed setup requires"):
+    with pytest.raises(MemoryError, match="Streamed setup requires"):
         GAM(
             "y ~ s(x, bs='cr', k=5)",
             family="poisson",

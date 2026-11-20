@@ -7,19 +7,19 @@ import pandas as pd
 import pytest
 
 from jaxgam.data.source import ArrayRowSource
-from jaxgam.fitting.discrete_ops import (
+from jaxgam.fitting.discrete.ops import (
     discrete_diag_xvxd,
     discrete_xbd,
     discrete_xwxd,
     discrete_xwyd,
     to_device_discrete_design,
 )
-from jaxgam.formula.continuous_design import build_continuous_discrete_design
-from jaxgam.formula.continuous_setup import (
+from jaxgam.formula.discrete.continuous_design import build_continuous_discrete_design
+from jaxgam.formula.discrete.continuous_setup import (
     ContinuousDiscreteSetup,
     build_continuous_discrete_setup,
 )
-from jaxgam.formula.discrete_design import (
+from jaxgam.formula.discrete.design import (
     DiscreteDesignControl,
     DiscreteDesignUnavailable,
     TensorLookupBlock,

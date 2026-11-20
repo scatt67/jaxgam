@@ -11,10 +11,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import jaxgam.execution.working_model as working
+import jaxgam.execution.discrete.working_model as working
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.formula.continuous_setup import build_continuous_discrete_setup
+from jaxgam.formula.discrete.continuous_setup import build_continuous_discrete_setup
 from jaxgam.formula.parser import parse_formula
 from tests.helpers import _AssertCollector, check_that, r_links_pinned_openblas
 from tests.test_fitting.test_working_model import (
@@ -1008,7 +1008,7 @@ def test_source_exp_and_log_are_the_c_library_functions() -> None:
     """bgam.fitd's exp/log of sp, scale and determinants use C libm, as R does."""
     import math
 
-    from jaxgam.execution.working_model import source_exp, source_log
+    from jaxgam.execution.discrete.working_model import source_exp, source_log
 
     rng = np.random.default_rng(3)
     exponents = np.concatenate(

@@ -8,7 +8,6 @@ Validates FactorBySmooth and NumericBySmooth from jaxgam.smooths.by_variable:
 - Edge cases
 - Phase boundary guard (no JAX imports)
 
-Design doc reference: docs/design.md Section 5.7
 R source reference: R/smooth.r smoothCon() by-variable handling
 """
 

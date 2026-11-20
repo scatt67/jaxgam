@@ -10,18 +10,18 @@ import pandas as pd
 import pytest
 from scipy.optimize import OptimizeResult
 
-import jaxgam.execution.gaussian_optimizer as gaussian_optimizer_module
+import jaxgam.execution.gaussian_qr.optimizer as gaussian_optimizer_module
 from jaxgam.api import GAM, _fit_fixed_sp
 from jaxgam.control import FitControl
-from jaxgam.execution.gaussian import prepare_frozen_gaussian_qr
-from jaxgam.execution.gaussian_optimizer import (
+from jaxgam.execution.gaussian_qr.optimizer import (
     DenseGaussianQROuterProvider,
     GaussianQRIneligible,
     build_dense_gaussian_qr_provider,
     optimize_gaussian_qr_lbfgs,
     use_gaussian_qr_lbfgs,
 )
-from jaxgam.execution.reml import StreamREMLControl, mgcv_relative_convergence
+from jaxgam.execution.gaussian_qr.preparation import prepare_frozen_gaussian_qr
+from jaxgam.execution.stream.reml import StreamREMLControl, mgcv_relative_convergence
 from jaxgam.families.standard import Gaussian
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
@@ -647,7 +647,7 @@ def test_lbfgs_relative_reduction_stop_meets_mgcv_relative_test(
     result = optimize_gaussian_qr_lbfgs(fitting, provider)
     assert result.converged
     assert result.convergence_info.startswith(
-        "converged by pinned mgcv newton()'s relative test after an L-BFGS-B "
+        "converged by mgcv newton()'s relative test after an L-BFGS-B "
         "function-reduction exit: projected gradient "
     )
     assert "<= 5*conv.tol*score.scale" in result.convergence_info
@@ -712,7 +712,7 @@ def test_lbfgs_rejected_scale_completion_keeps_the_accepted_trial(
     result = optimize_gaussian_qr_lbfgs(fitting, provider)
     assert result.converged
     assert result.convergence_info.startswith(
-        "converged by pinned mgcv newton()'s relative test after an L-BFGS-B "
+        "converged by mgcv newton()'s relative test after an L-BFGS-B "
         "function-reduction exit"
     )
     assert result.convergence_info.endswith(

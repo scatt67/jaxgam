@@ -10,18 +10,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import jaxgam.execution.regular_stream as regular_controller
+import jaxgam.execution.stream.regular as regular_controller
 from jaxgam.control import FitControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.null_coefficient import NullCoefficientProjection
-from jaxgam.execution.regular_stream import (
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
+from jaxgam.execution.stream.regular import (
     _positive_signed_state,
     fit_regular_streamed_pirls,
     preflight_regular_stream_workspace,
     regular_working_scan,
 )
-from jaxgam.execution.signed_qr import solve_signed_qr
-from jaxgam.execution.stream import StreamPIRLSControl
+from jaxgam.execution.stream.signed_qr import solve_signed_qr
 from jaxgam.families.standard import Gamma, Gaussian, Poisson
 from jaxgam.fitting.data import PreparedFittingMetadata
 from jaxgam.fitting.family_execution import (

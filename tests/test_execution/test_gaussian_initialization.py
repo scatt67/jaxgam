@@ -16,8 +16,8 @@ from jaxgam.execution.efs import (
     efs_initial_log_lambda,
     efs_initial_log_scale,
 )
-from jaxgam.execution.regular_stream import fit_regular_streamed_pirls
-from jaxgam.execution.stream import StreamPIRLSControl
+from jaxgam.execution.stream.pirls import StreamPIRLSControl
+from jaxgam.execution.stream.regular import fit_regular_streamed_pirls
 from jaxgam.families.standard import Gaussian
 from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
 from jaxgam.fitting.family_execution import (

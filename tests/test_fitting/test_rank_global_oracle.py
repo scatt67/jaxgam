@@ -9,7 +9,7 @@ import pytest
 
 from jaxgam.families.standard import Gaussian
 from jaxgam.fitting.data import FittingData
-from jaxgam.fitting.rank_coordinates import jit_reduced_augmented_qr
+from jaxgam.fitting.gaussian_qr.rank_coordinates import jit_reduced_augmented_qr
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.fitting_prepare import GlobalPenaltyCoordinates
 from jaxgam.formula.parser import parse_formula

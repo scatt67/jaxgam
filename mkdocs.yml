@@ -43,7 +43,13 @@ plugins:
 markdown_extensions:
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        # Render ```mermaid blocks as diagrams (flow and UML diagrams in the
+        # architecture pages).
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
@@ -56,7 +62,27 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
+  - User guide:
+      - Choosing a route: guide/choosing_a_route.md
+      - Smoothing parameter selection: guide/smoothing_selection.md
+      - Row sources: guide/row_sources.md
+      - Streamed fitting: guide/streamed.md
+      - Discretized fitting: guide/discretized.md
+      - Operator fitting: guide/operator.md
+      - Prediction results: guide/prediction_results.md
+      - Memory and performance: guide/memory_and_performance.md
   - API Reference: api.md
+  - Architecture:
+      - Overview: architecture/index.md
+      - Lifecycle of a fit: architecture/fit_lifecycle.md
+      - Model setup: architecture/setup.md
+      - Row sources and discretization: architecture/data_sources.md
+      - The dense fit: architecture/fitting_dense.md
+      - The streamed fit: architecture/fitting_streamed.md
+      - The discretized fit: architecture/fitting_discrete.md
+      - The operator fit: architecture/fitting_operator.md
+      - Results and prediction: architecture/results_and_prediction.md
+      - Families, links and smooths: architecture/families_links_smooths.md
+      - Testing and CI: architecture/testing_and_ci.md
+      - Numerics and platform: architecture/numerics_and_platform.md
   - Citations: citations.md
-  - Design Doc: design.md
-  - R Source Map: R_SOURCE_MAP.md

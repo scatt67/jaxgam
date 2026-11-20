@@ -12,14 +12,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import jaxgam.execution.nb_reml as nb_reml_execution
-import jaxgam.execution.reml as reml_execution
+import jaxgam.execution.stream.nb_reml as nb_reml_execution
+import jaxgam.execution.stream.reml as reml_execution
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.nb_reml import (
+from jaxgam.execution.stream.nb_reml import (
     evaluate_nb_stream_reml,
     optimize_nb_stream_reml,
 )
-from jaxgam.execution.reml import StreamREMLControl
+from jaxgam.execution.stream.reml import StreamREMLControl
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.newton import _diff_score

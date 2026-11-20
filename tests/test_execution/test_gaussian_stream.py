@@ -12,23 +12,23 @@ import pandas as pd
 import pytest
 
 import jaxgam.api as api_module
-import jaxgam.execution.gaussian_optimizer as gaussian_optimizer_module
+import jaxgam.execution.gaussian_qr.optimizer as gaussian_optimizer_module
 import jaxgam.fitting.newton as newton_module
 from jaxgam import GAM, FitControl
 from jaxgam.api import _preflight_stream_workspace
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.gaussian import (
-    estimate_streamed_gaussian_qr_workspace,
-    preflight_streamed_gaussian_qr_workspace,
-)
-from jaxgam.execution.gaussian_optimizer import (
+from jaxgam.execution.gaussian_qr.optimizer import (
     build_stream_gaussian_qr_provider,
     optimize_gaussian_qr_lbfgs,
+)
+from jaxgam.execution.gaussian_qr.preparation import (
+    estimate_streamed_gaussian_qr_workspace,
+    preflight_streamed_gaussian_qr_workspace,
 )
 from jaxgam.families.standard import Gaussian
 from jaxgam.fitting.data import PreparedFittingMetadata
 from jaxgam.fitting.newton import newton_optimize
-from jaxgam.fitting.stream_kernels import coefficient_stationarity
+from jaxgam.fitting.stream.kernels import coefficient_stationarity
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.prepare import prepare_model
@@ -505,7 +505,7 @@ def test_gaussian_workspace_rejects_four_buffer_qr_peak_before_device(
         raise AssertionError("device resolution preceded Gaussian QR preflight")
 
     monkeypatch.setattr(api_module, "_resolve_device", fail_device)
-    with pytest.raises(MemoryError, match="Phase-1 streamed setup requires"):
+    with pytest.raises(MemoryError, match="Streamed setup requires"):
         GAM(
             formula,
             control=FitControl(
@@ -551,7 +551,7 @@ def test_fixed_ineligible_weights_use_ordinary_budget_before_qr_preflight() -> N
         > generic_budget
     )
 
-    with pytest.raises(MemoryError, match="Phase-1 streamed setup requires"):
+    with pytest.raises(MemoryError, match="Streamed setup requires"):
         GAM(
             formula,
             sp=[1.0],

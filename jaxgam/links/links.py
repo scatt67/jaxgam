@@ -9,8 +9,6 @@ dispatching to the appropriate backend at runtime via ``array_module()``.
 Methods use defensive clamping (``xp.maximum``, ``xp.clip``) instead of
 raising exceptions on out-of-domain inputs, matching R's ``make.link``
 behavior and preserving JAX JIT compatibility.
-
-Design doc reference: §7
 """
 
 from __future__ import annotations
@@ -164,9 +162,7 @@ class Link(ABC):
         mgcv's extended families use this ratio form (``dDeta``); links that
         an extended-family route supports override it with R's closed form.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} has no pinned extended-family g2g."
-        )
+        raise NotImplementedError(f"{type(self).__name__} has no extended-family g2g.")
 
     def initial_link_cpu(self, mu: np.ndarray) -> np.ndarray:
         """Return the strict CPU link used by the opt-in R-style start path.

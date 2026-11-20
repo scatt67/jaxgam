@@ -8,8 +8,6 @@ Covers:
 5. n_penalties property
 6. End-to-end: ModelSetup.build → FittingData.from_setup → pirls_loop
 7. Device placement
-
-Design doc reference: docs/design.md §1.3, §4.4
 """
 
 from __future__ import annotations

@@ -2,8 +2,6 @@
 
 Defines the interface that every smooth (tp, ts, cr, cs, cc, tensor)
 must implement. This module is Phase 1 (NumPy only, no JAX imports).
-
-Design doc reference: docs/design.md Section 5.1
 """
 
 from __future__ import annotations

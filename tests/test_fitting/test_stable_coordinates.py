@@ -31,7 +31,7 @@ def _close(actual, expected, tolerance) -> None:
 
 @pytest.fixture(scope="module")
 def f4_data() -> pd.DataFrame:
-    """acceptance_cases.md Appendix A, F4: a te whose REML log sp spread ~20."""
+    """Acceptance finding F4: a te whose REML log sp spread ~20."""
     rng = np.random.default_rng(4)
     n = 1000
     data = pd.DataFrame({"x0": rng.uniform(0, 1, n), "x1": rng.uniform(0, 1, n)})

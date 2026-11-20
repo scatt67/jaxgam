@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from jaxgam.formula.working_penalties import (
+from jaxgam.formula.discrete.working_penalties import (
     _source_project_penalty,
     build_working_penalty_blocks,
 )

@@ -8,11 +8,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import jaxgam.execution.discrete as execution
+import jaxgam.execution.discrete.gaussian as execution
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.discretize import DiscretizationBudget
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.formula.continuous_setup import (
+from jaxgam.formula.discrete.continuous_setup import (
     ContinuousDiscreteSetup,
     build_continuous_discrete_setup,
 )
@@ -302,6 +302,8 @@ def test_public_policy_rejects_false_metadata(kwargs, exception):
     ],
 )
 def test_bridge_invalid_inputs_reject_before_r_process(monkeypatch, kwargs):
+    # The bridge itself needs rpy2 to be constructed, whatever R is installed.
+    pytest.importorskip("rpy2")
     monkeypatch.setattr(RBridge, "check_versions", staticmethod(lambda: (True, "")))
 
     def reject_process(*_args, **_kwargs):

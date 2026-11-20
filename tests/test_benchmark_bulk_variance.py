@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jaxgam.execution.operator_bulk_variance import equivalent_normal_deviates
+from jaxgam.execution.operator.bulk_variance import equivalent_normal_deviates
 from jaxgam.results import BULK_CALIBRATION_MAX_STANDARD_ERRORS
 from scripts import benchmark_bulk_variance
 

@@ -7,8 +7,11 @@ import math
 import numpy as np
 import pytest
 
-from jaxgam.execution.regular_working_model import source_sum
-from jaxgam.execution.working_theta import ThetaObjective, source_estimate_theta
+from jaxgam.execution.discrete.regular_working_model import source_sum
+from jaxgam.execution.discrete.working_theta import (
+    ThetaObjective,
+    source_estimate_theta,
+)
 from jaxgam.families.negative_binomial import NegativeBinomial
 from tests.helpers import _AssertCollector
 from tests.tolerances import STRICT

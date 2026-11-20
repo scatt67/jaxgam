@@ -910,7 +910,7 @@ def range_grid_index_columns(
         )
         if constant_metrics:
             raise ValueError(
-                "pinned compress.df produces an undefined range grid for "
+                "mgcv's compress.df produces an undefined range grid for "
                 f"constant metric column(s) {constant_metrics} when joint "
                 "rounding is required"
             )

@@ -4,7 +4,7 @@ Pinned mgcv's ``gdiPK`` selects an identifiable coordinate minor only after
 moving public constrained penalties into the global ``U1 %*% Qs`` basis.
 This module contains that NumPy/SciPy setup operation.  It deliberately has
 no JAX dependency; the corresponding device solve lives in
-``jaxgam.fitting.rank_coordinates``.
+``jaxgam.fitting.gaussian_qr.rank_coordinates``.
 """
 
 from __future__ import annotations

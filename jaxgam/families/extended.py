@@ -7,8 +7,6 @@ must be estimated alongside smoothing parameters via Newton.
 The theta interface uses arrays of shape ``(n_theta,)`` throughout, so
 families with multiple extra parameters (e.g. ``scat`` with df + scale)
 work without interface changes.
-
-Design doc reference: Section 7.1
 """
 
 from __future__ import annotations

@@ -15,7 +15,12 @@ PREDICTION_POLICIES = ("continuous_frozen_basis", "mgcv_predict_bamd")
 
 @dataclass(frozen=True)
 class EFSControl:
-    """Pinned dense Fellner--Schall controller limits and tolerances."""
+    """Limits and tolerances of the extended Fellner--Schall optimizer.
+
+    Read by ``optimizer="efs"`` on the dense, streamed and operator routes.
+    The numerical defaults are those of mgcv's ``gam.control`` (``maxit=200``,
+    ``epsilon=1e-7``, ``efs.lspmax=15``, ``efs.tol=0.1``).
+    """
 
     outer_limit: int = 200
     log_lambda_max: float = 15.0
@@ -139,7 +144,11 @@ class ContinuousDiscretizationControl:
 
 @dataclass(frozen=True)
 class OperatorControl:
-    """Explicit limits for the fixed-sp observed-system operator route."""
+    """Explicit limits for the operator route.
+
+    They bound its coefficient fit and conjugate-gradient solves, with fixed
+    smoothing parameters or under ``optimizer="efs"``.
+    """
 
     max_modest_coefficients: int = 64
     max_iterations: int = 200
@@ -173,11 +182,15 @@ class OperatorControl:
 
 @dataclass(frozen=True)
 class FitControl:
-    """Explicit resource policy for prediction retention and batching.
+    """Execution route and explicit resource policy for a fit.
+
+    ``execution`` selects the route; the other fields set batching, memory
+    budgets and what a prediction result retains.
 
     ``uncertainty='none'`` is deliberately the default for prediction-only
-    results.  It retains no covariance.  ``'fisher'`` retains a Cholesky
-    factor for exact requested-row standard errors; ``'covariance'`` also
+    results.  It retains no covariance.  ``'fisher'`` retains a triangular
+    factor (a Cholesky factor, or a pivoted QR factor on the QR-solver
+    routes) for exact requested-row standard errors; ``'covariance'`` also
     materializes the public dense covariance, subject to ``memory_budget_bytes``.
 
     The dense fitting backend is not memory-budgeted: these limits apply to

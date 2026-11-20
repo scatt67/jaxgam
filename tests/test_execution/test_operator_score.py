@@ -5,12 +5,12 @@ import math
 import numpy as np
 import pytest
 
-from jaxgam.execution.operator_logdet import (
+from jaxgam.execution.operator.logdet import (
     OperatorLogDetDiagnostics,
     OperatorLogDetEstimate,
 )
-from jaxgam.execution.operator_penalty_determinant import OperatorPenaltyLogDet
-from jaxgam.execution.operator_score import (
+from jaxgam.execution.operator.penalty_determinant import OperatorPenaltyLogDet
+from jaxgam.execution.operator.score import (
     OperatorScoreTerms,
     assemble_operator_score,
     compare_operator_scores,

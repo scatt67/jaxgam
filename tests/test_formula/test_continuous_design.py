@@ -12,12 +12,12 @@ import pytest
 
 from jaxgam.data.discretize import DiscretizationBudget, ExactIndexTable
 from jaxgam.data.source import ArrayRowSource
-from jaxgam.formula.continuous_design import build_continuous_discrete_design
-from jaxgam.formula.continuous_setup import (
+from jaxgam.formula.discrete.continuous_design import build_continuous_discrete_design
+from jaxgam.formula.discrete.continuous_setup import (
     ContinuousDiscreteSetup,
     build_continuous_discrete_setup,
 )
-from jaxgam.formula.discrete_design import (
+from jaxgam.formula.discrete.design import (
     DiscreteDesignControl,
     DiscreteDesignUnavailable,
     LookupBlock,
@@ -331,7 +331,7 @@ root = Path({str(root)!r})
 package = types.ModuleType('jaxgam')
 package.__path__ = [str(root)]
 sys.modules['jaxgam'] = package
-import jaxgam.formula.continuous_design
+import jaxgam.formula.discrete.continuous_design
 assert not any(name == 'jax' or name.startswith('jax.') for name in sys.modules)
 """
     completed = subprocess.run(
@@ -341,7 +341,7 @@ assert not any(name == 'jax' or name.startswith('jax.') for name in sys.modules)
 
 
 def test_one_margin_by_blocks_run_all_device_actions() -> None:
-    from jaxgam.fitting.discrete_ops import (
+    from jaxgam.fitting.discrete.ops import (
         discrete_xb_transpose,
         discrete_xbd,
         discrete_xwxd,
@@ -384,7 +384,7 @@ def test_one_margin_by_blocks_run_all_device_actions() -> None:
 
 
 def test_fixed_sp_gaussian_solution_matches_identical_explicit_design() -> None:
-    from jaxgam.fitting.discrete_ops import (
+    from jaxgam.fitting.discrete.ops import (
         discrete_xwxd,
         discrete_xwyd,
         to_device_discrete_design,

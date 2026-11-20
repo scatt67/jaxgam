@@ -12,7 +12,6 @@ and CyclicCubicSmooth (cc) from jaxgam.smooths.cubic:
 - Phase boundary guard (no JAX imports)
 - Parameterized tests
 
-Design doc reference: docs/design.md Section 5.3
 R source reference: R/smooth.r smooth.construct.cr.smooth.spec()
 """
 

@@ -8,6 +8,10 @@ Key entry points:
 - ``REMLCriterion``: Criterion wrapper for the Newton loop.
 - ``JointREMLCriterion``: Joint (log_lambda, log_phi) criterion wrapper for
   unknown-scale families.
+
+Layout: the modules at this level are the dense fit and the kernels every
+route shares. ``stream``, ``discrete``, ``operator`` and ``gaussian_qr`` each
+hold the kernels of one route.
 """
 
 from jaxgam.fitting.data import FittingData

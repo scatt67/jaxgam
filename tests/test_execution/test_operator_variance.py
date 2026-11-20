@@ -5,12 +5,12 @@ import pandas as pd
 import pytest
 
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.operator import FrozenScanSystem, PCGControl
-from jaxgam.execution.operator_variance import (
+from jaxgam.execution.operator.system import FrozenScanSystem, PCGControl
+from jaxgam.execution.operator.variance import (
     OperatorVarianceSolveError,
     SelectedOperatorVariance,
 )
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )

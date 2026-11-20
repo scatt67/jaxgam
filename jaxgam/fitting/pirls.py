@@ -22,7 +22,6 @@ to the pure-Fisher path.
 The loop is implemented with ``jax.lax.while_loop`` so the entire
 iteration compiles to a single fused XLA kernel when JIT-compiled.
 
-Design doc reference: Section 7.2
 R source reference: gam.fit3() lines 296-468, gam.fit4() lines 367-564
 """
 
@@ -922,7 +921,7 @@ def _pirls_loop_jit(
 
     All array inputs must be JAX arrays on the target device.
     Use ``jax_utils.to_jax()`` to transfer NumPy arrays before
-    calling this function (design.md §1.3 Phase 1→2 boundary).
+    calling this function (the Phase 1→2 boundary).
 
     Parameters
     ----------
@@ -1724,7 +1723,7 @@ def efs_theta_pirls_loop(
         raise ValueError(f"EFS theta PIRLS requires {mode} NB theta")
     if not isinstance(family.link, (LogLink, IdentityLink, SqrtLink)):
         raise NotImplementedError(
-            "EFS theta PIRLS supports the pinned NB links log, identity, and sqrt"
+            "EFS theta PIRLS supports the NB links log, identity, and sqrt"
         )
     if isinstance(max_y, bool) or not isinstance(max_y, Integral) or max_y < 0:
         raise ValueError("EFS theta PIRLS max_y must be an integer >= 0")

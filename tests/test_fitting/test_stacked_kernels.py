@@ -20,11 +20,12 @@ import pandas as pd
 import pytest
 
 from jaxgam.data.source import ArrayRowSource
-from jaxgam.execution.working_model import factor_working_model
+from jaxgam.execution.discrete.working_model import factor_working_model
 from jaxgam.families import Poisson
-from jaxgam.fitting import discrete_working, penalty_ops
-from jaxgam.fitting import working_model as wm
-from jaxgam.fitting.discrete_ops import (
+from jaxgam.fitting import penalty_ops
+from jaxgam.fitting.discrete import working as discrete_working
+from jaxgam.fitting.discrete import working_model as wm
+from jaxgam.fitting.discrete.ops import (
     DeviceDiscreteDesign,
     DeviceLookupBlock,
     DeviceTensorLookupBlock,
@@ -40,9 +41,9 @@ from jaxgam.fitting.discrete_ops import (
     pair_reduction_plan,
     to_device_discrete_design,
 )
-from jaxgam.formula.continuous_design import build_continuous_discrete_design
-from jaxgam.formula.continuous_setup import build_continuous_discrete_setup
-from jaxgam.formula.discrete_design import (
+from jaxgam.formula.discrete.continuous_design import build_continuous_discrete_design
+from jaxgam.formula.discrete.continuous_setup import build_continuous_discrete_setup
+from jaxgam.formula.discrete.design import (
     DiscreteDesignControl,
     DiscreteDesignUnavailable,
 )

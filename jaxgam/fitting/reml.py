@@ -21,7 +21,6 @@ flows through the AD trace (through S_lambda construction and log-det
 computations). The end-to-end differentiable score (which does differentiate
 through PIRLS via ``custom_jvp``) is in ``newton.py``.
 
-Design doc reference: Section 4.3, 4.4
 R source reference: gam.fit3.r lines 612-640 (general Laplace REML)
 
 R's exact formula (with gamma=1)::

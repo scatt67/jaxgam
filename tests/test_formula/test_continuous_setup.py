@@ -10,16 +10,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import jaxgam.formula.continuous_setup as continuous_setup
+import jaxgam.formula.discrete.continuous_setup as continuous_setup
 from jaxgam.data.continuous_frame import CompactSetupFrame, build_compact_setup_frame
 from jaxgam.data.discretize import DiscretizationBudget
 from jaxgam.data.source import ArrayRowSource
-from jaxgam.formula.continuous_setup import (
+from jaxgam.formula.design import ModelSetup
+from jaxgam.formula.discrete.continuous_setup import (
     ContinuousDiscreteSetup,
     ContinuousSetupUnavailable,
     build_continuous_discrete_setup,
 )
-from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.predict_matrix import build_predict_spec
 
@@ -247,7 +247,7 @@ root = Path({str(root)!r})
 package = types.ModuleType('jaxgam')
 package.__path__ = [str(root)]
 sys.modules['jaxgam'] = package
-import jaxgam.formula.continuous_setup
+import jaxgam.formula.discrete.continuous_setup
 assert not any(name == 'jax' or name.startswith('jax.') for name in sys.modules)
 """
     completed = subprocess.run(

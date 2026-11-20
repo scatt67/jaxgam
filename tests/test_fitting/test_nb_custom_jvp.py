@@ -10,8 +10,6 @@ Tests:
 - AD Hessian blocks match FD of gradient
 - dbeta/d(log_theta) via IFT matches FD PIRLS perturbation
 - Fixed-theta NB (n_theta=0) uses the standard derivative path
-
-Design doc reference: Section 6.2-6.4
 """
 
 from __future__ import annotations

@@ -10,7 +10,6 @@ construction library is used.
 
 This module is Phase 1 (NumPy only, no JAX imports).
 
-Design doc reference: docs/design.md Section 5.3
 R source reference: R/smooth.r smooth.construct.cr.smooth.spec()
 """
 

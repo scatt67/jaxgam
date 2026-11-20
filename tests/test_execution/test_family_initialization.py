@@ -10,7 +10,9 @@ import numpy as np
 import pytest
 
 from jaxgam.data.source import ArrayRowSource
-from jaxgam.execution.family_initialization import select_initial_working_state_cpu
+from jaxgam.execution.stream.family_initialization import (
+    select_initial_working_state_cpu,
+)
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.family_execution import (
@@ -343,7 +345,7 @@ def test_dynamic_theta_nb_initial_working_system_is_deferred_to_pr75() -> None:
     """Do not combine static NB variance with an explicit trial-theta leaf."""
     family = NegativeBinomial(theta=2.0, fixed=False)
     context = FamilyExecutionContext.from_family(family)
-    with pytest.raises(NotImplementedError, match=r"PR7\.5"):
+    with pytest.raises(NotImplementedError, match="dynamic theta are not supported"):
         batch_initial_working_quantities(
             jnp.asarray([1.0]),
             jnp.ones(1),

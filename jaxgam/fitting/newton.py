@@ -10,12 +10,11 @@ The algorithm follows R's ``newton()`` (gam.fit3.r lines
 1290-1719): eigenvalue-safe Newton direction with step-halving
 line search and steepest-descent fallback for indefinite Hessians.
 
-Design doc reference: Section 8.2 (Outer Newton with Damped Hessian)
 R source reference: gam.fit3.r lines 1290-1719
 
 Notes
 -----
-Key R-matching design choices (see docs/experiments.md):
+Key R-matching design choices:
 
 - ``conv_tol = 1e-6`` (R's ``gam.control()$newton$conv.tol``)
 - Gradient convergence uses ``5 * conv_tol`` factor (R line 1652)
@@ -314,7 +313,7 @@ def _diff_score(
     (``joint_theta=True``), 3 primals: ``(S_lambda, log_theta, beta_warm)``
     where ``log_theta`` is a traced JAX value enabling ``jax.grad`` and
     ``jax.hessian`` to capture all theta derivatives via the implicit
-    function theorem. See design.md Section 6.2-6.4.
+    function theorem.
 
     Parameters
     ----------
@@ -403,7 +402,7 @@ def _diff_score(
     if family.n_theta > 0 and joint_theta:
         # --- Extended family path: 3 primals (S_lambda, log_theta, beta) ---
         # Theta enters the IFT via d²D/(dη dθ) and the joint JVPs for
-        # deviance and observed weights. See design.md Section 6.2.
+        # deviance and observed weights.
         #
         # PIRLS uses observed weights ``w = 0.5 * d²D/dη²`` (matching
         # R's gam.fit4), so the custom_jvp must differentiate through
@@ -1172,8 +1171,8 @@ class NewtonOptimizer:
     ) -> None:
         if method != "REML":
             raise ValueError(
-                f"Unknown method: {method!r}. Only 'REML' is supported in v1.0 "
-                "(ML is not implemented — see jaxgam.api._check_scope_guards)."
+                f"Unknown method: {method!r}. Only 'REML' is supported "
+                "(ML is not implemented)."
             )
 
         self._fd = fd

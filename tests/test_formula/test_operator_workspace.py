@@ -9,13 +9,13 @@ import pytest
 from jaxgam import GAMPredictor
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.families.standard import Gaussian
-from jaxgam.formula import operator_radial
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator import radial as operator_radial
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     _CheckedSource,
     prepare_operator_model,
 )
-from jaxgam.formula.operator_workspace import smooth_evaluator_workspace_bound
+from jaxgam.formula.operator.workspace import smooth_evaluator_workspace_bound
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.inference.operator_geometry import OperatorPredictionGeometry

@@ -8,11 +8,11 @@ import pytest
 
 from jaxgam.control import EFSControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.efs_stream_provider import (
+from jaxgam.execution.stream.efs_provider import (
     NBStreamEFSProvider,
     RegularStreamEFSProvider,
 )
-from jaxgam.execution.efs_stream_start import prepare_stream_efs_start
+from jaxgam.execution.stream.efs_start import prepare_stream_efs_start
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.fitting_prepare import initial_log_sp_from_diagonal
@@ -193,7 +193,7 @@ def test_empty_batches_are_neutral_and_zero_prior_rows_remain_in_null_projection
 
 
 def test_startup_budget_rejects_before_source_or_qr(monkeypatch):
-    import jaxgam.execution.efs_stream_start as module
+    import jaxgam.execution.stream.efs_start as module
 
     stream, family = _fixture(smooth=True)
     provider = replace(_provider(stream, family), maximum_bytes=1)
@@ -210,7 +210,7 @@ def test_startup_budget_rejects_before_source_or_qr(monkeypatch):
 
 def test_startup_bound_covers_shared_balancing_dense_tuple_for_many_local_penalties():
     """Exercise actual expansions, rather than assume they are references."""
-    import jaxgam.execution.efs_stream_start as module
+    import jaxgam.execution.stream.efs_start as module
     from jaxgam.penalties.structure import DiagonalPenalty
 
     stream, _family = _fixture(smooth=True)
@@ -289,7 +289,7 @@ def test_nb_nonnegative_observed_start_weights_match_pinned_source(link):
 @pytest.mark.parametrize("kind", ["integer", "fractional", "finite_tail"])
 def test_nb_raw_null_deviance_uses_source_pmax_and_finite_tail_ratio(kind):
     """Value layers do not enable a fractional-below-one coefficient route."""
-    import jaxgam.execution.efs_stream_start as module
+    import jaxgam.execution.stream.efs_start as module
 
     bridge = RBridge(mode="rpy2")
     y = np.array([0.0, 1.0, 4.0])

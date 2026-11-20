@@ -2,8 +2,6 @@
 
 Provides ``initialize_beta`` which computes initial coefficient estimates
 from the family's ``initialize(y, wt)`` → link → least-squares projection.
-
-Design doc reference: Section 7.2 (initialization step)
 """
 
 from __future__ import annotations

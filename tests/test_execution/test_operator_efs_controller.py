@@ -10,18 +10,18 @@ import pytest
 
 from jaxgam.control import EFSControl, OperatorControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.operator_efs_controller import (
+from jaxgam.execution.operator.efs_controller import (
     SourceOperatorEFSFitProvider,
     _score_window_certified,
     run_operator_efs_gaussian_scale,
     run_operator_efs_known_scale,
 )
-from jaxgam.execution.operator_logdet import OperatorLogDetControl
-from jaxgam.execution.operator_score import OperatorScoreEstimate
+from jaxgam.execution.operator.logdet import OperatorLogDetControl
+from jaxgam.execution.operator.score import OperatorScoreEstimate
 from jaxgam.families.standard import Gaussian, Poisson
-from jaxgam.fitting.efs_operator_score import operator_reml_score
+from jaxgam.fitting.operator.efs_score import operator_reml_score
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )

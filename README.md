@@ -23,32 +23,18 @@ jaxgam uses [jax](https://github.com/google/jax) for JIT-compiled fitting
 with automatic differentiation through the PIRLS inner loop and Newton
 outer loop, and [numba](https://numba.pydata.org/) eager compilation for TPRS/tensor basis construction and p-value computation. The reason for doing this is because `mgcv` has custom C code for performance critical portions of the code.
 
+Beyond the in-memory `gam()` fit, jaxgam also ports mgcv's discretized
+large-data fit (`bam(discrete=TRUE)`) and its extended Fellner-Schall
+optimizer, and adds streamed and matrix-free routes for data, or random
+effects, that do not fit in memory. See [Fitting routes](#fitting-routes).
+
 ## AI / Agentic development transparency note
 
-This project was built heavily with [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+This project was built heavily with agentic development.
 I wanted to learn the tool while porting my favorite R package, so this
 was the excuse. It's a side project for fun and learning, but I tried to
 test thoroughly against R's reference output so it might actually be useful
 to someone.
-
-My strategy was to first create an in depth [design document](docs/design.md) which I went back and forth with claude and third party AI reviewers on to flesh out the design and scope. I then used claude to create an [implementation plan](docs/IMPLEMENTATION_PLAN.md) from the design doc.
-
-What I found helpful was including a local mgcv source and an [R reference map](docs/R_SOURCE_MAP.md) for agents to utilize when porting certain functionality. While others have used skills, I just used an [AGENTS.md](AGENTS.md) file with certain instructions. Though I did have to constantly remind the agent to check it...
-
-Some issues I found with claude/agents, 1. I had to review the tests closely, they tried to cheat by changing the tolerances for `np.assert*`, 2. When they read a lot of R code they don't adhere to idiomatic python (which I thought was personally interesting). I used ruff in our pre-commit to try and catch some of this, but whatever ruff or I didn't catch I add an independent review agent go through later and check for PEP violations. 3. Even with AGENTS.md it still would forget to use tooling provided in the repo from time to time (e.g. `uv`), maybe I should have setup one of those skills ?  
-
-Overall, this was fun I learned a lot about agents/claude code, but I also learned more about mgcv. While I thought I knew a decent amount, and I have perused the source code and docs many times in the past there was still implementations I never knew of (Some custom C implementations I didn't know of !). Is this a production ready package, most likely not... but maybe it can be useful, and a demonstration of want agentic development can do. 
-
-### AI development knowledge sharing
-
-An interesting workflow that I learned to use and worked well (which in hindsight is obvious) for very hard problems is to setup an experiment tracking document. What I found was that even though claude code had a `MEMORY.md` it still can get circular when it comes to solving hard problems. My presumption is that it loses context. 
-
-Example: 
-
-For the Newton optimzer used in the smoothing parameter outer loop had many convergence problems as we missed many conventions used by mgcv in our design document setup, e.g. there is a C implementation `gdi.c` which has many optimization helpers that I didn't know of, and we weren't fully differentiating through the PIRLs loop (treating it as a constant, linear convergence). When going back and forth with claude code it was just spinning in circles, even if I restarted the session to clear context and rely on it's "memory" the result was the same.
-
-The break through came when we setup an experiment document to track past experiments in improving the convergence. On each prompt to claude I refered this document, and had it update it after each go at solving the convergence issue. Within a very few iterations claude was able to solve the problem for most families (later we fixed the Gaussian). For the benefit of others (and transparency) I included this [experiments](docs/experiments.md) document! The end solution was a `custom_jvp` for PIRLS inner loop which is obvious in hindsight. 
-
 
 ## Installation
 
@@ -88,12 +74,15 @@ Set `JAXGAM_ALLOW_ACCELERATE=1` to silence the warning.
 
 ## Quickstart
 
-`GAM.fit()` has two explicit result modes:
+`GAM.fit()` has three explicit result modes:
 
 - `result="full"` (the default) returns `GAMResults` for prediction,
   `summary()`, `plot()`, and in-sample state.
 - `result="inference"` returns a lean `GAMInferenceResult` for new-data
   prediction plus lightweight diagnostics, without dense training state.
+- `result="prediction"` returns a `GAMPredictionResult` that only predicts on
+  new data and keeps no training rows. The streamed, discretized and operator
+  routes return this mode (see [Fitting routes](#fitting-routes)).
 
 ```python
 import numpy as np
@@ -141,9 +130,11 @@ all families, smooth types, and post-estimation tools.
 ### Families
 
 Gaussian, Binomial, Poisson, Gamma, and Negative Binomial - each with
-its default link and REML smoothing parameter selection. The Negative
-Binomial is an extended family with an estimated dispersion parameter
-(theta).
+REML smoothing parameter selection. Each has a default link; other links
+are set through the family class, for example `Gamma(link="log")` or
+`Binomial(link="probit")`. The Negative Binomial is an extended family
+whose dispersion parameter (theta) is estimated by default and can be
+fixed.
 
 ### Smooth types
 
@@ -155,7 +146,7 @@ Binomial is an extended family with an estimated dispersion parameter
 | `s(x, bs='cs')` | Cubic spline with shrinkage |
 | `s(x, bs='cc')` | Cyclic cubic spline |
 | `s(x, z, bs='gp')` | Low-rank Gaussian process smooth |
-| `s(g, bs='re')` | Dense random effect smooth |
+| `s(g, bs='re')` | Random effect smooth (dense by default; matrix-free on the operator route) |
 | `te(x1, x2)` | Tensor product smooth |
 | `ti(x1, x2)` | Tensor interaction (no main effects) |
 | `s(x, by=fac)` | Factor-by smooth (separate curve per level) |
@@ -166,25 +157,66 @@ Binomial is an extended family with an estimated dispersion parameter
 - `summary()` - parametric and smooth term significance tests
 - `plot()` - 1D smooth curves with SE bands, 2D contour plots, rug marks
 
+### Fitting routes
+
+The default fit is dense: the model matrix is held in memory and smoothing
+parameters are chosen by exact REML, as in `gam(method="REML")`. The other
+routes are opt-in, through `optimizer=` or a `FitControl`:
+
+| Route | Select with | What it does |
+|---|---|---|
+| Dense (default) | nothing | Exact REML by Newton's method, in memory. |
+| Fellner-Schall | `optimizer="efs"` | Extended Fellner-Schall smoothing parameter updates, as in `gam(optimizer="efs")`. |
+| Gaussian QR | `FitControl(gaussian_compression=True)` | Gaussian identity-link models: the rows are reduced once by QR, and REML then works on the reduced system. |
+| Streamed | `FitControl(execution="stream")` | Reads the data in batches from a replayable row source, so the model matrix is never held in memory. Fixed smoothing parameters, exact REML or Fellner-Schall. Accepts cubic regression splines (`cr`, `cs`) of one variable and numeric parametric terms. |
+| Discretized | `FitControl(execution="discrete")` | The compact discretized design and performance iteration of `bam(discrete=TRUE)`. |
+| Operator | `FitControl(execution="operator", linear_solver="pcg")` | Matrix-free conjugate gradients for random effects with too many levels for a dense coefficient system. Fixed smoothing parameters or Fellner-Schall. |
+
+The streamed, discretized and operator routes take a row source
+(`DataFrameRowSource`, `ArrayRowSource` or `MemmapRowSource` from
+`jaxgam.data`) instead of a DataFrame, and return `result="prediction"`.
+The discretized route is a different estimator from the dense one, as `bam`
+is from `gam`. Each route supports a subset of the families, links and
+smooths; the [API reference](docs/api.md) says what each accepts and where
+it stops.
+
+```python
+from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
+from jaxgam.data import DataFrameRowSource
+
+control = FitControl(
+    execution="discrete",
+    smoothing_strategy="working_model_reml",
+    discretization=ContinuousDiscretizationControl(),
+)
+source = DataFrameRowSource(data, response="y")
+fit = GAM("y ~ s(x, k=10, bs='cr')", control=control).fit(
+    source, result="prediction"
+)
+predictions = fit.predict(newdata)
+```
+
 ## v1.0 limitations
 
 These are deliberate scope boundaries, not bugs:
 
 1. **No sparse solver.** Models with > ~5,000 basis functions will hit the
    dense memory ceiling. Factor-by with many levels or large tensor products
-   are most affected.
+   are most affected. Random effects with very many levels can use the
+   matrix-free operator route instead.
 2. **Five families only.** Tweedie, Beta, and other extended families
    beyond Negative Binomial are not yet available.
-3. **Dense design matrix must fit in memory.** Datasets with > ~10M rows
-   require chunked processing, which is not implemented.
+3. **The default route holds the design matrix in memory.** For data
+   that does not fit, use the streamed or discretized route (see
+   [Fitting routes](#fitting-routes)). Those routes return prediction
+   results only: no `summary()` or `plot()`.
 4. **No factor-smooth interactions.** `bs="fs"` requires sparse linear
    algebra and is not implemented. Simple dense random effects
    (`bs="re"`, including random slopes) *are* supported — see the
    quickstart.
 5. **No GAMM.** Correlated random effects (`gamm()`) are not supported.
-
-See the [design document](docs/design.md) Section 1.2 for details on what
-is planned for v1.1+.
+6. **REML only.** `method="ML"` and GCV/UBRE smoothness selection are not
+   available.
 
 ## Performance
 
@@ -322,7 +354,7 @@ use, but the compiled code is cached to disk and reused across sessions.
 
 ![Cold-start speedup vs dataset size](docs/img/speedup_vs_n.png)
 
-The crossover where even a cold jaxgam fit beats `gam(REML)` is around n=100,000. The `bam(fREML)` wins in all n as it was purpose built for fitting very large data! Many people don't associate `mgcv` for large scale training, but if this benchmark shows anything is that it is certainly up for the task!
+The crossover where even a cold jaxgam fit beats `gam(REML)` is around n=100,000. The `bam(fREML)` wins in all n as it was purpose built for fitting very large data! Many people don't associate `mgcv` for large scale training, but if this benchmark shows anything is that it is certainly up for the task! (That comparison is with jaxgam's dense route; its discretized route is compared with `bam` [below](#large-data-the-discretized-route-against-bamdiscretetrue).)
 
 ### High-dimensional models
 
@@ -330,13 +362,15 @@ For models with many basis functions (k=100-500), jaxgam's XLA-compiled
 dense linear algebra outperforms R `gam(REML)` even on the very first
 cold-start fit. We also benchmark against R's `bam(fREML)` with 8
 threads, which was purpose-built for large datasets and is very fast at
-high k. A `bam(fREML)` port is on the roadmap.
+high k. jaxgam's counterpart of `bam(discrete=TRUE)` is the discretized
+route, benchmarked in the next section.
 
 ![jaxgam vs R at large p](docs/img/large_p_results.png)
 
-Note: jaxgam currently implements `gam(REML)` only. The benchmarks above
-compare against both R's `gam(REML)` (apples-to-apples) and `bam(fREML)`
-(to show what mgcv can do with its large data optimizer!).
+Note: the benchmarks above use jaxgam's default dense route, which
+implements `gam(REML)`. They compare against both R's `gam(REML)`
+(apples-to-apples) and `bam(fREML)` (to show what mgcv can do with its large
+data optimizer!). The next section compares like with like for `bam`.
 
 ### Large data: the discretized route against `bam(discrete=TRUE)`
 
@@ -344,7 +378,7 @@ compare against both R's `gam(REML)` (apples-to-apples) and `bam(fREML)`
 design as `mgcv::bam(discrete=TRUE)` and, with
 `smoothing_strategy="working_model_reml"`, selects the smoothing
 parameters by the same performance iteration (see
-[Discrete execution](docs/api.md#discrete-execution)). The table times
+[Discretized route](docs/api.md#discretized-route)). The table times
 whole fits by both on the same generated data, on one laptop. Ratios
 follow the tables above: R time divided by jaxgam time, so above 1 means
 jaxgam was faster. `cold/R` compares the two first calls and `warm/R`
@@ -429,8 +463,11 @@ indicative.
 - You don't care about using python or R you just care about the best tool for the job, or you can use R in your production environement (R is a great tool) !
 - You need one-shot fits on small data (n < 100,000) and cold-start
   latency matters
-- You can use `bam(fREML)` for very large datasets, or features beyond
-  v1.0 scope (sparse solvers, Tweedie/Beta and other extended families,
+- You fit very large datasets and can give `bam` several threads
+  (jaxgam's discretized route was only compared with single-threaded
+  `bam`, see above)
+- You need features beyond v1.0 scope (sparse solvers, ML or GCV
+  smoothness selection, Tweedie/Beta and other extended families,
   factor-smooth interactions)
 
 In most cases you probably should just use the original `mgcv` in R it's very robust and efficient! If you are a pure python user, or your tech stack only supports python maybe jaxgam can be useful.
@@ -458,6 +495,10 @@ value-by-value:
   validated against R's `summary.gam()`
 - **Predictions and standard errors** - `predict()` output compared
   against R's `predict.gam()` on both training and new data
+
+The other fitting routes are tested against the same pinned R: streamed,
+Fellner-Schall and operator fits against `gam`, and the discretized route
+against `bam(discrete=TRUE)`.
 
 R comparison tests run inside a Docker container with pinned R 4.5.2 +
 mgcv 1.9-3 to ensure reproducibility. Tests are skipped automatically
@@ -496,6 +537,14 @@ cite the relevant mgcv papers:
 - **GAM method (REML/ML estimation)** -- Wood SN (2011). "Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models." *Journal of the Royal Statistical Society (B)*, 73(1), 3--36. [doi:10.1111/j.1467-9868.2010.00749.x](https://doi.org/10.1111/j.1467-9868.2010.00749.x)
 
 - **Beyond exponential family** -- Wood SN, Pya N, Säfken B (2016). "Smoothing parameter and model selection for general smooth models (with discussion)." *Journal of the American Statistical Association*, 111, 1548--1575. [doi:10.1080/01621459.2016.1180986](https://doi.org/10.1080/01621459.2016.1180986)
+
+- **Large datasets and discretized covariates (`bam`)** -- Wood SN, Goude Y, Shaw S (2015). "Generalized additive models for large datasets." *Journal of the Royal Statistical Society (C)*, 64(1), 139--155. [doi:10.1111/rssc.12068](https://doi.org/10.1111/rssc.12068)
+
+- Wood SN, Li Z, Shaddick G, Augustin NH (2017). "Generalized additive models for gigadata: modelling the UK black smoke network daily data." *Journal of the American Statistical Association*, 112(519), 1199--1210. [doi:10.1080/01621459.2016.1195744](https://doi.org/10.1080/01621459.2016.1195744)
+
+- Li Z, Wood SN (2020). "Faster model matrix crossproducts for large generalized linear models with discretized covariates." *Statistics and Computing*, 30, 19--25. [doi:10.1007/s11222-019-09864-2](https://doi.org/10.1007/s11222-019-09864-2)
+
+- **Fellner-Schall smoothing parameter optimization** -- Wood SN, Fasiolo M (2017). "A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models." *Biometrics*, 73(4), 1071--1081. [doi:10.1111/biom.12666](https://doi.org/10.1111/biom.12666)
 
 - **GCV-based model method and basics of GAMM** -- Wood SN (2004). "Stable and efficient multiple smoothing parameter estimation for generalized additive models." *Journal of the American Statistical Association*, 99(467), 673--686. [doi:10.1198/016214504000000980](https://doi.org/10.1198/016214504000000980)
 

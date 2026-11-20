@@ -8,7 +8,6 @@ Validates TPRSSmooth and TPRSShrinkageSmooth from jaxgam.smooths.tprs:
 - Edge cases
 - Phase boundary guard (no JAX imports)
 
-Design doc reference: docs/design.md Section 5.2
 R source reference: R/smooth.r smooth.construct.tp.smooth.spec()
 """
 

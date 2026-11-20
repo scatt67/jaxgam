@@ -10,7 +10,7 @@ from jaxgam import GAM, FitControl, GAMPredictionResult, OperatorControl
 from jaxgam.data.source import ArrayRowSource, DataFrameRowSource
 from jaxgam.families.standard import Gaussian
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )
@@ -105,8 +105,13 @@ def test_public_operator_result_shared_prediction_offsets_pickle_and_lineage(
             owner.predict(frame, offset=np.full(len(frame), np.nan))
         with pytest.raises(ValueError, match="pred_type"):
             owner.predict(frame, pred_type="invalid")
-        with pytest.raises(RuntimeError, match="uncertainty"):
+        # The operator route keeps no Fisher factor, and refuses the
+        # FitControl.uncertainty settings that would: the error must point at
+        # what does exist, not at those settings.
+        with pytest.raises(RuntimeError, match="operator route") as refused:
             owner.predict(frame, se_fit=True)
+        assert "bulk_link_variance" in str(refused.value)
+        assert "FitControl(uncertainty" not in str(refused.value)
         selection = np.array([17, 2, 2, 0, 35, 1])
         source = ArrayRowSource(
             dict(frame.items()), offset=offset, row_selection=selection

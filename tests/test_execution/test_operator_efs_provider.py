@@ -9,21 +9,21 @@ from scipy.special import gammaln, xlogy
 
 from jaxgam.control import OperatorControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.operator_efs_controller import (
+from jaxgam.execution.operator.efs_controller import (
     OperatorEFSState,
     SourceOperatorEFSFitProvider,
 )
-from jaxgam.execution.operator_efs_provider import MatchedOperatorEFSProvider
-from jaxgam.execution.operator_fit import (
+from jaxgam.execution.operator.efs_provider import MatchedOperatorEFSProvider
+from jaxgam.execution.operator.fit import (
     FrozenOperatorWorkingState,
     fit_operator_fixed_sp,
 )
-from jaxgam.execution.operator_logdet import OperatorLogDetControl
+from jaxgam.execution.operator.logdet import OperatorLogDetControl
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Gamma, Gaussian, Poisson
-from jaxgam.fitting.efs_operator_score import operator_reml_score
+from jaxgam.fitting.operator.efs_score import operator_reml_score
 from jaxgam.formula.design import ModelSetup
-from jaxgam.formula.operator_prepare import (
+from jaxgam.formula.operator.prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )

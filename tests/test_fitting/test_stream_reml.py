@@ -10,7 +10,7 @@ from jaxgam.fitting.family_execution import (
     FamilyExecutionContext,
     FamilyExecutionParameters,
 )
-from jaxgam.fitting.stream_reml import regular_batch_statistics_vjp
+from jaxgam.fitting.stream.reml import regular_batch_statistics_vjp
 from tests.helpers import _AssertCollector
 from tests.test_execution.test_regular_starts import _LINKS, _case
 from tests.tolerances import STRICT

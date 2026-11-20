@@ -1,5 +1,16 @@
 # Test Suite Cleanup: Implementation Plan
 
+> **Historical record.** This document was written while this piece of work
+> was being designed and built, and is kept as a record of it. It is not
+> maintained: the file names, line numbers, counts and "current state"
+> descriptions in it are those of the repository at that time, and it may
+> refer to documents that were later removed from the repository (for
+> example `docs/design.md` and `docs/R_SOURCE_MAP.md`, which remain in the
+> git history). For how the code is organized today see the
+> [architecture pages](../architecture/index.md); for how to use the package
+> see the [user guide](../guide/choosing_a_route.md) and the
+> [API reference](../api.md).
+
 ## Overview
 
 Reduce the jaxgam test suite from **2,151 collected tests / 30,020 lines** to roughly **1,250 collected tests / ~27,000 lines** while preserving every R-bridge comparison, hard-gate invariant, finite-difference AD validation, and documented regression test.

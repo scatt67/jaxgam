@@ -651,7 +651,7 @@ def _efs_regular_start(
         )
         initial = family.initial_working_state_cpu(y, weights, valid, summary=summary)
         if not initial.input_ok:
-            raise ValueError("EFS regular initial response is invalid in pinned R")
+            raise ValueError("EFS regular initial response is invalid in mgcv")
         initial_eta = jnp.asarray(initial.eta, dtype=fd.X.dtype)
     return null_beta, null_eta, initial_eta
 

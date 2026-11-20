@@ -52,6 +52,88 @@ references:
       Beyond exponential family models and general smooth model selection.
 
   - type: article
+    title: "Generalized additive models for large datasets"
+    authors:
+      - family-names: Wood
+        given-names: "Simon N."
+      - family-names: Goude
+        given-names: Y.
+      - family-names: Shaw
+        given-names: S.
+    journal: "Journal of the Royal Statistical Society (C)"
+    volume: 64
+    issue: 1
+    start: 139
+    end: 155
+    year: 2015
+    doi: "10.1111/rssc.12068"
+    scope: >-
+      Large-dataset GAM fitting (bam), the basis of jaxgam's discretized
+      route.
+
+  - type: article
+    title: >-
+      Generalized additive models for gigadata: modelling the UK black
+      smoke network daily data
+    authors:
+      - family-names: Wood
+        given-names: "Simon N."
+      - family-names: Li
+        given-names: Z.
+      - family-names: Shaddick
+        given-names: G.
+      - family-names: Augustin
+        given-names: "N. H."
+    journal: "Journal of the American Statistical Association"
+    volume: 112
+    issue: 519
+    start: 1199
+    end: 1210
+    year: 2017
+    doi: "10.1080/01621459.2016.1195744"
+    scope: >-
+      Covariate discretization and the performance iteration used by
+      bam(discrete=TRUE) and by jaxgam's discretized route.
+
+  - type: article
+    title: >-
+      Faster model matrix crossproducts for large generalized linear
+      models with discretized covariates
+    authors:
+      - family-names: Li
+        given-names: Z.
+      - family-names: Wood
+        given-names: "Simon N."
+    journal: "Statistics and Computing"
+    volume: 30
+    start: 19
+    end: 25
+    year: 2020
+    doi: "10.1007/s11222-019-09864-2"
+    scope: >-
+      Crossproduct algorithms for discretized covariates.
+
+  - type: article
+    title: >-
+      A generalized Fellner-Schall method for smoothing parameter
+      optimization with application to Tweedie location, scale and shape
+      models
+    authors:
+      - family-names: Wood
+        given-names: "Simon N."
+      - family-names: Fasiolo
+        given-names: M.
+    journal: "Biometrics"
+    volume: 73
+    issue: 4
+    start: 1071
+    end: 1081
+    year: 2017
+    doi: "10.1111/biom.12666"
+    scope: >-
+      The extended Fellner-Schall optimizer (optimizer="efs").
+
+  - type: article
     title: >-
       Stable and efficient multiple smoothing parameter estimation for
       generalized additive models

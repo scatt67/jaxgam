@@ -2,8 +2,6 @@
 
 Provides ``link_registry`` instance and ``get_link()`` convenience
 function for looking up link functions by name.
-
-Design doc reference: §7
 """
 
 from __future__ import annotations

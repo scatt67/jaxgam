@@ -1,8 +1,8 @@
 # Quickstart
 
-This tutorial walks through jaxgam's core features: fitting GAMs with
-different families, using multiple smooth types, and post-estimation
-(prediction, summary, plotting).
+This tutorial walks through jaxgam's core features on data that fit in
+memory: fitting GAMs with different families, using several smooth types,
+and post-estimation (prediction, summary, plotting).
 
 All examples assume:
 
@@ -14,17 +14,19 @@ from jaxgam import GAM, GAMResults
 
 ## Choose a result type
 
-Every fit chooses one of two result materializations:
+Every fit returns one of three result types, chosen by the `result`
+argument of `fit()`:
 
 | Fit call | Return type | Use it for |
 |---|---|---|
-| `model.fit(data, result="full")` | `GAMResults` | Prediction, `summary()`, `plot()`, and in-sample state |
-| `model.fit(data, result="inference")` | `GAMInferenceResult` | New-data prediction plus lightweight diagnostics, without dense training state |
+| `model.fit(data, result="full")` | `GAMResults` | Prediction, `summary()`, `plot()`, and in-sample values |
+| `model.fit(data, result="inference")` | `GAMInferenceResult` | New-data prediction with standard errors and fit diagnostics, without the training arrays |
+| `model.fit(data, result="prediction")` | `GAMPredictionResult` | New-data prediction only, with optional memory budgets; the only result of the routes for data that do not fit in memory |
 
 `result="full"` is the default, so `model.fit(data)` means exactly the same
-thing. The examples in sections 1–10 use the full result. Section 11 introduces
-the inference result. Both result types predict directly; `to_predictor()` is
-never required after fitting.
+thing. Sections 1-10 and 12-14 use the full result. Section 11 introduces
+the inference result. Every result type predicts directly; `to_predictor()`
+is never required after fitting.
 
 ## 1. Gaussian GAM
 
@@ -44,16 +46,20 @@ print(f"Scale: {results.scale:.4f}")
 ```
 
 The formula `"y ~ s(x, k=10, bs='cr')"` specifies:
+
 - `y` as the response variable
 - `s(x, ...)` as a smooth term over `x`
-- `k=10` sets the basis dimension (number of knots)
-- `bs='cr'` selects cubic regression splines
+- `k=10` sets the basis dimension (for a cubic regression spline, the
+  number of knots)
+- `bs='cr'` selects a cubic regression spline
 
-If `bs` is omitted, thin-plate regression splines (`tp`) are used by
-default.
+If `bs` is omitted, a thin-plate regression spline (`tp`) is used.
 
-Here `result="full"` is written explicitly to establish the mode. Later full
-result examples use the shorter equivalent `.fit(data)` form.
+Here `result="full"` is written explicitly to show the mode. Later examples
+use the shorter equivalent `.fit(data)`.
+
+Always check `results.converged` before using a fit. When it is `False`,
+`results.convergence_info` says how the fit stopped.
 
 ## 2. Binomial GAM
 
@@ -88,8 +94,10 @@ results = GAM("y ~ s(x, k=10, bs='cr')", family="poisson").fit(data)
 
 ## 4. Gamma GAM
 
-Positive continuous response with a log link. The data-generating process
-uses `mu = exp(eta)`, so we pass `Gamma(link="log")` to match.
+Positive continuous response. A family name always uses that family's
+default link (inverse for Gamma). The data below are generated with
+`mu = exp(eta)`, so we pass a family instance, `Gamma(link="log")`, to use
+the log link instead.
 
 ```python
 from jaxgam.families import Gamma
@@ -105,10 +113,11 @@ data = pd.DataFrame({"x": x, "y": y})
 results = GAM("y ~ s(x, k=10, bs='cr')", family=Gamma(link="log")).fit(data)
 ```
 
-## 5. Negative Binomial GAM
+## 5. Negative binomial GAM
 
-Count data with overdispersion (variance exceeds the mean). The
-dispersion parameter theta is estimated automatically.
+Count data with overdispersion (variance larger than the mean). The
+dispersion parameter theta is estimated along with the smoothing
+parameters.
 
 ```python
 rng = np.random.default_rng(42)
@@ -132,9 +141,12 @@ from jaxgam.families import NegativeBinomial
 results = GAM("y ~ s(x)", family=NegativeBinomial(theta=2, fixed=True)).fit(data)
 ```
 
+With a fixed theta, `results.theta` is `None`; the fitted family still
+holds the value, `results.family.get_theta(transformed=True)`.
+
 ## 6. Multiple smooths
 
-Add multiple smooth terms with `+`.
+Add several smooth terms with `+`.
 
 ```python
 rng = np.random.default_rng(42)
@@ -156,8 +168,9 @@ Model interactions between covariates with `te()`.
 results = GAM("y ~ te(x1, x2, k=5)").fit(data)
 ```
 
-The scalar `k=5` creates a 5x5 = 25 basis function tensor product.
-Each marginal uses cubic regression splines by default.
+The scalar `k=5` gives each margin 5 basis functions, a 5 x 5 = 25 basis
+function tensor product. Each margin uses a cubic regression spline by
+default.
 
 Use `ti()` for tensor interaction terms (without main effects):
 
@@ -193,18 +206,20 @@ data = pd.DataFrame({
 results = GAM("y ~ s(x, by=fac, k=10, bs='cr') + fac").fit(data)
 ```
 
-The `+ fac` adds a parametric intercept shift per level, analogous to R.
-The `by=fac` argument creates a separate smooth per factor level, each
-with its own smoothing parameter.
+The `+ fac` adds a parametric intercept shift per level, as in R. The
+`by=fac` argument creates a separate smooth per factor level, each with its
+own smoothing parameter.
 
-**Important:** The factor column must be `pd.Categorical` (or string
-dtype) so jaxgam recognizes it as a factor.
+**Important:** the factor column must be a `pd.Categorical` or a string
+column so jaxgam recognizes it as a factor. An integer-coded column is
+treated as numeric.
 
-## 9. Dense random effects
+## 9. Random effects
 
-Use `bs='re'` for simple independent random effects represented as dense
-penalized smooths. This is appropriate for modest numbers of levels that
-fit comfortably in the dense model matrix.
+Use `bs='re'` for simple independent random effects, represented as
+penalized smooths in the model matrix. This suits a modest number of
+levels; for random effects with very many levels, see the operator route in
+the [user guide](guide/operator.md).
 
 ```python
 rng = np.random.default_rng(42)
@@ -242,61 +257,82 @@ Use both terms when you want random intercepts and random slopes:
 results = GAM("y ~ s(g, bs='re') + s(x, g, bs='re')").fit(data)
 ```
 
-When predicting with an unseen factor level, the random-effect
-contribution is set to zero, matching mgcv's `predict.gam()` behavior.
+As with `by=`, the grouping column must be a categorical or string column.
+
+When you predict for a group level that was not in the training data, or a
+missing group, the random-effect contribution is zero (the prior mean of
+the random effect), so the prediction is finite.
 
 ## 10. Prediction
+
+The examples below use the random-intercept model from section 9.
+
+```python
+results = GAM("y ~ s(x, k=10, bs='cr') + s(g, bs='re')").fit(data)
+```
 
 ### Self-prediction
 
 ```python
 # Predictions on the training data
 mu_hat = results.predict()                          # response scale
-eta_hat = results.predict(pred_type="link")          # link scale
+eta_hat = results.predict(pred_type="link")         # link scale
 mu_hat, se = results.predict(se_fit=True)           # with standard errors
 ```
 
 ### New data
 
+New data must hold every variable the formula uses.
+
 ```python
-newdata = pd.DataFrame({"x": np.linspace(0, 1, 100)})
+newdata = pd.DataFrame({
+    "x": np.linspace(0, 1, 100),
+    "g": pd.Categorical(["g0"] * 100, categories=groups),
+})
 predictions = results.predict(newdata)
 predictions, se = results.predict(newdata, se_fit=True)
 ```
 
 ### Prediction matrix
 
-For manual inference, get the constrained design matrix:
+For manual inference, get the constrained prediction matrix (mgcv's
+`predict.gam(type = "lpmatrix")`):
 
 ```python
 X_new = results.predict_matrix(newdata)
-# Manual prediction: eta = X_new @ results.coefficients
+eta_new = X_new @ results.coefficients  # equals predict(newdata, pred_type="link")
 ```
 
 ## 11. Lean inference result
 
-When a fitted object is kept for new-data prediction rather than interactive
-analysis, request the lean result mode:
+When you keep a fitted object for new-data prediction rather than
+interactive analysis, request the lean result mode:
 
 ```python
-lean = GAM("y ~ s(x, k=10, bs='cr')").fit(data, result="inference")
+lean = GAM("y ~ s(x, k=10, bs='cr') + s(g, bs='re')").fit(data, result="inference")
 predictions = lean.predict(newdata)
 ```
 
-That is all you need for inference. The returned `GAMInferenceResult` is already
-lean and directly supports `predict()` and `predict_matrix()`. **Do not call
-`to_predictor()` as a routine second step:** it does not make an inference
-result smaller.
+That is all you need for inference. The returned `GAMInferenceResult` is
+already lean and directly supports `predict()` and `predict_matrix()`.
+**Do not call `to_predictor()` as a routine second step:** it does not make
+an inference result smaller.
 
-The lean result retains scalar diagnostics such as `edf`, `deviance`, and
-`converged`, plus `formula`, `smooth_info`, and `term_names`. It has no
-`summary()` or `plot()`, and prediction requires `newdata`. This mode reduces
-memory retained after fitting; it does not reduce peak memory during the fit.
+The lean result keeps diagnostics such as `edf`, `deviance` and
+`converged`, plus `formula`, `smooth_info` and `term_names`. It has no
+`summary()` or `plot()`, and prediction requires `newdata`. This mode
+reduces memory kept after the fit; it does not reduce peak memory during
+the fit.
+
+A third mode, `result="prediction"`, keeps even less (no per-smooth EDF,
+and no standard errors unless you ask for them). It is described in the
+[API reference](api.md#gampredictionresult).
 
 ### Optional prediction-only handoff
 
-Use `to_predictor()` only when another component should receive the narrower
-prediction-only interface, without the inference result's diagnostics:
+Use `to_predictor()` only when another component should receive the
+narrower prediction-only interface, without the inference result's
+diagnostics:
 
 ```python
 import pickle
@@ -307,15 +343,15 @@ restored = pickle.loads(blob)
 same_predictions = restored.predict(newdata)
 ```
 
-If the receiving process needs diagnostics too, pickle `lean` directly. For a
-full `GAMResults`, `to_predictor()` instead constructs an independent lean core;
-discard the full result afterward if you want its training-backed memory to be
-released.
+If the receiving process needs diagnostics too, pickle `lean` directly. For
+a full `GAMResults`, `to_predictor()` instead builds an independent lean
+core; discard the full result afterward if you want its training-backed
+memory to be released.
 
-Pickles are for trusted, same-version, transient handoff. A cross-version load
-warns and is not guaranteed to work. Locally-defined custom links or families
-require `cloudpickle`; built-in and module-level definitions use stdlib
-`pickle`.
+Pickles are for trusted, same-version, short-lived handoff. Loading a
+predictor under another jaxgam version warns and is not guaranteed to work.
+Locally defined custom links or families require `cloudpickle`; built-in
+and module-level definitions work with the standard library `pickle`.
 
 ## 12. Summary
 
@@ -328,14 +364,16 @@ s = results.summary()
 ```
 
 Output includes:
-- Parametric coefficients with z/t-tests
-- Smooth terms with estimated degrees of freedom, F/chi-squared
+
+- Parametric coefficients with z or t tests
+- Smooth terms with estimated degrees of freedom, F or chi-squared
   statistics, and p-values
-- R-squared, deviance explained, scale estimate
+- Adjusted R-squared, deviance explained, scale estimate and REML score
 
 ## 13. Plotting
 
-`plot()` produces one panel per smooth term.
+`plot()` produces one panel per smooth term and returns the figure and its
+axes.
 
 ```python
 fig, axes = results.plot()
@@ -355,74 +393,101 @@ fig, axes = results.plot(
 )
 ```
 
-For 1D smooths, `plot()` shows the partial effect with shaded
-confidence bands. For 2D tensor products, it shows filled contour
-plots. Factor-by smooths produce one panel per level.
+Panels show partial effects on the link scale. A one-variable smooth is
+drawn as a line with a shaded confidence band. A two-variable smooth or
+tensor product is drawn as a filled contour plot. A factor-by smooth gets
+one panel per level, and a `bs='re'` term a normal quantile plot of its
+coefficients.
 
 ## 14. Fitting options
 
 ### Smoothing parameter method
 
 ```python
-# REML (default, and the only supported method in v1.0)
+# REML (default, and the only supported method)
 results = GAM("y ~ s(x)", method="REML").fit(data)
 
-# Maximum likelihood (ML) is not yet available — method="ML" raises
-# NotImplementedError. See docs/design.md Section 4.4.
+# Maximum likelihood (ML) is not available: method="ML" raises
+# NotImplementedError.
 ```
 
 ### Fixed smoothing parameters
 
-Skip the Newton optimization and fit at user-supplied smoothing
-parameters:
+Hold the smoothing parameters at values you supply instead of estimating
+them:
 
 ```python
 results = GAM("y ~ s(x, k=10, bs='cr')", sp=[1.0]).fit(data)
 ```
 
-The `sp` list must have one entry per penalty term in the model.
+The `sp` list must have one positive entry per penalty in the model.
+`results.smoothing_params` reports the values you supplied. For Gaussian,
+Gamma and estimated-theta negative binomial models, the scale or theta is
+still estimated.
 
 ### Weights and offset
 
 ```python
-weights = np.ones(n)
-offset = np.zeros(n)
+weights = np.ones(len(data))
+offset = np.zeros(len(data))
 results = GAM("y ~ s(x)").fit(data, weights=weights, offset=offset)
 ```
 
+When a model was fitted with a nonzero offset, pass `offset=` to
+`predict()` for new data; without it, jaxgam warns and omits the offset.
+
+### Fellner-Schall optimizer
+
+`optimizer="efs"` selects smoothing parameters with mgcv's extended
+Fellner-Schall update instead of Newton's method:
+
+```python
+results = GAM("y ~ s(x, k=10, bs='cr') + s(g, bs='re')", optimizer="efs").fit(data)
+print(results.lambda_strategy, results.convergence_info)
+```
+
+See [Smoothing parameter selection](guide/smoothing_selection.md) for when
+to use it and which families it supports.
+
 ## 15. GAMResults attributes
 
-By default, `fit()` returns a `GAMResults` frozen dataclass. Its fields cannot
-be reassigned, although contained mutable objects are not recursively frozen:
+By default, `fit()` returns a `GAMResults` frozen dataclass. Its fields
+cannot be reassigned, although the arrays inside are not themselves
+frozen. The most used attributes:
 
 | Attribute | Description |
 |---|---|
 | `coefficients` | Coefficient vector (p,) |
-| `fitted_values` | Fitted values on response scale (n,) |
+| `fitted_values` | Fitted values on the response scale (n,) |
 | `linear_predictor` | Linear predictor eta (n,) |
 | `Vp` | Bayesian covariance matrix (p, p) |
 | `edf` | Per-smooth effective degrees of freedom |
-| `edf1` | Alternative EDF for significance testing |
+| `edf1` | Alternative EDF used for significance tests |
 | `edf_total` | Total effective degrees of freedom |
-| `scale` | Estimated scale (dispersion) parameter |
+| `scale` | Scale (dispersion) parameter |
 | `deviance` | Model deviance |
 | `null_deviance` | Null model deviance |
-| `smoothing_params` | Estimated smoothing parameters |
-| `converged` | Whether the optimizer converged |
-| `n_iter` | Number of Newton iterations |
-| `score` | REML value at convergence |
-| `X` | Design matrix (n, p) |
+| `smoothing_params` | Smoothing parameters, estimated or as supplied |
+| `converged` | Whether the fit converged |
+| `convergence_info` | How the fit stopped |
+| `n_iter` | Number of outer iterations |
+| `score` | REML criterion at the returned smoothing parameters |
+| `X` | Model matrix (n, p) |
 | `y` | Response vector (n,) |
 | `weights` | Prior weights (n,) |
 | `family` | Family object used for fitting |
 | `formula` | Model formula string |
-| `theta` | Estimated theta for NB (None for standard families) |
-| `method` | Smoothing parameter method (always "REML" in v1.0) |
+| `theta` | Estimated theta for a negative binomial with estimated theta; `None` otherwise |
+| `method` | Smoothing parameter method (`"REML"`) |
 | `n` | Number of observations |
 
-## Further reading
+The [API reference](api.md#gamresults-attributes) lists every attribute.
 
-- [Design document](design.md) -- architecture, algorithms, and
-  implementation decisions
-- [R source map](R_SOURCE_MAP.md) -- correspondence between jaxgam
-  modules and R mgcv source files
+## Next steps
+
+- For data that do not fit in memory, for the Fellner-Schall optimizer and
+  Gaussian QR compression, and for the streamed, discretized and operator
+  routes, start with [Choosing a route](guide/choosing_a_route.md) in the
+  user guide.
+- The [API reference](api.md) lists every class, argument and result
+  attribute.
